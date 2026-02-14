@@ -26,7 +26,8 @@ func init() {
 }
 
 func runUI(_ *cobra.Command, _ []string) error {
-	cfg, err := config.Load(config.DefaultPath())
+	cfgPath := config.DefaultPath()
+	cfg, err := config.Load(cfgPath)
 	if err != nil {
 		return fmt.Errorf("failed to load config: %w", err)
 	}
@@ -82,7 +83,27 @@ func runUI(_ *cobra.Command, _ []string) error {
 		return executeUpdate(ctx, result, runner, bm, inst)
 	}
 
-	model := tui.NewModel(loadFn, checkFn, updateFn)
+	scheduleFns := &tui.ScheduleFuncs{
+		Check: func() tui.ScheduleStatus {
+			return tui.ScheduleStatus{
+				Enabled:       scheduleExists(),
+				IntervalHours: cfg.ScheduleIntervalOrDefault(),
+			}
+		},
+		Install: func(ctx context.Context, hours int) error {
+			if err := installScheduleCore(ctx, runner, hours); err != nil {
+				return err
+			}
+			cfg.ScheduleInterval = hours
+			_ = cfg.Save(cfgPath)
+			return nil
+		},
+		Remove: func(ctx context.Context) error {
+			return removeScheduleCore(ctx, runner)
+		},
+	}
+
+	model := tui.NewModel(loadFn, checkFn, updateFn, scheduleFns, cfg, cfgPath)
 	p := tea.NewProgram(model, tea.WithAltScreen())
 
 	if _, err := p.Run(); err != nil {

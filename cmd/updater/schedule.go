@@ -61,10 +61,27 @@ type plistData struct {
 	LogPath         string
 }
 
-func runSchedule(cmd *cobra.Command, _ []string) error {
-	ctx := cmd.Context()
-	runner := &checker.RealCmdRunner{}
+// schedulePlistPath returns the path to the launchd plist file.
+func schedulePlistPath() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("failed to get home directory: %w", err)
+	}
+	return filepath.Join(home, "Library", "LaunchAgents", plistLabel+".plist"), nil
+}
 
+// scheduleExists reports whether the schedule plist is installed.
+func scheduleExists() bool {
+	p, err := schedulePlistPath()
+	if err != nil {
+		return false
+	}
+	_, err = os.Stat(p)
+	return err == nil
+}
+
+// installScheduleCore writes the launchd plist and loads it.
+func installScheduleCore(ctx context.Context, runner checker.CmdRunner, hours int) error {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return fmt.Errorf("failed to get home directory: %w", err)
@@ -72,15 +89,6 @@ func runSchedule(cmd *cobra.Command, _ []string) error {
 
 	plistPath := filepath.Join(home, "Library", "LaunchAgents", plistLabel+".plist")
 
-	if flagScheduleRemove {
-		return removeSchedule(ctx, runner, plistPath, cmd)
-	}
-
-	return installSchedule(ctx, runner, plistPath, home, cmd)
-}
-
-func installSchedule(ctx context.Context, runner checker.CmdRunner, plistPath, home string, cmd *cobra.Command) error {
-	// Find the updater binary path.
 	binary, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("failed to get executable path: %w", err)
@@ -91,17 +99,15 @@ func installSchedule(ctx context.Context, runner checker.CmdRunner, plistPath, h
 	data := plistData{
 		Label:           plistLabel,
 		Binary:          binary,
-		IntervalSeconds: flagScheduleInterval * 3600,
+		IntervalSeconds: hours * 3600,
 		LogPath:         logPath,
 	}
 
-	// Render plist.
 	content, err := renderPlist(data)
 	if err != nil {
 		return err
 	}
 
-	// Ensure LaunchAgents directory exists.
 	if err := os.MkdirAll(filepath.Dir(plistPath), 0o755); err != nil {
 		return fmt.Errorf("failed to create LaunchAgents dir: %w", err)
 	}
@@ -119,15 +125,17 @@ func installSchedule(ctx context.Context, runner checker.CmdRunner, plistPath, h
 		return fmt.Errorf("failed to load plist: %w", err)
 	}
 
-	fmt.Fprintf(cmd.OutOrStdout(), "Scheduled update checks every %d hours\n", flagScheduleInterval)
-	fmt.Fprintf(cmd.OutOrStdout(), "Plist: %s\n", plistPath)
-	fmt.Fprintf(cmd.OutOrStdout(), "Log: %s\n", data.LogPath)
 	return nil
 }
 
-func removeSchedule(ctx context.Context, runner checker.CmdRunner, plistPath string, cmd *cobra.Command) error {
+// removeScheduleCore unloads and deletes the launchd plist.
+func removeScheduleCore(ctx context.Context, runner checker.CmdRunner) error {
+	plistPath, err := schedulePlistPath()
+	if err != nil {
+		return err
+	}
+
 	if _, err := os.Stat(plistPath); os.IsNotExist(err) {
-		fmt.Fprintln(cmd.OutOrStdout(), "No scheduled checks found")
 		return nil
 	}
 
@@ -139,7 +147,33 @@ func removeSchedule(ctx context.Context, runner checker.CmdRunner, plistPath str
 		return fmt.Errorf("failed to remove plist: %w", err)
 	}
 
-	fmt.Fprintln(cmd.OutOrStdout(), "Removed scheduled checks")
+	return nil
+}
+
+func runSchedule(cmd *cobra.Command, _ []string) error {
+	ctx := cmd.Context()
+	runner := &checker.RealCmdRunner{}
+
+	if flagScheduleRemove {
+		if err := removeScheduleCore(ctx, runner); err != nil {
+			return err
+		}
+		fmt.Fprintln(cmd.OutOrStdout(), "Removed scheduled checks")
+		return nil
+	}
+
+	if err := installScheduleCore(ctx, runner, flagScheduleInterval); err != nil {
+		return err
+	}
+
+	// These can't fail here — installScheduleCore already validated them.
+	plistPath, _ := schedulePlistPath()
+	home, _ := os.UserHomeDir()
+	logPath := filepath.Join(home, "Library", "Logs", "updater-notify.log")
+
+	fmt.Fprintf(cmd.OutOrStdout(), "Scheduled update checks every %d hours\n", flagScheduleInterval)
+	fmt.Fprintf(cmd.OutOrStdout(), "Plist: %s\n", plistPath)
+	fmt.Fprintf(cmd.OutOrStdout(), "Log: %s\n", logPath)
 	return nil
 }
 

@@ -256,6 +256,52 @@ func TestConfigSaveAndReload(t *testing.T) {
 	}
 }
 
+func TestScheduleIntervalOrDefault(t *testing.T) {
+	tests := []struct {
+		name  string
+		value int
+		want  int
+	}{
+		{"zero returns default", 0, 24},
+		{"negative returns default", -1, 24},
+		{"positive returns value", 12, 12},
+		{"48 returns 48", 48, 48},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &Config{ScheduleInterval: tt.value}
+			if got := cfg.ScheduleIntervalOrDefault(); got != tt.want {
+				t.Errorf("ScheduleIntervalOrDefault() = %d, want %d", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestScheduleFieldsPersist(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+
+	cfg := defaultConfig()
+	cfg.ScheduleOffered = true
+	cfg.ScheduleInterval = 12
+
+	if err := cfg.Save(cfgPath); err != nil {
+		t.Fatalf("Save failed: %v", err)
+	}
+
+	loaded, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+
+	if !loaded.ScheduleOffered {
+		t.Error("expected ScheduleOffered to be true after reload")
+	}
+	if loaded.ScheduleInterval != 12 {
+		t.Errorf("ScheduleInterval = %d, want 12", loaded.ScheduleInterval)
+	}
+}
+
 func TestDefaultPath(t *testing.T) {
 	p := DefaultPath()
 	if p == "" {

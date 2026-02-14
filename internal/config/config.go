@@ -15,10 +15,12 @@ type Config struct {
 	CaskMappings   map[string]string `yaml:"cask_mappings"`
 	GitHubToken    string            `yaml:"github_token"`
 	MaxConcurrent  int               `yaml:"max_concurrent"`
-	PinnedApps     []string          `yaml:"pinned_apps"`
-	MaxBackups     int               `yaml:"max_backups"`
-	ignoredSet     map[string]bool   `yaml:"-"`
-	pinnedSet      map[string]bool   `yaml:"-"`
+	PinnedApps       []string          `yaml:"pinned_apps"`
+	MaxBackups       int               `yaml:"max_backups"`
+	ScheduleOffered  bool              `yaml:"schedule_offered"`
+	ScheduleInterval int               `yaml:"schedule_interval"`
+	ignoredSet       map[string]bool   `yaml:"-"`
+	pinnedSet        map[string]bool   `yaml:"-"`
 }
 
 // DefaultPath returns the default config file path (~/.config/updater/config.yaml).
@@ -118,6 +120,15 @@ func (c *Config) MaxBackupsOrDefault() int {
 		return c.MaxBackups
 	}
 	return 1
+}
+
+// ScheduleIntervalOrDefault returns ScheduleInterval if set to a positive value,
+// otherwise returns 24 as the default (hours).
+func (c *Config) ScheduleIntervalOrDefault() int {
+	if c.ScheduleInterval > 0 {
+		return c.ScheduleInterval
+	}
+	return 24
 }
 
 // IsPinned reports whether the given bundle ID is in the pinned list.

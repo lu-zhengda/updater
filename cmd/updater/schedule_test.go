@@ -5,6 +5,22 @@ import (
 	"testing"
 )
 
+func TestSchedulePlistPath(t *testing.T) {
+	p, err := schedulePlistPath()
+	if err != nil {
+		t.Fatalf("schedulePlistPath() error: %v", err)
+	}
+	if !strings.HasSuffix(p, "Library/LaunchAgents/com.updater.check.plist") {
+		t.Errorf("unexpected plist path: %s", p)
+	}
+}
+
+func TestScheduleExists_NotInstalled(t *testing.T) {
+	// By default in test, the plist won't exist (unless the user has it installed).
+	// This test just ensures the function doesn't panic.
+	_ = scheduleExists()
+}
+
 func TestRenderPlist(t *testing.T) {
 	data := plistData{
 		Label:           "com.updater.check",

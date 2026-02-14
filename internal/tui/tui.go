@@ -12,6 +12,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/luzhengda/updater/internal/app"
 	"github.com/luzhengda/updater/internal/checker"
+	"github.com/luzhengda/updater/internal/config"
 )
 
 // CheckFunc checks all apps for updates and returns results.
@@ -28,6 +29,19 @@ type LoadResult struct {
 
 // LoadFunc discovers and enriches apps. Called in the background so the TUI launches instantly.
 type LoadFunc func(ctx context.Context) (*LoadResult, error)
+
+// ScheduleStatus represents the current state of scheduled update checks.
+type ScheduleStatus struct {
+	Enabled       bool
+	IntervalHours int
+}
+
+// ScheduleFuncs provides callbacks for managing the update schedule from the TUI.
+type ScheduleFuncs struct {
+	Check   func() ScheduleStatus
+	Install func(ctx context.Context, intervalHours int) error
+	Remove  func(ctx context.Context) error
+}
 
 // row represents a single row in the TUI table.
 type row struct {
@@ -51,6 +65,13 @@ type updateDoneMsg struct {
 	index int
 	err   error
 }
+
+type scheduleCheckMsg struct{ status ScheduleStatus }
+type scheduleInstallMsg struct {
+	err   error
+	hours int
+}
+type scheduleRemoveMsg struct{ err error }
 
 // Model is the main Bubbletea model for the updater TUI.
 type Model struct {
@@ -77,28 +98,38 @@ type Model struct {
 	showDetail     bool
 	detailIdx      int
 	detailViewport viewport.Model
+	scheduleFns    *ScheduleFuncs
+	scheduleStatus ScheduleStatus
+	schedulePrompt bool   // first-launch prompt overlay
+	showSchedule   bool   // schedule settings modal
+	cfg            *config.Config
+	cfgPath        string
 }
 
 // NewModel creates a new TUI model that launches instantly.
 // loadFn runs in the background to discover and enrich apps.
 // checkFn runs after loading to check for updates.
 // updateFn executes updates for individual apps.
-func NewModel(loadFn LoadFunc, checkFn CheckFunc, updateFn UpdateFunc) Model {
+// scheduleFns, cfg, and cfgPath are optional — pass nil/empty to disable scheduler UI.
+func NewModel(loadFn LoadFunc, checkFn CheckFunc, updateFn UpdateFunc, scheduleFns *ScheduleFuncs, cfg *config.Config, cfgPath string) Model {
 	s := spinner.New()
 	s.Spinner = spinner.Dot
 	s.Style = lipgloss.NewStyle().Foreground(colorCyan)
 
 	return Model{
-		loading:   true,
-		updating:  make(map[int]bool),
-		ignored:   make(map[int]bool),
-		pinned:    make(map[int]bool),
-		pinnedIDs: make(map[string]bool),
-		selected:  make(map[int]bool),
-		spinner:   s,
-		loadFn:    loadFn,
-		checkFn:   checkFn,
-		updateFn:  updateFn,
+		loading:     true,
+		updating:    make(map[int]bool),
+		ignored:     make(map[int]bool),
+		pinned:      make(map[int]bool),
+		pinnedIDs:   make(map[string]bool),
+		selected:    make(map[int]bool),
+		spinner:     s,
+		loadFn:      loadFn,
+		checkFn:     checkFn,
+		updateFn:    updateFn,
+		scheduleFns: scheduleFns,
+		cfg:         cfg,
+		cfgPath:     cfgPath,
 	}
 }
 
@@ -132,6 +163,52 @@ func (m Model) startUpdate(index int) tea.Cmd {
 		ctx := context.Background()
 		err := m.updateFn(ctx, result)
 		return updateDoneMsg{index: index, err: err}
+	}
+}
+
+// checkSchedule returns a command that checks the current schedule status.
+func (m Model) checkSchedule() tea.Cmd {
+	if m.scheduleFns == nil {
+		return nil
+	}
+	fn := m.scheduleFns.Check
+	return func() tea.Msg {
+		return scheduleCheckMsg{status: fn()}
+	}
+}
+
+// installSchedule returns a command that installs the schedule with the given interval.
+func (m Model) installSchedule(hours int) tea.Cmd {
+	if m.scheduleFns == nil {
+		return nil
+	}
+	fn := m.scheduleFns.Install
+	return func() tea.Msg {
+		err := fn(context.Background(), hours)
+		return scheduleInstallMsg{err: err, hours: hours}
+	}
+}
+
+// removeSchedule returns a command that removes the schedule.
+func (m Model) removeSchedule() tea.Cmd {
+	if m.scheduleFns == nil {
+		return nil
+	}
+	fn := m.scheduleFns.Remove
+	return func() tea.Msg {
+		err := fn(context.Background())
+		return scheduleRemoveMsg{err: err}
+	}
+}
+
+// saveScheduleOffered persists the ScheduleOffered flag to config.
+func (m *Model) saveScheduleOffered() {
+	if m.cfg == nil {
+		return
+	}
+	m.cfg.ScheduleOffered = true
+	if err := m.cfg.Save(m.cfgPath); err != nil {
+		m.statusMsg = fmt.Sprintf("Warning: failed to save config: %v", err)
 	}
 }
 
@@ -178,13 +255,44 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.checking = true
 		m.rebuildVisible()
 		m.statusMsg = fmt.Sprintf("Found %d apps, checking for updates...", len(m.apps))
-		return m, tea.Batch(m.startCheck(), m.spinner.Tick)
+		cmds := []tea.Cmd{m.startCheck(), m.spinner.Tick}
+		// Probe the schedule right after load so the prompt appears early.
+		if m.scheduleFns != nil && m.cfg != nil && !m.cfg.ScheduleOffered {
+			cmds = append(cmds, m.checkSchedule())
+		}
+		return m, tea.Batch(cmds...)
 
 	case checkDoneMsg:
 		m.checking = false
 		m.applyResults(msg.results)
 		m.rebuildVisible()
 		m.statusMsg = fmt.Sprintf("Checked %d apps", len(msg.results))
+		return m, nil
+
+	case scheduleCheckMsg:
+		m.scheduleStatus = msg.status
+		if !msg.status.Enabled && m.cfg != nil && !m.cfg.ScheduleOffered {
+			m.schedulePrompt = true
+		}
+		return m, nil
+
+	case scheduleInstallMsg:
+		if msg.err != nil {
+			m.statusMsg = fmt.Sprintf("Failed to enable schedule: %v", msg.err)
+		} else {
+			m.scheduleStatus.Enabled = true
+			m.scheduleStatus.IntervalHours = msg.hours
+			m.statusMsg = fmt.Sprintf("Scheduled update checks every %dh", msg.hours)
+		}
+		return m, nil
+
+	case scheduleRemoveMsg:
+		if msg.err != nil {
+			m.statusMsg = fmt.Sprintf("Failed to disable schedule: %v", msg.err)
+		} else {
+			m.scheduleStatus.Enabled = false
+			m.statusMsg = "Disabled scheduled update checks"
+		}
 		return m, nil
 
 	case updateDoneMsg:
@@ -215,6 +323,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // handleKey processes keyboard input.
 func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// Schedule prompt overlay takes highest priority.
+	if m.schedulePrompt {
+		return m.handleSchedulePromptKey(msg)
+	}
+
+	// Schedule settings modal.
+	if m.showSchedule {
+		return m.handleScheduleKey(msg)
+	}
+
 	// In detail view, handle viewport scrolling and escape.
 	if m.showDetail {
 		return m.handleDetailKey(msg)
@@ -261,6 +379,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "t":
 			m.toggleShowAll()
 			return m, nil
+		case "s":
+			return m.openSchedule()
 		case " ":
 			m.toggleSelection()
 			return m, nil
@@ -296,6 +416,89 @@ func (m Model) handleDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.detailViewport.LineUp(1)
 		return m, nil
 	}
+	return m, nil
+}
+
+// handleSchedulePromptKey processes keyboard input during the first-launch schedule prompt.
+func (m Model) handleSchedulePromptKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.Type {
+	case tea.KeyCtrlC:
+		return m, tea.Quit
+	case tea.KeyEsc:
+		m.schedulePrompt = false
+		m.saveScheduleOffered()
+		return m, nil
+	case tea.KeyRunes:
+		switch string(msg.Runes) {
+		case "y":
+			m.schedulePrompt = false
+			m.saveScheduleOffered()
+			return m, m.installSchedule(24)
+		case "n":
+			m.schedulePrompt = false
+			m.saveScheduleOffered()
+			m.statusMsg = "Scheduled checks declined"
+			return m, nil
+		case "s":
+			m.schedulePrompt = false
+			m.saveScheduleOffered()
+			m.showSchedule = true
+			return m, nil
+		}
+	}
+	return m, nil
+}
+
+// handleScheduleKey processes keyboard input in the schedule settings modal.
+func (m Model) handleScheduleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.Type {
+	case tea.KeyCtrlC:
+		return m, tea.Quit
+	case tea.KeyEsc:
+		m.showSchedule = false
+		return m, nil
+	case tea.KeyRunes:
+		switch string(msg.Runes) {
+		case "q", "s":
+			m.showSchedule = false
+			return m, nil
+		case "d":
+			if m.scheduleStatus.Enabled {
+				m.showSchedule = false
+				return m, m.removeSchedule()
+			}
+			return m, nil
+		case "1":
+			if !m.scheduleStatus.Enabled {
+				m.showSchedule = false
+				return m, m.installSchedule(12)
+			}
+			return m, nil
+		case "2":
+			if !m.scheduleStatus.Enabled {
+				m.showSchedule = false
+				return m, m.installSchedule(24)
+			}
+			return m, nil
+		case "3":
+			if !m.scheduleStatus.Enabled {
+				m.showSchedule = false
+				return m, m.installSchedule(48)
+			}
+			return m, nil
+		}
+	}
+	return m, nil
+}
+
+// openSchedule opens the schedule settings modal.
+func (m Model) openSchedule() (tea.Model, tea.Cmd) {
+	if m.scheduleFns == nil {
+		m.statusMsg = "Schedule not available"
+		return m, nil
+	}
+	m.scheduleStatus = m.scheduleFns.Check()
+	m.showSchedule = true
 	return m, nil
 }
 
@@ -599,6 +802,14 @@ func (m *Model) rebuildVisible() {
 
 // View renders the TUI.
 func (m Model) View() string {
+	if m.schedulePrompt {
+		return m.viewSchedulePrompt()
+	}
+
+	if m.showSchedule {
+		return m.viewSchedule()
+	}
+
 	if m.showDetail {
 		return m.viewDetail()
 	}
@@ -679,6 +890,42 @@ func (m Model) viewDetail() string {
 	b.WriteString(m.detailViewport.View())
 	b.WriteString("\n")
 	b.WriteString(styleStatusBar.Render("j/k: scroll | d/esc/q: back"))
+
+	return b.String()
+}
+
+// viewSchedulePrompt renders the first-launch schedule prompt overlay.
+func (m Model) viewSchedulePrompt() string {
+	var b strings.Builder
+
+	b.WriteString(styleHeader.Render("Schedule Update Checks"))
+	b.WriteString("\n")
+	b.WriteString("  Would you like to enable daily scheduled update checks?\n")
+	b.WriteString("  You'll receive macOS notifications when updates are available.\n")
+	b.WriteString("\n")
+	b.WriteString(styleStatusBar.Render("y: enable daily checks | n: no thanks | s: customize"))
+
+	return b.String()
+}
+
+// viewSchedule renders the schedule settings modal.
+func (m Model) viewSchedule() string {
+	var b strings.Builder
+
+	b.WriteString(styleHeader.Render("Schedule Settings"))
+	b.WriteString("\n")
+
+	if m.scheduleStatus.Enabled {
+		b.WriteString(fmt.Sprintf("  Status: %s (every %dh)\n",
+			styleUpToDate.Render("enabled"),
+			m.scheduleStatus.IntervalHours))
+		b.WriteString("\n")
+		b.WriteString(styleStatusBar.Render("d: disable | esc: back"))
+	} else {
+		b.WriteString(fmt.Sprintf("  Status: %s\n", styleError.Render("disabled")))
+		b.WriteString("\n")
+		b.WriteString(styleStatusBar.Render("1: enable (12h) | 2: enable (24h) | 3: enable (48h) | esc: back"))
+	}
 
 	return b.String()
 }
@@ -794,6 +1041,10 @@ func (m Model) renderStatusBar() string {
 		} else {
 			helpParts = append(helpParts, "t: show all")
 		}
+	}
+
+	if m.scheduleFns != nil {
+		helpParts = append(helpParts, "s: schedule")
 	}
 
 	helpParts = append(helpParts, "r: refresh", "q: quit")
