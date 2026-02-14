@@ -114,6 +114,12 @@ func (s *SparkleChecker) Check(ctx context.Context, a *app.App) (*UpdateResult, 
 		latestVersion = item.Version
 	}
 
+	hasUpdate := version.IsNewer(a.Version, latestVersion)
+
+	// Detect stale feed: if the feed's latest is older than installed,
+	// the feed is likely abandoned (e.g., PDF Expert Sparkle returns v2.x for v3.x installs).
+	stale := !hasUpdate && latestVersion != "" && version.IsNewer(latestVersion, a.Version)
+
 	return &UpdateResult{
 		App:            a,
 		Source:         "sparkle",
@@ -121,7 +127,8 @@ func (s *SparkleChecker) Check(ctx context.Context, a *app.App) (*UpdateResult, 
 		LatestVersion:  latestVersion,
 		DownloadURL:    item.Enclosure.URL,
 		ReleaseNotes:   item.ReleaseNotesLink,
-		HasUpdate:      version.IsNewer(a.Version, latestVersion),
+		HasUpdate:      hasUpdate,
+		StaleSource:    stale,
 	}, nil
 }
 

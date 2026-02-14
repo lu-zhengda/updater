@@ -72,10 +72,11 @@ func discoverApps() ([]*app.App, error) {
 	return apps, nil
 }
 
-// enrichApps applies GitHub mappings from config and cross-references with
-// installed brew casks to enrich app metadata.
+// enrichApps applies config mappings and cross-references with brew casks
+// to enrich app metadata. It sets CaskName and InstalledViaBrew, and probes
+// brew info for unknown apps to discover available casks.
 func enrichApps(ctx context.Context, apps []*app.App, cfg *config.Config, runner checker.CmdRunner) ([]*app.App, error) {
-	// Apply GitHub repo mappings from config.
+	// Phase 1: Apply GitHub repo mappings from config.
 	for _, a := range apps {
 		if repo := cfg.GitHubRepo(a.BundleID); repo != "" {
 			a.GitHubRepo = repo
@@ -85,7 +86,14 @@ func enrichApps(ctx context.Context, apps []*app.App, cfg *config.Config, runner
 		}
 	}
 
-	// Cross-reference with installed brew casks.
+	// Phase 2: Apply cask mappings from config (bundleID → cask token).
+	for _, a := range apps {
+		if token := cfg.CaskToken(a.BundleID); token != "" {
+			a.CaskName = token
+		}
+	}
+
+	// Phase 3: Cross-reference with installed brew casks.
 	casks, err := checker.ListInstalledCasks(ctx, runner)
 	if err != nil {
 		// Non-fatal: brew may not be installed.
@@ -94,13 +102,36 @@ func enrichApps(ctx context.Context, apps []*app.App, cfg *config.Config, runner
 	}
 
 	for _, a := range apps {
-		caskName := app.ToCaskName(a.Name)
-		if casks[caskName] {
-			a.CaskName = caskName
+		// If no cask name from config, try heuristic only for unknown-source apps.
+		if a.CaskName == "" && a.Source == app.SourceUnknown {
+			a.CaskName = app.ToCaskName(a.Name)
+		}
+
+		if a.CaskName != "" && casks[a.CaskName] {
+			a.InstalledViaBrew = true
 			if a.Source == app.SourceUnknown {
 				a.Source = app.SourceBrew
 			}
 		}
+	}
+
+	// Phase 4: For apps still unknown, probe brew info to discover available casks.
+	// Skip apps whose cask name came from config (user's explicit mapping).
+	for _, a := range apps {
+		if a.Source != app.SourceUnknown {
+			continue
+		}
+		if a.CaskName == "" {
+			continue
+		}
+		if cfg.CaskToken(a.BundleID) != "" {
+			continue // preserve user-configured cask mapping
+		}
+		if checker.CaskExists(ctx, runner, a.CaskName) {
+			continue // cask exists, BrewInfoChecker will handle it
+		}
+		// Cask doesn't exist — clear the heuristic guess.
+		a.CaskName = ""
 	}
 
 	return apps, nil
@@ -118,17 +149,20 @@ func filterIgnored(apps []*app.App, cfg *config.Config) []*app.App {
 }
 
 // buildCheckers creates all checkers with their dependencies.
+// Order matters for fallthrough: most accurate first, broadest fallback last.
 func buildCheckers(runner checker.CmdRunner) []checker.Checker {
 	return []checker.Checker{
 		checker.NewSparkleChecker(nil),
 		checker.NewBrewChecker(runner),
 		checker.NewMASChecker(runner),
 		checker.NewGitHubChecker(nil, ""),
+		checker.NewBrewInfoChecker(runner), // fallback: any app with a CaskName
 	}
 }
 
 // checkAll runs update checks on all apps concurrently.
 // It uses a semaphore to limit concurrency to 10 goroutines.
+// If a checker returns a stale result or an error, the next compatible checker is tried.
 func checkAll(ctx context.Context, apps []*app.App, checkers []checker.Checker) []*checker.UpdateResult {
 	const maxConcurrency = 10
 
@@ -140,46 +174,83 @@ func checkAll(ctx context.Context, apps []*app.App, checkers []checker.Checker) 
 	)
 
 	for _, a := range apps {
-		// Find the first matching checker for this app.
-		var ch checker.Checker
+		// Check if any checker can handle this app.
+		hasChecker := false
 		for _, c := range checkers {
 			if c.CanCheck(a) {
-				ch = c
+				hasChecker = true
 				break
 			}
 		}
-		if ch == nil {
+		if !hasChecker {
 			continue
 		}
 
 		wg.Add(1)
 		sem <- struct{}{} // acquire semaphore slot
 
-		go func(a *app.App, ch checker.Checker) {
+		go func(a *app.App) {
 			defer wg.Done()
 			defer func() { <-sem }() // release semaphore slot
 
-			result, err := ch.Check(ctx, a)
-			if err != nil {
-				mu.Lock()
-				results = append(results, &checker.UpdateResult{
-					App:            a,
-					Source:         ch.Name(),
-					CurrentVersion: a.Version,
-					Error:          err,
-				})
-				mu.Unlock()
-				return
-			}
+			result := checkWithFallthrough(ctx, a, checkers)
 
 			mu.Lock()
 			results = append(results, result)
 			mu.Unlock()
-		}(a, ch)
+		}(a)
 	}
 
 	wg.Wait()
 	return results
+}
+
+// checkWithFallthrough tries checkers in order, falling through on stale results or errors.
+func checkWithFallthrough(ctx context.Context, a *app.App, checkers []checker.Checker) *checker.UpdateResult {
+	var lastErr error
+	var lastSource string
+	var staleCount int
+
+	for _, c := range checkers {
+		if !c.CanCheck(a) {
+			continue
+		}
+
+		result, err := c.Check(ctx, a)
+		if err != nil {
+			lastErr = err
+			lastSource = c.Name()
+			continue // try next checker
+		}
+
+		if result.StaleSource {
+			staleCount++
+			continue // stale feed, try next checker
+		}
+
+		return result
+	}
+
+	// All checkers failed or were stale — return error result from last attempt.
+	if lastErr != nil {
+		return &checker.UpdateResult{
+			App:            a,
+			Source:         lastSource,
+			CurrentVersion: a.Version,
+			Error:          lastErr,
+		}
+	}
+
+	msg := fmt.Sprintf("no checker could provide a result for %s", a.Name)
+	if staleCount > 0 {
+		msg = fmt.Sprintf("all %d source(s) returned stale data for %s", staleCount, a.Name)
+	}
+	return &checker.UpdateResult{
+		App:            a,
+		Source:         "unknown",
+		CurrentVersion: a.Version,
+		Error:          fmt.Errorf("%s", msg),
+	}
 }
 
 // printCheckResults prints a table of check results to stdout.

@@ -43,10 +43,10 @@ func runUI(cmd *cobra.Command, _ []string) error {
 
 	apps = filterIgnored(apps, cfg)
 
-	// Filter out apps with unknown source — they are not checkable.
+	// Filter out apps that no checker can handle (unknown source without CaskName).
 	var checkable []*app.App
 	for _, a := range apps {
-		if a.Source != app.SourceUnknown {
+		if a.Source != app.SourceUnknown || a.CaskName != "" {
 			checkable = append(checkable, a)
 		}
 	}

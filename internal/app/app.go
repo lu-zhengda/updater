@@ -15,16 +15,17 @@ const (
 
 // App represents an installed macOS application.
 type App struct {
-	Name       string
-	BundleID   string
-	Version    string // CFBundleShortVersionString
-	Build      string // CFBundleVersion
-	Path       string
-	Source     Source
-	FeedURL    string // SUFeedURL
-	CaskName   string
-	MASID      string
-	GitHubRepo string // "owner/repo"
+	Name            string
+	BundleID        string
+	Version         string // CFBundleShortVersionString
+	Build           string // CFBundleVersion
+	Path            string
+	Source          Source
+	FeedURL         string // SUFeedURL
+	CaskName        string
+	MASID           string
+	GitHubRepo      string // "owner/repo"
+	InstalledViaBrew bool  // true only if actually installed via brew
 }
 
 // ToCaskName converts an app display name to a likely Homebrew cask name.

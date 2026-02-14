@@ -40,23 +40,28 @@ func TestBrewChecker_CanCheck(t *testing.T) {
 		want bool
 	}{
 		{
-			name: "brew app with cask name",
-			app:  &app.App{Source: app.SourceBrew, CaskName: "visual-studio-code"},
+			name: "brew-installed app with cask name",
+			app:  &app.App{Source: app.SourceBrew, CaskName: "visual-studio-code", InstalledViaBrew: true},
 			want: true,
 		},
 		{
 			name: "brew source without cask name",
-			app:  &app.App{Source: app.SourceBrew},
+			app:  &app.App{Source: app.SourceBrew, InstalledViaBrew: true},
 			want: false,
 		},
 		{
-			name: "non-brew app with cask name",
+			name: "non-brew app with cask name but not installed via brew",
 			app:  &app.App{Source: app.SourceSparkle, CaskName: "some-app"},
-			want: true,
+			want: false,
 		},
 		{
 			name: "MAS app without cask name",
 			app:  &app.App{Source: app.SourceMAS},
+			want: false,
+		},
+		{
+			name: "app with cask name but not installed via brew",
+			app:  &app.App{CaskName: "1password"},
 			want: false,
 		},
 	}
@@ -79,10 +84,11 @@ func TestBrewChecker_CheckWithMockRunner(t *testing.T) {
 
 	checker := NewBrewChecker(runner)
 	a := &app.App{
-		Name:     "Visual Studio Code",
-		Version:  "1.90.0",
-		Source:   app.SourceBrew,
-		CaskName: "visual-studio-code",
+		Name:             "Visual Studio Code",
+		Version:          "1.90.0",
+		Source:           app.SourceBrew,
+		CaskName:         "visual-studio-code",
+		InstalledViaBrew: true,
 	}
 
 	result, err := checker.Check(context.Background(), a)
@@ -112,10 +118,11 @@ func TestBrewChecker_CheckNoUpdate(t *testing.T) {
 
 	checker := NewBrewChecker(runner)
 	a := &app.App{
-		Name:     "Visual Studio Code",
-		Version:  "1.95.0",
-		Source:   app.SourceBrew,
-		CaskName: "visual-studio-code",
+		Name:             "Visual Studio Code",
+		Version:          "1.95.0",
+		Source:           app.SourceBrew,
+		CaskName:         "visual-studio-code",
+		InstalledViaBrew: true,
 	}
 
 	result, err := checker.Check(context.Background(), a)

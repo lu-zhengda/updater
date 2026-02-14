@@ -36,9 +36,9 @@ func (b *BrewChecker) Name() string {
 	return "brew"
 }
 
-// CanCheck returns true if the app has a cask name.
+// CanCheck returns true if the app was installed via brew and has a cask name.
 func (b *BrewChecker) CanCheck(a *app.App) bool {
-	return a.CaskName != ""
+	return a.CaskName != "" && a.InstalledViaBrew
 }
 
 // Check runs `brew outdated --cask --greedy --json` and looks for the app's cask.

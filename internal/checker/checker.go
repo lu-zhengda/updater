@@ -16,6 +16,7 @@ type UpdateResult struct {
 	DownloadURL    string
 	ReleaseNotes   string
 	HasUpdate      bool
+	StaleSource    bool // true when the source's latest is older than installed
 	Error          error
 }
 

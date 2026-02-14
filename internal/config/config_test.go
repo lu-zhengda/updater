@@ -16,6 +16,9 @@ func TestLoadConfig(t *testing.T) {
 github_mappings:
   com.microsoft.VSCode: "microsoft/vscode"
   com.example.app: "example/app"
+cask_mappings:
+  com.docker.docker: "docker"
+  com.1password.1password: "1password"
 `
 	if err := os.WriteFile(cfgPath, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
@@ -57,6 +60,22 @@ github_mappings:
 	if got := cfg.GitHubRepo("com.unknown.app"); got != "" {
 		t.Errorf("GitHubRepo(com.unknown.app) = %q, want empty", got)
 	}
+
+	// Verify CaskMappings
+	if len(cfg.CaskMappings) != 2 {
+		t.Fatalf("expected 2 cask mappings, got %d", len(cfg.CaskMappings))
+	}
+
+	// Verify CaskToken
+	if got := cfg.CaskToken("com.docker.docker"); got != "docker" {
+		t.Errorf("CaskToken(com.docker.docker) = %q, want %q", got, "docker")
+	}
+	if got := cfg.CaskToken("com.1password.1password"); got != "1password" {
+		t.Errorf("CaskToken(com.1password.1password) = %q, want %q", got, "1password")
+	}
+	if got := cfg.CaskToken("com.unknown.app"); got != "" {
+		t.Errorf("CaskToken(com.unknown.app) = %q, want empty", got)
+	}
 }
 
 func TestLoadConfig_Missing(t *testing.T) {
@@ -74,6 +93,9 @@ func TestLoadConfig_Missing(t *testing.T) {
 	}
 	if got := cfg.GitHubRepo("com.example.anything"); got != "" {
 		t.Errorf("default config GitHubRepo should be empty, got %q", got)
+	}
+	if got := cfg.CaskToken("com.example.anything"); got != "" {
+		t.Errorf("default config CaskToken should be empty, got %q", got)
 	}
 }
 

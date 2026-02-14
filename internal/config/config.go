@@ -12,6 +12,7 @@ import (
 type Config struct {
 	IgnoredApps    []string          `yaml:"ignored_apps"`
 	GitHubMappings map[string]string `yaml:"github_mappings"`
+	CaskMappings   map[string]string `yaml:"cask_mappings"`
 	ignoredSet     map[string]bool
 }
 
@@ -59,6 +60,15 @@ func (c *Config) GitHubRepo(bundleID string) string {
 		return ""
 	}
 	return c.GitHubMappings[bundleID]
+}
+
+// CaskToken returns the Homebrew cask token for the given bundle ID,
+// or an empty string if no mapping exists.
+func (c *Config) CaskToken(bundleID string) string {
+	if c.CaskMappings == nil {
+		return ""
+	}
+	return c.CaskMappings[bundleID]
 }
 
 // defaultConfig returns a Config with sensible zero values.

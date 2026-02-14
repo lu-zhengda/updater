@@ -7,10 +7,14 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// Set via -ldflags at build time.
+var version = "dev"
+
 var rootCmd = &cobra.Command{
-	Use:   "updater",
-	Short: "macOS app update manager",
-	Long:  "Discover installed macOS apps, check for updates, and update them from multiple sources.",
+	Use:     "updater",
+	Short:   "macOS app update manager",
+	Long:    "Discover installed macOS apps, check for updates, and update them from multiple sources.",
+	Version: version,
 }
 
 func main() {

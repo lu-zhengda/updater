@@ -1,5 +1,5 @@
 # Binary
-updater
+/updater
 
 # IDE
 .idea/
@@ -8,3 +8,6 @@ updater
 
 # OS
 .DS_Store
+
+# Plans / docs drafts
+docs/plans/

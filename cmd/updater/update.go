@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
+	"github.com/luzhengda/updater/internal/app"
 	"github.com/luzhengda/updater/internal/checker"
 	"github.com/luzhengda/updater/internal/config"
 	"github.com/spf13/cobra"
@@ -119,12 +121,16 @@ func executeUpdate(ctx context.Context, r *checker.UpdateResult, runner checker.
 		if r.App.CaskName == "" {
 			return fmt.Errorf("no cask name for %s", r.App.Name)
 		}
-		output, err := runner.Run(ctx, "brew", "upgrade", "--cask", r.App.CaskName)
-		if err != nil {
-			return fmt.Errorf("failed to run brew upgrade: %w", err)
+		if !r.App.InstalledViaBrew {
+			return openForSelfUpdate(ctx, r.App, runner)
 		}
-		fmt.Println(string(output))
-		return nil
+		return brewUpgrade(ctx, r.App, runner)
+
+	case "brew-info":
+		if r.App.InstalledViaBrew && r.App.CaskName != "" {
+			return brewUpgrade(ctx, r.App, runner)
+		}
+		return openForSelfUpdate(ctx, r.App, runner)
 
 	case "mas":
 		if r.App.MASID != "" {
@@ -158,4 +164,62 @@ func executeUpdate(ctx context.Context, r *checker.UpdateResult, runner checker.
 	default:
 		return fmt.Errorf("unsupported update source: %s", r.Source)
 	}
+}
+
+// brewUpgrade quits the app if running, runs brew upgrade, and reopens it.
+func brewUpgrade(ctx context.Context, a *app.App, runner checker.CmdRunner) error {
+	wasRunning := quitAppIfRunning(ctx, a, runner)
+
+	output, err := runner.Run(ctx, "brew", "upgrade", "--cask", a.CaskName)
+	if err != nil {
+		// Reopen if we quit it but upgrade failed.
+		if wasRunning {
+			_, _ = runner.Run(ctx, "open", "-a", a.Path)
+		}
+		return fmt.Errorf("failed to run brew upgrade: %w", err)
+	}
+	fmt.Println(string(output))
+
+	if wasRunning {
+		fmt.Printf("  Reopening %s...\n", a.Name)
+		_, _ = runner.Run(ctx, "open", "-a", a.Path)
+	}
+	return nil
+}
+
+// quitAppIfRunning checks if an app is running and gracefully quits it.
+// Returns true if the app was running and was quit.
+func quitAppIfRunning(ctx context.Context, a *app.App, runner checker.CmdRunner) bool {
+	// Check if the app process is running by matching its bundle path.
+	if _, err := runner.Run(ctx, "pgrep", "-f", a.Path); err != nil {
+		return false // not running
+	}
+
+	fmt.Printf("  Quitting %s...\n", a.Name)
+	_, _ = runner.Run(ctx, "osascript", "-e",
+		fmt.Sprintf(`tell application "%s" to quit`, a.Name))
+
+	// Wait for the process to exit (poll up to 5 seconds).
+	for i := 0; i < 10; i++ {
+		time.Sleep(500 * time.Millisecond)
+		if _, err := runner.Run(ctx, "pgrep", "-f", a.Path); err != nil {
+			return true // process exited
+		}
+	}
+
+	// Still running after 5s — force kill as last resort.
+	fmt.Printf("  Force quitting %s...\n", a.Name)
+	_, _ = runner.Run(ctx, "pkill", "-f", a.Path)
+	time.Sleep(1 * time.Second)
+	return true
+}
+
+// openForSelfUpdate opens an app so it can self-update via its built-in updater.
+func openForSelfUpdate(ctx context.Context, a *app.App, runner checker.CmdRunner) error {
+	fmt.Printf("  Opening %s for in-app update...\n", a.Name)
+	_, err := runner.Run(ctx, "open", "-a", a.Path)
+	if err != nil {
+		return fmt.Errorf("failed to open %s: %w", a.Name, err)
+	}
+	return nil
 }

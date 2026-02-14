@@ -59,6 +59,9 @@ var (
 				Underline(true)
 )
 
+// Source label style for brew-info.
+var sourceStyleBrewInfo = lipgloss.NewStyle().Foreground(colorCyan)
+
 // styledSource returns the source name rendered in its color.
 func styledSource(source string) string {
 	switch source {
@@ -68,6 +71,8 @@ func styledSource(source string) string {
 		return sourceStyleSparkle.Render("sparkle")
 	case "brew":
 		return sourceStyleBrew.Render("brew")
+	case "brew-info":
+		return sourceStyleBrewInfo.Render("brew-info")
 	case "github":
 		return sourceStyleGitHub.Render("github")
 	default:

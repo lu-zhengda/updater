@@ -139,6 +139,75 @@ func TestSparkleChecker_EnclosureAttributes(t *testing.T) {
 	}
 }
 
+func TestSparkleChecker_StaleFeed(t *testing.T) {
+	// Simulate PDF Expert scenario: installed v3.11.1 but feed returns v2.5.22.
+	staleXML := `<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
+  <channel>
+    <item>
+      <title>Version 2.5.22</title>
+      <enclosure url="https://example.com/app-2.5.22.dmg"
+          sparkle:shortVersionString="2.5.22"
+          sparkle:version="2522"
+          length="1234"
+          type="application/octet-stream" />
+    </item>
+  </channel>
+</rss>`
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(staleXML))
+	}))
+	defer ts.Close()
+
+	checker := NewSparkleChecker(ts.Client())
+	a := &app.App{
+		Name:    "PDF Expert",
+		Version: "3.11.1",
+		Source:  app.SourceSparkle,
+		FeedURL: ts.URL,
+	}
+
+	result, err := checker.Check(context.Background(), a)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if result.HasUpdate {
+		t.Error("expected HasUpdate to be false (feed is stale)")
+	}
+	if !result.StaleSource {
+		t.Error("expected StaleSource to be true (feed version 2.5.22 < installed 3.11.1)")
+	}
+	if result.LatestVersion != "2.5.22" {
+		t.Errorf("LatestVersion = %q, want %q", result.LatestVersion, "2.5.22")
+	}
+}
+
+func TestSparkleChecker_NotStaleWhenUpToDate(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(testAppcastXML))
+	}))
+	defer ts.Close()
+
+	checker := NewSparkleChecker(ts.Client())
+	a := &app.App{
+		Name:    "TestApp",
+		Version: "2.0.0", // same as feed
+		Source:  app.SourceSparkle,
+		FeedURL: ts.URL,
+	}
+
+	result, err := checker.Check(context.Background(), a)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if result.StaleSource {
+		t.Error("expected StaleSource to be false when versions match")
+	}
+}
+
 func TestSparkleChecker_CanCheck(t *testing.T) {
 	checker := NewSparkleChecker(nil)
 
