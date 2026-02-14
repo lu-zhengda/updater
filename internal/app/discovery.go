@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"gopkg.in/yaml.v3"
 	"howett.net/plist"
 )
 
@@ -35,8 +36,20 @@ func Discover(dirs ...string) ([]*App, error) {
 		}
 
 		for _, entry := range entries {
-			if !entry.IsDir() || !strings.HasSuffix(entry.Name(), ".app") {
+			if !strings.HasSuffix(entry.Name(), ".app") {
 				continue
+			}
+			// Check if entry is a directory (or a symlink to a directory).
+			if !entry.IsDir() {
+				if entry.Type()&os.ModeSymlink == 0 {
+					continue
+				}
+				// Symlink: check if target is a directory.
+				target := filepath.Join(dir, entry.Name())
+				info, err := os.Stat(target) // follows symlinks
+				if err != nil || !info.IsDir() {
+					continue
+				}
 			}
 
 			appPath := filepath.Join(dir, entry.Name())
@@ -79,7 +92,11 @@ func parseApp(appPath string) (*App, error) {
 		Build:    info.BundleVersion,
 		Path:     appPath,
 		FeedURL:  info.FeedURL,
-		Source:   classifySource(contentsDir, info),
+		Source:   classifySource(appPath, contentsDir, info),
+	}
+
+	if a.Source == SourceElectron {
+		enrichElectronApp(contentsDir, a)
 	}
 
 	return a, nil
@@ -103,11 +120,21 @@ func readInfoPlist(path string) (*infoPlist, error) {
 }
 
 // classifySource determines the install source of an app.
-func classifySource(contentsDir string, info *infoPlist) Source {
+func classifySource(appPath, contentsDir string, info *infoPlist) Source {
 	// Check for Mac App Store receipt first.
 	receiptPath := filepath.Join(contentsDir, "_MASReceipt", "receipt")
 	if _, err := os.Stat(receiptPath); err == nil {
 		return SourceMAS
+	}
+
+	// Setapp: app is inside a Setapp directory.
+	if isSetappPath(appPath) {
+		return SourceSetapp
+	}
+
+	// JetBrains Toolbox: resolve symlinks, check if target is in Toolbox directory.
+	if isToolboxPath(appPath) {
+		return SourceToolbox
 	}
 
 	// Check for Sparkle framework + SUFeedURL.
@@ -116,5 +143,65 @@ func classifySource(contentsDir string, info *infoPlist) Source {
 		return SourceSparkle
 	}
 
+	// Electron: has Electron Framework but no Sparkle.
+	electronFramework := filepath.Join(contentsDir, "Frameworks", "Electron Framework.framework")
+	if _, err := os.Stat(electronFramework); err == nil {
+		return SourceElectron
+	}
+
+	// Adobe CC: non-MAS app with com.adobe.* bundle ID.
+	if strings.HasPrefix(info.BundleID, "com.adobe.") {
+		return SourceAdobe
+	}
+
 	return SourceUnknown
+}
+
+// isSetappPath checks if the app's parent directory is named "Setapp".
+func isSetappPath(appPath string) bool {
+	return filepath.Base(filepath.Dir(appPath)) == "Setapp"
+}
+
+// isToolboxPath resolves symlinks and checks if the target is in a JetBrains Toolbox directory.
+func isToolboxPath(appPath string) bool {
+	resolved, err := filepath.EvalSymlinks(appPath)
+	if err != nil {
+		return false
+	}
+	return strings.Contains(resolved, "JetBrains/Toolbox/apps")
+}
+
+// appUpdateYML maps the fields we read from app-update.yml.
+type appUpdateYML struct {
+	Provider string `yaml:"provider"`
+	Owner    string `yaml:"owner"`
+	Repo     string `yaml:"repo"`
+	URL      string `yaml:"url"`
+}
+
+// enrichElectronApp reads Contents/Resources/app-update.yml and enriches the app
+// with GitHub repo or generic update URL information.
+func enrichElectronApp(contentsDir string, a *App) {
+	ymlPath := filepath.Join(contentsDir, "Resources", "app-update.yml")
+	data, err := os.ReadFile(ymlPath)
+	if err != nil {
+		return // no app-update.yml, stays as SourceElectron
+	}
+
+	var cfg appUpdateYML
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		return
+	}
+
+	switch cfg.Provider {
+	case "github":
+		if cfg.Owner != "" && cfg.Repo != "" {
+			a.GitHubRepo = cfg.Owner + "/" + cfg.Repo
+			a.Source = SourceGitHub
+		}
+	case "generic":
+		if cfg.URL != "" && (strings.HasPrefix(cfg.URL, "http://") || strings.HasPrefix(cfg.URL, "https://")) {
+			a.ElectronUpdateURL = cfg.URL
+		}
+	}
 }

@@ -44,6 +44,14 @@ func runOutdated(cmd *cobra.Command, _ []string) error {
 	}
 
 	runner := &checker.RealCmdRunner{}
+
+	formulaApps, fErr := discoverBrewFormulae(ctx, runner)
+	if fErr != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not discover brew formulae: %v\n", fErr)
+	} else {
+		apps = append(apps, formulaApps...)
+	}
+
 	apps, err = enrichApps(ctx, apps, cfg, runner)
 	if err != nil {
 		return err

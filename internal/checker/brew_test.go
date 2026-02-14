@@ -8,27 +8,53 @@ import (
 )
 
 func TestBrewChecker_ParseOutdated(t *testing.T) {
-	jsonData := []byte(`[{"name":"visual-studio-code","installed_versions":"1.90.0","current_version":"1.95.0"}]`)
+	t.Run("flat array format", func(t *testing.T) {
+		jsonData := []byte(`[{"name":"visual-studio-code","installed_versions":"1.90.0","current_version":"1.95.0"}]`)
 
-	items, err := parseBrewOutdated(jsonData)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+		items, err := parseBrewOutdated(jsonData)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(items) != 1 {
+			t.Fatalf("expected 1 item, got %d", len(items))
+		}
+		if items[0].Name != "visual-studio-code" {
+			t.Errorf("expected name visual-studio-code, got %s", items[0].Name)
+		}
+		if items[0].CurrentVersion != "1.95.0" {
+			t.Errorf("expected current version 1.95.0, got %s", items[0].CurrentVersion)
+		}
+	})
 
-	if len(items) != 1 {
-		t.Fatalf("expected 1 item, got %d", len(items))
-	}
+	t.Run("wrapped format with formulae and casks", func(t *testing.T) {
+		jsonData := []byte(`{"formulae":[{"name":"node","installed_versions":["20.0.0"],"current_version":"22.12.0"}],"casks":[{"name":"firefox","installed_versions":"1.0","current_version":"2.0"}]}`)
 
-	item := items[0]
-	if item.Name != "visual-studio-code" {
-		t.Errorf("expected name visual-studio-code, got %s", item.Name)
-	}
-	if item.InstalledVersions != "1.90.0" {
-		t.Errorf("expected installed version 1.90.0, got %s", item.InstalledVersions)
-	}
-	if item.CurrentVersion != "1.95.0" {
-		t.Errorf("expected current version 1.95.0, got %s", item.CurrentVersion)
-	}
+		items, err := parseBrewOutdated(jsonData)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(items) != 2 {
+			t.Fatalf("expected 2 items, got %d", len(items))
+		}
+		if items[0].Name != "node" {
+			t.Errorf("expected first item name node, got %s", items[0].Name)
+		}
+		if items[1].Name != "firefox" {
+			t.Errorf("expected second item name firefox, got %s", items[1].Name)
+		}
+	})
+
+	t.Run("wrapped format empty", func(t *testing.T) {
+		jsonData := []byte(`{"formulae":[],"casks":[]}`)
+
+		items, err := parseBrewOutdated(jsonData)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(items) != 0 {
+			t.Fatalf("expected 0 items, got %d", len(items))
+		}
+	})
 }
 
 func TestBrewChecker_CanCheck(t *testing.T) {

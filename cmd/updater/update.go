@@ -47,6 +47,14 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 	}
 
 	runner := &checker.RealCmdRunner{}
+
+	formulaApps, fErr := discoverBrewFormulae(ctx, runner)
+	if fErr != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not discover brew formulae: %v\n", fErr)
+	} else {
+		apps = append(apps, formulaApps...)
+	}
+
 	apps, err = enrichApps(ctx, apps, cfg, runner)
 	if err != nil {
 		return err
@@ -172,6 +180,17 @@ func executeUpdate(ctx context.Context, r *checker.UpdateResult, runner checker.
 		_, _ = runner.Run(ctx, "open", "macappstore://showUpdatesPage")
 		return checker.ErrOpenedExternally
 
+	case "formula":
+		if r.App.FormulaName == "" {
+			return fmt.Errorf("no formula name for %s", r.App.Name)
+		}
+		output, err := runner.Run(ctx, "brew", "upgrade", r.App.FormulaName)
+		if err != nil {
+			return fmt.Errorf("failed to upgrade formula %s: %w", r.App.FormulaName, err)
+		}
+		fmt.Println(string(output))
+		return nil
+
 	case "system":
 		_, err := runner.Run(ctx, "open", "x-apple.systempreferences:com.apple.Software-Update-Settings.extension")
 		if err != nil {
@@ -204,6 +223,36 @@ func executeUpdate(ctx context.Context, r *checker.UpdateResult, runner checker.
 		if err != nil {
 			return fmt.Errorf("failed to open download URL: %w", err)
 		}
+		return checker.ErrOpenedExternally
+
+	case "electron":
+		// Try direct install from ElectronUpdateURL if available.
+		if r.DownloadURL != "" && inst != nil && r.App.Path != "" {
+			wasRunning := quitAppIfRunning(ctx, r.App, runner)
+			err := inst.Install(ctx, r.DownloadURL, r.App.Path, r.App.Name)
+			if err == nil {
+				if wasRunning {
+					fmt.Printf("  Reopening %s...\n", r.App.Name)
+					_, _ = runner.Run(ctx, "open", "-a", r.App.Path)
+				}
+				return nil
+			}
+			fmt.Fprintf(os.Stderr, "  direct install failed, opening app for self-update: %v\n", err)
+		}
+		// Fallback: open app for self-update.
+		_, _ = runner.Run(ctx, "open", "-a", r.App.Path)
+		return checker.ErrOpenedExternally
+
+	case "setapp":
+		_, _ = runner.Run(ctx, "open", "-a", "/Applications/Setapp.app")
+		return checker.ErrOpenedExternally
+
+	case "toolbox":
+		_, _ = runner.Run(ctx, "open", "-a", "JetBrains Toolbox")
+		return checker.ErrOpenedExternally
+
+	case "adobe":
+		_, _ = runner.Run(ctx, "open", "-a", "/Applications/Adobe Creative Cloud/Adobe Creative Cloud.app")
 		return checker.ErrOpenedExternally
 
 	default:

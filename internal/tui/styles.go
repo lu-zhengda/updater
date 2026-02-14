@@ -86,12 +86,22 @@ func styledSource(source string) string {
 		return sourceStyleSparkle.Render("sparkle")
 	case "brew":
 		return sourceStyleBrew.Render("homebrew")
+	case "formula":
+		return sourceStyleBrew.Render("formula")
 	case "brew-info":
 		return sourceStyleBrewInfo.Render("homebrew")
 	case "github":
 		return sourceStyleGitHub.Render("github")
 	case "system":
 		return sourceStyleSystem.Render("system")
+	case "electron":
+		return sourceStyleBrewInfo.Render("electron")
+	case "setapp":
+		return sourceStyleSparkle.Render("setapp")
+	case "toolbox":
+		return sourceStyleGitHub.Render("toolbox")
+	case "adobe":
+		return styleError.Render("adobe")
 	case "unknown":
 		return sourceStyleUnknown.Render("unknown")
 	default:
@@ -111,6 +121,10 @@ func sourceDisplayName(source string) string {
 		return "app store"
 	case "brew", "brew-info":
 		return "homebrew"
+	case "formula":
+		return "formula"
+	case "electron", "setapp", "toolbox", "adobe":
+		return source
 	default:
 		return source
 	}
