@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"text/tabwriter"
 
@@ -45,14 +46,15 @@ func runCheck(cmd *cobra.Command, args []string) error {
 
 	apps = filterIgnored(apps, cfg)
 
-	checkers := buildCheckers(runner)
-	results := checkAll(ctx, apps, checkers)
+	checkers := buildCheckers(runner, cfg.ResolveGitHubToken())
+	results := checkAll(ctx, apps, checkers, cfg.MaxConcurrentOrDefault())
 
-	printCheckResults(cmd, results)
+	printCheckResults(cmd, results, cfg)
 	return nil
 }
 
 // discoverApps scans /Applications and ~/Applications for installed apps.
+// It also adds a synthetic macOS system entry for system update checks.
 func discoverApps() ([]*app.App, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -69,7 +71,32 @@ func discoverApps() ([]*app.App, error) {
 		return nil, fmt.Errorf("failed to discover apps: %w", err)
 	}
 
+	// Add synthetic macOS system entry.
+	macOSApp := macOSSystemApp()
+	if macOSApp != nil {
+		apps = append(apps, macOSApp)
+	}
+
 	return apps, nil
+}
+
+// macOSSystemApp creates a synthetic App entry for macOS system updates.
+func macOSSystemApp() *app.App {
+	runner := &checker.RealCmdRunner{}
+	output, err := runner.Run(context.Background(), "sw_vers", "-productVersion")
+	if err != nil {
+		return nil
+	}
+	version := strings.TrimSpace(string(output))
+	if version == "" {
+		return nil
+	}
+	return &app.App{
+		Name:     "macOS",
+		BundleID: "com.apple.macOS",
+		Version:  version,
+		Source:   app.Source("system"),
+	}
 }
 
 // enrichApps applies config mappings and cross-references with brew casks
@@ -117,21 +144,38 @@ func enrichApps(ctx context.Context, apps []*app.App, cfg *config.Config, runner
 
 	// Phase 4: For apps still unknown, probe brew info to discover available casks.
 	// Skip apps whose cask name came from config (user's explicit mapping).
+	// Probes run concurrently to avoid sequential ~0.8s per app delays.
+	type probeResult struct {
+		app   *app.App
+		found bool
+	}
+	var toProbe []*app.App
 	for _, a := range apps {
-		if a.Source != app.SourceUnknown {
-			continue
-		}
-		if a.CaskName == "" {
+		if a.Source != app.SourceUnknown || a.CaskName == "" {
 			continue
 		}
 		if cfg.CaskToken(a.BundleID) != "" {
 			continue // preserve user-configured cask mapping
 		}
-		if checker.CaskExists(ctx, runner, a.CaskName) {
-			continue // cask exists, BrewInfoChecker will handle it
+		toProbe = append(toProbe, a)
+	}
+
+	if len(toProbe) > 0 {
+		results := make(chan probeResult, len(toProbe))
+		sem := make(chan struct{}, 8) // limit concurrent brew info calls
+		for _, a := range toProbe {
+			sem <- struct{}{}
+			go func(a *app.App) {
+				defer func() { <-sem }()
+				results <- probeResult{app: a, found: checker.CaskExists(ctx, runner, a.CaskName)}
+			}(a)
 		}
-		// Cask doesn't exist — clear the heuristic guess.
-		a.CaskName = ""
+		for range toProbe {
+			r := <-results
+			if !r.found {
+				r.app.CaskName = ""
+			}
+		}
 	}
 
 	return apps, nil
@@ -150,21 +194,24 @@ func filterIgnored(apps []*app.App, cfg *config.Config) []*app.App {
 
 // buildCheckers creates all checkers with their dependencies.
 // Order matters for fallthrough: most accurate first, broadest fallback last.
-func buildCheckers(runner checker.CmdRunner) []checker.Checker {
+func buildCheckers(runner checker.CmdRunner, githubToken string) []checker.Checker {
 	return []checker.Checker{
 		checker.NewSparkleChecker(nil),
 		checker.NewBrewChecker(runner),
 		checker.NewMASChecker(runner),
-		checker.NewGitHubChecker(nil, ""),
+		checker.NewGitHubChecker(nil, "", githubToken),
+		checker.NewSystemChecker(runner),
 		checker.NewBrewInfoChecker(runner), // fallback: any app with a CaskName
 	}
 }
 
 // checkAll runs update checks on all apps concurrently.
-// It uses a semaphore to limit concurrency to 10 goroutines.
+// It uses a semaphore to limit concurrency to maxConcurrency goroutines.
 // If a checker returns a stale result or an error, the next compatible checker is tried.
-func checkAll(ctx context.Context, apps []*app.App, checkers []checker.Checker) []*checker.UpdateResult {
-	const maxConcurrency = 10
+func checkAll(ctx context.Context, apps []*app.App, checkers []checker.Checker, maxConcurrency int) []*checker.UpdateResult {
+	if maxConcurrency <= 0 {
+		maxConcurrency = 10
+	}
 
 	var (
 		mu      sync.Mutex
@@ -254,30 +301,50 @@ func checkWithFallthrough(ctx context.Context, a *app.App, checkers []checker.Ch
 }
 
 // printCheckResults prints a table of check results to stdout.
-func printCheckResults(cmd *cobra.Command, results []*checker.UpdateResult) {
+func printCheckResults(cmd *cobra.Command, results []*checker.UpdateResult, cfg *config.Config) {
 	w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
 	fmt.Fprintln(w, "NAME\tCURRENT\tLATEST\tSOURCE\tSTATUS")
 
 	updateCount := 0
 	errCount := 0
+	pinnedCount := 0
 	for _, r := range results {
+		src := cliSourceName(r.Source)
 		if r.Error != nil {
 			errCount++
-			fmt.Fprintf(w, "%s\t%s\t-\t%s\tERROR: %v\n", r.App.Name, r.CurrentVersion, r.Source, r.Error)
+			fmt.Fprintf(w, "%s\t%s\t-\t%s\tERROR: %v\n", r.App.Name, r.CurrentVersion, src, r.Error)
 			continue
 		}
-		if r.HasUpdate {
+		if r.HasUpdate && cfg.IsPinned(r.App.BundleID) {
+			pinnedCount++
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\tPINNED\n", r.App.Name, r.CurrentVersion, r.LatestVersion, src)
+		} else if r.HasUpdate {
 			updateCount++
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\tUPDATE AVAILABLE\n", r.App.Name, r.CurrentVersion, r.LatestVersion, r.Source)
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\tUPDATE AVAILABLE\n", r.App.Name, r.CurrentVersion, r.LatestVersion, src)
 		} else {
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\tok\n", r.App.Name, r.CurrentVersion, r.LatestVersion, r.Source)
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\tok\n", r.App.Name, r.CurrentVersion, r.LatestVersion, src)
 		}
 	}
 	w.Flush()
 
 	fmt.Fprintf(os.Stderr, "\n%d apps checked, %d updates available", len(results), updateCount)
+	if pinnedCount > 0 {
+		fmt.Fprintf(os.Stderr, ", %d pinned", pinnedCount)
+	}
 	if errCount > 0 {
 		fmt.Fprintf(os.Stderr, ", %d errors", errCount)
 	}
 	fmt.Fprintln(os.Stderr)
+}
+
+// cliSourceName returns a user-friendly display name for a source.
+func cliSourceName(source string) string {
+	switch source {
+	case "mas":
+		return "app store"
+	case "brew", "brew-info":
+		return "homebrew"
+	default:
+		return source
+	}
 }

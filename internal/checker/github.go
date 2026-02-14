@@ -31,19 +31,21 @@ type githubAsset struct {
 type GitHubChecker struct {
 	client  *http.Client
 	baseURL string
+	token   string
 }
 
 // NewGitHubChecker creates a new GitHubChecker.
 // If client is nil, http.DefaultClient is used.
 // If baseURL is empty, the default GitHub API URL is used.
-func NewGitHubChecker(client *http.Client, baseURL string) *GitHubChecker {
+// If token is non-empty, it is sent as a Bearer token in requests.
+func NewGitHubChecker(client *http.Client, baseURL, token string) *GitHubChecker {
 	if client == nil {
 		client = http.DefaultClient
 	}
 	if baseURL == "" {
 		baseURL = defaultGitHubAPI
 	}
-	return &GitHubChecker{client: client, baseURL: baseURL}
+	return &GitHubChecker{client: client, baseURL: baseURL, token: token}
 }
 
 // Name returns the checker's display name.
@@ -68,6 +70,9 @@ func (g *GitHubChecker) Check(ctx context.Context, a *app.App) (*UpdateResult, e
 		return nil, fmt.Errorf("failed to create request for %s: %w", a.Name, err)
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
+	if g.token != "" {
+		req.Header.Set("Authorization", "Bearer "+g.token)
+	}
 
 	resp, err := g.client.Do(req)
 	if err != nil {

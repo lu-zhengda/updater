@@ -13,7 +13,12 @@ type Config struct {
 	IgnoredApps    []string          `yaml:"ignored_apps"`
 	GitHubMappings map[string]string `yaml:"github_mappings"`
 	CaskMappings   map[string]string `yaml:"cask_mappings"`
-	ignoredSet     map[string]bool
+	GitHubToken    string            `yaml:"github_token"`
+	MaxConcurrent  int               `yaml:"max_concurrent"`
+	PinnedApps     []string          `yaml:"pinned_apps"`
+	MaxBackups     int               `yaml:"max_backups"`
+	ignoredSet     map[string]bool   `yaml:"-"`
+	pinnedSet      map[string]bool   `yaml:"-"`
 }
 
 // DefaultPath returns the default config file path (~/.config/updater/config.yaml).
@@ -42,7 +47,24 @@ func Load(path string) (*Config, error) {
 	}
 
 	cfg.buildIgnoredSet()
+	cfg.buildPinnedSet()
 	return &cfg, nil
+}
+
+// Save writes the config to a YAML file at path.
+func (c *Config) Save(path string) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("failed to create config directory: %w", err)
+	}
+	data, err := yaml.Marshal(c)
+	if err != nil {
+		return fmt.Errorf("failed to marshal config: %w", err)
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		return fmt.Errorf("failed to write config file: %w", err)
+	}
+	return nil
 }
 
 // IsIgnored reports whether the given bundle ID is in the ignored list.
@@ -71,10 +93,73 @@ func (c *Config) CaskToken(bundleID string) string {
 	return c.CaskMappings[bundleID]
 }
 
+// ResolveGitHubToken returns the GitHub API token, preferring the
+// GITHUB_TOKEN environment variable over the config file value.
+func (c *Config) ResolveGitHubToken() string {
+	if token := os.Getenv("GITHUB_TOKEN"); token != "" {
+		return token
+	}
+	return c.GitHubToken
+}
+
+// MaxConcurrentOrDefault returns MaxConcurrent if set to a positive value,
+// otherwise returns 10 as the default.
+func (c *Config) MaxConcurrentOrDefault() int {
+	if c.MaxConcurrent > 0 {
+		return c.MaxConcurrent
+	}
+	return 10
+}
+
+// MaxBackupsOrDefault returns MaxBackups if set to a positive value,
+// otherwise returns 1 as the default.
+func (c *Config) MaxBackupsOrDefault() int {
+	if c.MaxBackups > 0 {
+		return c.MaxBackups
+	}
+	return 1
+}
+
+// IsPinned reports whether the given bundle ID is in the pinned list.
+func (c *Config) IsPinned(bundleID string) bool {
+	if c.pinnedSet == nil {
+		return false
+	}
+	return c.pinnedSet[bundleID]
+}
+
+// Pin adds a bundle ID to the pinned list.
+func (c *Config) Pin(bundleID string) {
+	if c.IsPinned(bundleID) {
+		return
+	}
+	c.PinnedApps = append(c.PinnedApps, bundleID)
+	if c.pinnedSet == nil {
+		c.pinnedSet = make(map[string]bool)
+	}
+	c.pinnedSet[bundleID] = true
+}
+
+// Unpin removes a bundle ID from the pinned list.
+func (c *Config) Unpin(bundleID string) {
+	if !c.IsPinned(bundleID) {
+		return
+	}
+	delete(c.pinnedSet, bundleID)
+	filtered := make([]string, 0, len(c.PinnedApps))
+	for _, id := range c.PinnedApps {
+		if id != bundleID {
+			filtered = append(filtered, id)
+		}
+	}
+	c.PinnedApps = filtered
+}
+
 // defaultConfig returns a Config with sensible zero values.
 func defaultConfig() *Config {
 	return &Config{
 		ignoredSet: make(map[string]bool),
+		pinnedSet:  make(map[string]bool),
 	}
 }
 
@@ -83,5 +168,13 @@ func (c *Config) buildIgnoredSet() {
 	c.ignoredSet = make(map[string]bool, len(c.IgnoredApps))
 	for _, id := range c.IgnoredApps {
 		c.ignoredSet[id] = true
+	}
+}
+
+// buildPinnedSet populates the fast-lookup set from PinnedApps.
+func (c *Config) buildPinnedSet() {
+	c.pinnedSet = make(map[string]bool, len(c.PinnedApps))
+	for _, id := range c.PinnedApps {
+		c.pinnedSet[id] = true
 	}
 }

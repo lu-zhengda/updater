@@ -2,10 +2,12 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/spinner"
+	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/luzhengda/updater/internal/app"
@@ -18,6 +20,15 @@ type CheckFunc func(ctx context.Context, apps []*app.App) []*checker.UpdateResul
 // UpdateFunc executes an update for a single app.
 type UpdateFunc func(ctx context.Context, result *checker.UpdateResult) error
 
+// LoadResult is returned by LoadFunc with the discovered and enriched apps.
+type LoadResult struct {
+	Apps      []*app.App
+	PinnedIDs map[string]bool
+}
+
+// LoadFunc discovers and enriches apps. Called in the background so the TUI launches instantly.
+type LoadFunc func(ctx context.Context) (*LoadResult, error)
+
 // row represents a single row in the TUI table.
 type row struct {
 	app      *app.App
@@ -27,6 +38,11 @@ type row struct {
 }
 
 // Messages sent by background operations.
+type loadDoneMsg struct {
+	result *LoadResult
+	err    error
+}
+
 type checkDoneMsg struct {
 	results []*checker.UpdateResult
 }
@@ -38,47 +54,62 @@ type updateDoneMsg struct {
 
 // Model is the main Bubbletea model for the updater TUI.
 type Model struct {
-	apps      []*app.App
-	rows      []row
-	cursor    int
-	offset    int // scroll offset for the viewport
-	checking  bool
-	updating  map[int]bool
-	ignored   map[int]bool
-	width     int
-	height    int
-	spinner   spinner.Model
-	checkFn   CheckFunc
-	updateFn  UpdateFunc
-	statusMsg string
+	apps       []*app.App
+	rows       []row
+	cursor     int
+	offset     int // scroll offset for the viewport
+	loading    bool // true while discovering/enriching apps
+	checking   bool
+	updating   map[int]bool
+	ignored    map[int]bool
+	pinned     map[int]bool
+	pinnedIDs  map[string]bool
+	width      int
+	height     int
+	spinner    spinner.Model
+	loadFn     LoadFunc
+	checkFn    CheckFunc
+	updateFn   UpdateFunc
+	statusMsg      string
+	showDetail     bool
+	detailIdx      int
+	detailViewport viewport.Model
 }
 
-// NewModel creates a new TUI model with the given apps and callback functions.
-func NewModel(apps []*app.App, checkFn CheckFunc, updateFn UpdateFunc) Model {
+// NewModel creates a new TUI model that launches instantly.
+// loadFn runs in the background to discover and enrich apps.
+// checkFn runs after loading to check for updates.
+// updateFn executes updates for individual apps.
+func NewModel(loadFn LoadFunc, checkFn CheckFunc, updateFn UpdateFunc) Model {
 	s := spinner.New()
 	s.Spinner = spinner.Dot
 	s.Style = lipgloss.NewStyle().Foreground(colorCyan)
 
-	rows := make([]row, len(apps))
-	for i, a := range apps {
-		rows[i] = row{app: a}
-	}
-
 	return Model{
-		apps:     apps,
-		rows:     rows,
-		checking: true,
-		updating: make(map[int]bool),
-		ignored:  make(map[int]bool),
-		spinner:  s,
-		checkFn:  checkFn,
-		updateFn: updateFn,
+		loading:   true,
+		updating:  make(map[int]bool),
+		ignored:   make(map[int]bool),
+		pinned:    make(map[int]bool),
+		pinnedIDs: make(map[string]bool),
+		spinner:   s,
+		loadFn:    loadFn,
+		checkFn:   checkFn,
+		updateFn:  updateFn,
 	}
 }
 
-// Init starts the spinner and kicks off the background check.
+// Init starts the spinner and kicks off the background load.
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(m.spinner.Tick, m.startCheck())
+	return tea.Batch(m.spinner.Tick, m.startLoad())
+}
+
+// startLoad returns a command that runs discovery/enrichment in the background.
+func (m Model) startLoad() tea.Cmd {
+	return func() tea.Msg {
+		ctx := context.Background()
+		result, err := m.loadFn(ctx)
+		return loadDoneMsg{result: result, err: err}
+	}
 }
 
 // startCheck returns a command that runs the check function in the background.
@@ -110,15 +141,39 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		m.adjustOffset()
+		if m.showDetail {
+			m.detailViewport.Width = msg.Width
+			m.detailViewport.Height = msg.Height - 4
+		}
 		return m, nil
 
 	case spinner.TickMsg:
-		if m.checking || len(m.updating) > 0 {
+		if m.loading || m.checking || len(m.updating) > 0 {
 			var cmd tea.Cmd
 			m.spinner, cmd = m.spinner.Update(msg)
 			return m, cmd
 		}
 		return m, nil
+
+	case loadDoneMsg:
+		m.loading = false
+		if msg.err != nil {
+			m.statusMsg = fmt.Sprintf("Error: %v", msg.err)
+			return m, nil
+		}
+		m.apps = msg.result.Apps
+		m.pinnedIDs = msg.result.PinnedIDs
+		m.rows = make([]row, len(m.apps))
+		m.pinned = make(map[int]bool)
+		for i, a := range m.apps {
+			m.rows[i] = row{app: a}
+			if m.pinnedIDs[a.BundleID] {
+				m.pinned[i] = true
+			}
+		}
+		m.checking = true
+		m.statusMsg = fmt.Sprintf("Found %d apps, checking for updates...", len(m.apps))
+		return m, tea.Batch(m.startCheck(), m.spinner.Tick)
 
 	case checkDoneMsg:
 		m.checking = false
@@ -129,7 +184,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case updateDoneMsg:
 		delete(m.updating, msg.index)
 		m.rows[msg.index].updating = false
-		if msg.err != nil {
+		if errors.Is(msg.err, checker.ErrOpenedExternally) {
+			m.statusMsg = fmt.Sprintf("Opened %s for update", m.rows[msg.index].app.Name)
+		} else if msg.err != nil {
 			m.statusMsg = fmt.Sprintf("Update failed for %s: %v", m.rows[msg.index].app.Name, msg.err)
 		} else {
 			m.statusMsg = fmt.Sprintf("Updated %s successfully", m.rows[msg.index].app.Name)
@@ -150,6 +207,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // handleKey processes keyboard input.
 func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// In detail view, handle viewport scrolling and escape.
+	if m.showDetail {
+		return m.handleDetailKey(msg)
+	}
+
 	switch msg.Type {
 	case tea.KeyCtrlC:
 		return m, tea.Quit
@@ -161,6 +223,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case tea.KeyEnter:
 		return m.handleUpdate()
+	case tea.KeyEsc:
+		return m, tea.Quit
 	case tea.KeyRunes:
 		switch string(msg.Runes) {
 		case "q":
@@ -178,7 +242,42 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case "r":
 			return m.handleRefresh()
+		case "d":
+			return m.toggleDetail()
+		case "p":
+			m.togglePin()
+			return m, nil
 		}
+	}
+	return m, nil
+}
+
+// handleDetailKey processes keyboard input when the detail view is active.
+func (m Model) handleDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.Type {
+	case tea.KeyCtrlC:
+		return m, tea.Quit
+	case tea.KeyEsc:
+		m.showDetail = false
+		return m, nil
+	case tea.KeyRunes:
+		switch string(msg.Runes) {
+		case "q", "d":
+			m.showDetail = false
+			return m, nil
+		case "j":
+			m.detailViewport.LineDown(1)
+			return m, nil
+		case "k":
+			m.detailViewport.LineUp(1)
+			return m, nil
+		}
+	case tea.KeyDown:
+		m.detailViewport.LineDown(1)
+		return m, nil
+	case tea.KeyUp:
+		m.detailViewport.LineUp(1)
+		return m, nil
 	}
 	return m, nil
 }
@@ -191,10 +290,10 @@ func (m *Model) moveCursor(delta int) {
 	}
 	m.cursor += delta
 	if m.cursor < 0 {
-		m.cursor = 0
+		m.cursor = len(m.rows) - 1
 	}
 	if m.cursor >= len(m.rows) {
-		m.cursor = len(m.rows) - 1
+		m.cursor = 0
 	}
 	m.adjustOffset()
 }
@@ -246,6 +345,55 @@ func (m *Model) toggleIgnore() {
 	}
 }
 
+// toggleDetail opens or closes the release notes detail view.
+func (m Model) toggleDetail() (tea.Model, tea.Cmd) {
+	if len(m.rows) == 0 {
+		return m, nil
+	}
+
+	if m.showDetail {
+		m.showDetail = false
+		return m, nil
+	}
+
+	r := m.rows[m.cursor]
+	if r.result == nil || r.result.ReleaseNotes == "" {
+		m.statusMsg = "No release notes available"
+		return m, nil
+	}
+
+	// Determine content: strip HTML for Sparkle, use markdown as-is for GitHub.
+	content := r.result.ReleaseNotes
+	if r.result.Source == "sparkle" {
+		content = stripHTML(content)
+	}
+
+	vp := viewport.New(m.width, m.height-4) // reserve header + help bar
+	vp.SetContent(content)
+
+	m.showDetail = true
+	m.detailIdx = m.cursor
+	m.detailViewport = vp
+	return m, nil
+}
+
+// togglePin toggles the pinned state of the currently selected app.
+func (m *Model) togglePin() {
+	if len(m.rows) == 0 {
+		return
+	}
+	bundleID := m.rows[m.cursor].app.BundleID
+	if m.pinned[m.cursor] {
+		delete(m.pinned, m.cursor)
+		delete(m.pinnedIDs, bundleID)
+		m.statusMsg = fmt.Sprintf("Unpinned %s", m.rows[m.cursor].app.Name)
+	} else {
+		m.pinned[m.cursor] = true
+		m.pinnedIDs[bundleID] = true
+		m.statusMsg = fmt.Sprintf("Pinned %s", m.rows[m.cursor].app.Name)
+	}
+}
+
 // handleUpdate starts an update for the currently selected app.
 func (m Model) handleUpdate() (tea.Model, tea.Cmd) {
 	if len(m.rows) == 0 || m.checking {
@@ -267,17 +415,23 @@ func (m Model) handleUpdate() (tea.Model, tea.Cmd) {
 }
 
 // handleUpdateAll starts updates for all apps with available updates.
+// Pinned apps are skipped.
 func (m Model) handleUpdateAll() (tea.Model, tea.Cmd) {
 	if m.checking {
 		return m, nil
 	}
 	var cmds []tea.Cmd
 	count := 0
+	skippedPinned := 0
 	for i, r := range m.rows {
 		if r.result == nil || !r.result.HasUpdate || r.result.Error != nil {
 			continue
 		}
 		if m.updating[i] || m.ignored[i] {
+			continue
+		}
+		if m.pinned[i] {
+			skippedPinned++
 			continue
 		}
 		m.updating[i] = true
@@ -286,27 +440,32 @@ func (m Model) handleUpdateAll() (tea.Model, tea.Cmd) {
 		count++
 	}
 	if count == 0 {
-		m.statusMsg = "No updates available"
+		if skippedPinned > 0 {
+			m.statusMsg = fmt.Sprintf("No updates available (%d pinned)", skippedPinned)
+		} else {
+			m.statusMsg = "No updates available"
+		}
 		return m, nil
 	}
-	m.statusMsg = fmt.Sprintf("Updating %d apps...", count)
+	msg := fmt.Sprintf("Updating %d apps...", count)
+	if skippedPinned > 0 {
+		msg += fmt.Sprintf(" (%d pinned, skipped)", skippedPinned)
+	}
+	m.statusMsg = msg
 	cmds = append(cmds, m.spinner.Tick)
 	return m, tea.Batch(cmds...)
 }
 
-// handleRefresh re-checks all apps for updates.
+// handleRefresh re-discovers apps and re-checks for updates.
 func (m Model) handleRefresh() (tea.Model, tea.Cmd) {
-	if m.checking {
+	if m.loading || m.checking {
 		return m, nil
 	}
-	m.checking = true
-	// Reset results.
-	for i := range m.rows {
-		m.rows[i].result = nil
-		m.rows[i].checked = false
-	}
+	m.loading = true
+	m.rows = nil
+	m.apps = nil
 	m.statusMsg = "Refreshing..."
-	return m, tea.Batch(m.startCheck(), m.spinner.Tick)
+	return m, tea.Batch(m.startLoad(), m.spinner.Tick)
 }
 
 // applyResults matches check results back to rows by app pointer.
@@ -325,15 +484,29 @@ func (m *Model) applyResults(results []*checker.UpdateResult) {
 
 // View renders the TUI.
 func (m Model) View() string {
+	if m.showDetail {
+		return m.viewDetail()
+	}
+
 	var b strings.Builder
 
 	// Header.
 	b.WriteString(styleHeader.Render("macOS App Updater"))
 	b.WriteString("\n")
 
+	if m.loading {
+		b.WriteString(m.spinner.View())
+		b.WriteString(" Discovering apps...\n")
+		return b.String()
+	}
+
 	if m.checking {
 		b.WriteString(m.spinner.View())
 		b.WriteString(" Checking for updates...\n")
+		if m.statusMsg != "" {
+			b.WriteString(lipgloss.NewStyle().Foreground(colorGray).Render(m.statusMsg))
+			b.WriteString("\n")
+		}
 		return b.String()
 	}
 
@@ -366,6 +539,25 @@ func (m Model) View() string {
 	return b.String()
 }
 
+// viewDetail renders the release notes detail view.
+func (m Model) viewDetail() string {
+	var b strings.Builder
+
+	name := "Release Notes"
+	if m.detailIdx < len(m.rows) {
+		r := m.rows[m.detailIdx]
+		name = fmt.Sprintf("%s — Release Notes (%s → %s)", r.app.Name, r.app.Version, r.result.LatestVersion)
+	}
+
+	b.WriteString(styleHeader.Render(name))
+	b.WriteString("\n")
+	b.WriteString(m.detailViewport.View())
+	b.WriteString("\n")
+	b.WriteString(styleStatusBar.Render("j/k: scroll | d/esc/q: back"))
+
+	return b.String()
+}
+
 // renderColumnHeaders renders the table column headers.
 func renderColumnHeaders(width int) string {
 	nameW, curW, latW, srcW := columnWidths(width)
@@ -393,7 +585,8 @@ func (m Model) renderRow(index int, isCursor bool) string {
 	name := truncate(r.app.Name, nameW)
 	current := truncate(r.app.Version, curW)
 	latest := ""
-	rawSource := ""
+	// Always show source from app metadata; override with checker result when available.
+	rawSource := string(r.app.Source)
 	status := ""
 
 	if r.updating {
@@ -405,6 +598,10 @@ func (m Model) renderRow(index int, isCursor bool) string {
 	} else if r.result.Error != nil {
 		status = styleError.Render("error")
 		rawSource = r.result.Source
+	} else if m.pinned[index] && r.result.HasUpdate {
+		latest = r.result.LatestVersion
+		rawSource = r.result.Source
+		status = stylePinned.Render("pinned")
 	} else if r.result.HasUpdate {
 		latest = r.result.LatestVersion
 		rawSource = r.result.Source
@@ -415,10 +612,16 @@ func (m Model) renderRow(index int, isCursor bool) string {
 		status = styleUpToDate.Render("up to date")
 	}
 
+	// Show +brew suffix when app is installed via brew but source is from another checker.
+	if r.app.InstalledViaBrew && rawSource != "" && rawSource != "brew" && rawSource != "brew-info" {
+		rawSource = rawSource + "+brew"
+	}
+
 	latest = truncate(latest, latW)
 
 	// Pad source before styling so ANSI codes don't affect width.
-	source := styledSource(rawSource) + strings.Repeat(" ", max(0, srcW-len(rawSource)))
+	displayName := sourceDisplayName(rawSource)
+	source := styledSource(rawSource) + strings.Repeat(" ", max(0, srcW-len(displayName)))
 
 	line := fmt.Sprintf("%s%s  %s  %s  %s  %s",
 		cursor,
@@ -439,7 +642,7 @@ func (m Model) renderRow(index int, isCursor bool) string {
 // renderStatusBar renders the bottom status bar with key help and status message.
 func (m Model) renderStatusBar() string {
 	help := styleStatusBar.Render(
-		"j/k: navigate | enter: update | a: update all | i: ignore | r: refresh | q: quit")
+		"j/k: navigate | enter: update | a: update all | d: details | p: pin | i: ignore | r: refresh | q: quit")
 
 	var msg string
 	if m.statusMsg != "" {

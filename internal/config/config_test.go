@@ -120,6 +120,142 @@ func TestLoadConfig_EmptyFile(t *testing.T) {
 	}
 }
 
+func TestResolveGitHubToken(t *testing.T) {
+	t.Run("env takes precedence", func(t *testing.T) {
+		cfg := &Config{GitHubToken: "from-config"}
+		t.Setenv("GITHUB_TOKEN", "from-env")
+		if got := cfg.ResolveGitHubToken(); got != "from-env" {
+			t.Errorf("ResolveGitHubToken() = %q, want %q", got, "from-env")
+		}
+	})
+
+	t.Run("falls back to config", func(t *testing.T) {
+		cfg := &Config{GitHubToken: "from-config"}
+		t.Setenv("GITHUB_TOKEN", "")
+		if got := cfg.ResolveGitHubToken(); got != "from-config" {
+			t.Errorf("ResolveGitHubToken() = %q, want %q", got, "from-config")
+		}
+	})
+
+	t.Run("empty when neither set", func(t *testing.T) {
+		cfg := &Config{}
+		t.Setenv("GITHUB_TOKEN", "")
+		if got := cfg.ResolveGitHubToken(); got != "" {
+			t.Errorf("ResolveGitHubToken() = %q, want empty", got)
+		}
+	})
+}
+
+func TestMaxConcurrentOrDefault(t *testing.T) {
+	tests := []struct {
+		name  string
+		value int
+		want  int
+	}{
+		{"zero returns default", 0, 10},
+		{"negative returns default", -5, 10},
+		{"positive returns value", 20, 20},
+		{"one returns one", 1, 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &Config{MaxConcurrent: tt.value}
+			if got := cfg.MaxConcurrentOrDefault(); got != tt.want {
+				t.Errorf("MaxConcurrentOrDefault() = %d, want %d", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestMaxBackupsOrDefault(t *testing.T) {
+	tests := []struct {
+		name  string
+		value int
+		want  int
+	}{
+		{"zero returns default", 0, 1},
+		{"negative returns default", -1, 1},
+		{"positive returns value", 5, 5},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &Config{MaxBackups: tt.value}
+			if got := cfg.MaxBackupsOrDefault(); got != tt.want {
+				t.Errorf("MaxBackupsOrDefault() = %d, want %d", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestPinUnpin(t *testing.T) {
+	cfg := defaultConfig()
+
+	// Pin an app.
+	cfg.Pin("com.example.app")
+	if !cfg.IsPinned("com.example.app") {
+		t.Error("expected com.example.app to be pinned")
+	}
+	if len(cfg.PinnedApps) != 1 {
+		t.Errorf("expected 1 pinned app, got %d", len(cfg.PinnedApps))
+	}
+
+	// Pin same app again (idempotent).
+	cfg.Pin("com.example.app")
+	if len(cfg.PinnedApps) != 1 {
+		t.Errorf("duplicate pin: expected 1 pinned app, got %d", len(cfg.PinnedApps))
+	}
+
+	// Unpin.
+	cfg.Unpin("com.example.app")
+	if cfg.IsPinned("com.example.app") {
+		t.Error("expected com.example.app to not be pinned after unpin")
+	}
+	if len(cfg.PinnedApps) != 0 {
+		t.Errorf("expected 0 pinned apps, got %d", len(cfg.PinnedApps))
+	}
+
+	// Unpin non-existent (no-op).
+	cfg.Unpin("com.example.nonexistent")
+}
+
+func TestConfigSaveAndReload(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "sub", "config.yaml")
+
+	cfg := defaultConfig()
+	cfg.GitHubToken = "test-token"
+	cfg.MaxConcurrent = 5
+	cfg.MaxBackups = 3
+	cfg.Pin("com.example.pinned")
+	cfg.IgnoredApps = []string{"com.example.ignored"}
+	cfg.buildIgnoredSet()
+
+	if err := cfg.Save(cfgPath); err != nil {
+		t.Fatalf("Save failed: %v", err)
+	}
+
+	loaded, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+
+	if loaded.GitHubToken != "test-token" {
+		t.Errorf("GitHubToken = %q, want %q", loaded.GitHubToken, "test-token")
+	}
+	if loaded.MaxConcurrent != 5 {
+		t.Errorf("MaxConcurrent = %d, want 5", loaded.MaxConcurrent)
+	}
+	if loaded.MaxBackups != 3 {
+		t.Errorf("MaxBackups = %d, want 3", loaded.MaxBackups)
+	}
+	if !loaded.IsPinned("com.example.pinned") {
+		t.Error("expected com.example.pinned to be pinned after reload")
+	}
+	if !loaded.IsIgnored("com.example.ignored") {
+		t.Error("expected com.example.ignored to be ignored after reload")
+	}
+}
+
 func TestDefaultPath(t *testing.T) {
 	p := DefaultPath()
 	if p == "" {

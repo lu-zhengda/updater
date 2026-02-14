@@ -2,14 +2,17 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
 	"time"
 
 	"github.com/luzhengda/updater/internal/app"
+	"github.com/luzhengda/updater/internal/backup"
 	"github.com/luzhengda/updater/internal/checker"
 	"github.com/luzhengda/updater/internal/config"
+	"github.com/luzhengda/updater/internal/installer"
 	"github.com/spf13/cobra"
 )
 
@@ -66,8 +69,8 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	checkers := buildCheckers(runner)
-	results := checkAll(ctx, apps, checkers)
+	checkers := buildCheckers(runner, cfg.ResolveGitHubToken())
+	results := checkAll(ctx, apps, checkers, cfg.MaxConcurrentOrDefault())
 
 	// Filter to apps with updates.
 	var updatable []*checker.UpdateResult
@@ -97,16 +100,27 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 	} else if !flagAll {
 		// Without --all and without a specific app name, show what's available.
 		fmt.Fprintf(cmd.OutOrStdout(), "%d updates available. Use --all to update all, or specify an app name.\n", len(updatable))
-		printCheckResults(cmd, updatable)
+		printCheckResults(cmd, updatable, cfg)
 		return nil
 	}
 
-	// Execute updates.
+	// Create backup manager and installer for direct updates.
+	bm := backup.NewManager(backup.DefaultBaseDir(), cfg.MaxBackupsOrDefault(), runner)
+	inst := installer.New(runner, nil)
+
+	// Execute updates. When using --all, skip pinned apps unless explicitly named.
+	isExplicit := len(args) > 0 && !flagAll
 	for _, r := range updatable {
+		if !isExplicit && cfg.IsPinned(r.App.BundleID) {
+			fmt.Fprintf(cmd.OutOrStdout(), "Skipping %s (pinned)\n", r.App.Name)
+			continue
+		}
 		fmt.Fprintf(cmd.OutOrStdout(), "Updating %s (%s -> %s) via %s...\n",
 			r.App.Name, r.CurrentVersion, r.LatestVersion, r.Source)
 
-		if err := executeUpdate(ctx, r, runner); err != nil {
+		if err := executeUpdate(ctx, r, runner, bm, inst); errors.Is(err, checker.ErrOpenedExternally) {
+			// Not an error — just opened externally for the user to handle.
+		} else if err != nil {
 			fmt.Fprintf(os.Stderr, "  error: %v\n", err)
 		}
 	}
@@ -115,14 +129,25 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 }
 
 // executeUpdate performs the actual update for a single app.
-func executeUpdate(ctx context.Context, r *checker.UpdateResult, runner checker.CmdRunner) error {
+// It backs up the current version before updating when possible.
+func executeUpdate(ctx context.Context, r *checker.UpdateResult, runner checker.CmdRunner, bm *backup.Manager, inst *installer.Installer) error {
+	// Backup before update (non-fatal on failure).
+	if bm != nil && r.App.Path != "" {
+		if err := bm.Backup(ctx, r.App.Name, r.App.BundleID, r.CurrentVersion, r.App.Path); err != nil {
+			fmt.Fprintf(os.Stderr, "  warning: backup failed: %v\n", err)
+		} else {
+			fmt.Printf("  Backed up %s %s\n", r.App.Name, r.CurrentVersion)
+		}
+	}
+
 	switch r.Source {
 	case "brew":
 		if r.App.CaskName == "" {
 			return fmt.Errorf("no cask name for %s", r.App.Name)
 		}
 		if !r.App.InstalledViaBrew {
-			return openForSelfUpdate(ctx, r.App, runner)
+			openForSelfUpdate(ctx, r.App, runner)
+			return checker.ErrOpenedExternally
 		}
 		return brewUpgrade(ctx, r.App, runner)
 
@@ -130,36 +155,56 @@ func executeUpdate(ctx context.Context, r *checker.UpdateResult, runner checker.
 		if r.App.InstalledViaBrew && r.App.CaskName != "" {
 			return brewUpgrade(ctx, r.App, runner)
 		}
-		return openForSelfUpdate(ctx, r.App, runner)
+		openForSelfUpdate(ctx, r.App, runner)
+		return checker.ErrOpenedExternally
 
 	case "mas":
 		if r.App.MASID != "" {
 			output, err := runner.Run(ctx, "mas", "upgrade", r.App.MASID)
 			if err != nil {
-				// Fallback: open Mac App Store updates page.
 				fmt.Fprintf(os.Stderr, "  mas upgrade failed, opening App Store: %v\n", err)
 				_, _ = runner.Run(ctx, "open", "macappstore://showUpdatesPage")
-				return nil
+				return checker.ErrOpenedExternally
 			}
 			fmt.Println(string(output))
 			return nil
 		}
-		// No MASID — open App Store updates page.
-		fmt.Println("  Opening Mac App Store updates page...")
 		_, _ = runner.Run(ctx, "open", "macappstore://showUpdatesPage")
-		return nil
+		return checker.ErrOpenedExternally
+
+	case "system":
+		_, err := runner.Run(ctx, "open", "x-apple.systempreferences:com.apple.Software-Update-Settings.extension")
+		if err != nil {
+			return fmt.Errorf("failed to open Software Update settings: %w", err)
+		}
+		return checker.ErrOpenedExternally
 
 	case "sparkle", "github":
-		if r.DownloadURL != "" {
-			fmt.Printf("  Download: %s\n", r.DownloadURL)
-			_, err := runner.Run(ctx, "open", r.DownloadURL)
-			if err != nil {
-				return fmt.Errorf("failed to open download URL: %w", err)
-			}
+		if r.DownloadURL == "" {
+			fmt.Println("  No download URL available. Check the app for in-app updates.")
 			return nil
 		}
-		fmt.Println("  No download URL available. Check the app for in-app updates.")
-		return nil
+
+		// Try direct install if installer is available.
+		if inst != nil && r.App.Path != "" {
+			wasRunning := quitAppIfRunning(ctx, r.App, runner)
+			err := inst.Install(ctx, r.DownloadURL, r.App.Path, r.App.Name)
+			if err == nil {
+				if wasRunning {
+					fmt.Printf("  Reopening %s...\n", r.App.Name)
+					_, _ = runner.Run(ctx, "open", "-a", r.App.Path)
+				}
+				return nil
+			}
+			fmt.Fprintf(os.Stderr, "  direct install failed, falling back to browser: %v\n", err)
+		}
+
+		// Fallback: open in browser.
+		_, err := runner.Run(ctx, "open", r.DownloadURL)
+		if err != nil {
+			return fmt.Errorf("failed to open download URL: %w", err)
+		}
+		return checker.ErrOpenedExternally
 
 	default:
 		return fmt.Errorf("unsupported update source: %s", r.Source)
@@ -215,11 +260,6 @@ func quitAppIfRunning(ctx context.Context, a *app.App, runner checker.CmdRunner)
 }
 
 // openForSelfUpdate opens an app so it can self-update via its built-in updater.
-func openForSelfUpdate(ctx context.Context, a *app.App, runner checker.CmdRunner) error {
-	fmt.Printf("  Opening %s for in-app update...\n", a.Name)
-	_, err := runner.Run(ctx, "open", "-a", a.Path)
-	if err != nil {
-		return fmt.Errorf("failed to open %s: %w", a.Name, err)
-	}
-	return nil
+func openForSelfUpdate(ctx context.Context, a *app.App, runner checker.CmdRunner) {
+	_, _ = runner.Run(ctx, "open", "-a", a.Path)
 }

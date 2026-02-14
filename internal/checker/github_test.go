@@ -33,7 +33,7 @@ func TestGitHubChecker_Check(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	checker := NewGitHubChecker(ts.Client(), ts.URL)
+	checker := NewGitHubChecker(ts.Client(), ts.URL, "")
 	a := &app.App{
 		Name:       "TestApp",
 		Version:    "1.0.0",
@@ -80,7 +80,7 @@ func TestGitHubChecker_CheckNoUpdate(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	checker := NewGitHubChecker(ts.Client(), ts.URL)
+	checker := NewGitHubChecker(ts.Client(), ts.URL, "")
 	a := &app.App{
 		Name:       "TestApp",
 		Version:    "2.0.0",
@@ -99,7 +99,7 @@ func TestGitHubChecker_CheckNoUpdate(t *testing.T) {
 }
 
 func TestGitHubChecker_CanCheck(t *testing.T) {
-	checker := NewGitHubChecker(nil, "")
+	checker := NewGitHubChecker(nil, "", "")
 
 	tests := []struct {
 		name string
@@ -136,6 +136,42 @@ func TestGitHubChecker_CanCheck(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestGitHubChecker_AuthorizationHeader(t *testing.T) {
+	var gotAuthHeader string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuthHeader = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(testReleaseJSON))
+	}))
+	defer ts.Close()
+
+	t.Run("with token", func(t *testing.T) {
+		gotAuthHeader = ""
+		c := NewGitHubChecker(ts.Client(), ts.URL, "my-secret-token")
+		a := &app.App{Name: "TestApp", Version: "1.0.0", GitHubRepo: "test/app"}
+		_, err := c.Check(context.Background(), a)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if gotAuthHeader != "Bearer my-secret-token" {
+			t.Errorf("expected Authorization 'Bearer my-secret-token', got %q", gotAuthHeader)
+		}
+	})
+
+	t.Run("without token", func(t *testing.T) {
+		gotAuthHeader = ""
+		c := NewGitHubChecker(ts.Client(), ts.URL, "")
+		a := &app.App{Name: "TestApp", Version: "1.0.0", GitHubRepo: "test/app"}
+		_, err := c.Check(context.Background(), a)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if gotAuthHeader != "" {
+			t.Errorf("expected no Authorization header, got %q", gotAuthHeader)
+		}
+	})
 }
 
 func TestGitHubChecker_FindMacAsset(t *testing.T) {

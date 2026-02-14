@@ -11,10 +11,13 @@ import (
 var version = "dev"
 
 var rootCmd = &cobra.Command{
-	Use:     "updater",
-	Short:   "macOS app update manager",
-	Long:    "Discover installed macOS apps, check for updates, and update them from multiple sources.",
-	Version: version,
+	Use:               "updater",
+	Short:             "macOS app update manager",
+	Long:              "Discover installed macOS apps, check for updates, and update them from multiple sources.",
+	Version:           version,
+	CompletionOptions: cobra.CompletionOptions{DisableDefaultCmd: true},
+	// Launch TUI when invoked with no subcommand.
+	RunE: runUI,
 }
 
 func main() {

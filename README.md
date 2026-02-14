@@ -4,7 +4,7 @@ A command-line tool for macOS that discovers installed applications, checks for 
 
 ## What It Does
 
-`updater` scans `/Applications` and `~/Applications`, identifies where each app gets its updates from, and checks for newer versions. It supports five update sources:
+`updater` scans `/Applications` and `~/Applications`, identifies where each app gets its updates from, and checks for newer versions. It supports six update sources:
 
 | Source | How It Works |
 |--------|-------------|
@@ -13,14 +13,16 @@ A command-line tool for macOS that discovers installed applications, checks for 
 | **Mac App Store** | Runs `mas outdated` for App Store apps |
 | **GitHub Releases** | Queries the GitHub API for the latest release |
 | **Brew Info** | Falls back to `brew info --cask` for any app with a matching Homebrew cask, even if not installed via brew |
+| **System** | Checks `softwareupdate -l` for macOS system updates |
 
 When a Sparkle feed is stale (returns an older version than what's installed), `updater` automatically falls through to the next available source.
 
 For updates, it picks the right strategy per app:
 - **Brew-installed apps** — runs `brew upgrade --cask` (quits the app first if running, reopens after)
+- **Sparkle/GitHub apps** — downloads and installs DMG/ZIP/PKG directly, or opens the download URL as fallback
 - **Self-updating apps** (Chrome, 1Password, Notion, etc.) — opens the app so its built-in updater can run
-- **Sparkle/GitHub apps** — opens the download URL in your browser
 - **App Store apps** — runs `mas upgrade` or opens the App Store updates page
+- **macOS system updates** — opens System Settings > Software Update
 
 ## Install
 
@@ -59,19 +61,36 @@ Homebrew itself is needed for `brew` and `brew-info` sources. If brew or mas are
 
 ## Quick Start
 
+Running `updater` with no arguments launches the interactive TUI:
+
+```
+$ updater
+```
+
+The TUI shows all checkable apps in a scrollable list with real-time update checking.
+
+| Key | Action |
+|-----|--------|
+| `j`/`k` or arrows | Navigate (wraps around) |
+| `Enter` | Update selected app |
+| `a` | Update all |
+| `d` | Show release notes |
+| `p` | Pin/unpin (skip during update all) |
+| `i` | Ignore/unignore |
+| `r` | Refresh |
+| `q` | Quit |
+
+### CLI Commands
+
 **Scan** your installed apps:
 
 ```
 $ updater scan
 NAME                  VERSION         SOURCE   BUNDLE ID
 1Password             8.12.0          unknown  com.1password.1password
-Alfred                5.7.2           unknown  com.runningwithcrayons.Alfred
-Claude                1.1.2512        unknown  com.anthropic.claudefordesktop
-Google Chrome         144.0.7559.133  unknown  com.google.Chrome
 iTerm2                3.6.6           sparkle  com.googlecode.iterm2
-Notion                7.2.1           unknown  notion.id
-PDF Expert            3.11.1          sparkle  com.readdle.PDFExpert-Mac
 Xcode                 26.2            mas      com.apple.dt.Xcode
+macOS                 26.2            system   com.apple.macOS
 ...
 ```
 
@@ -80,12 +99,10 @@ Xcode                 26.2            mas      com.apple.dt.Xcode
 ```
 $ updater check
 NAME                  CURRENT         LATEST         SOURCE     STATUS
-1Password             8.12.0          8.12.2         brew-info  UPDATE AVAILABLE
-Claude                1.1.2512        1.1.3189       brew-info  UPDATE AVAILABLE
-Google Chrome         144.0.7559.133  145.0.7632.76  brew-info  UPDATE AVAILABLE
+1Password             8.12.0          8.12.2         homebrew   UPDATE AVAILABLE
 iTerm2                3.6.6           3.6.6          sparkle    ok
-PDF Expert            3.11.1          3.11.1         brew-info  ok
-Xcode                 26.2            26.2           mas        ok
+macOS                 26.2            26.3           system     UPDATE AVAILABLE
+Xcode                 26.2            26.2           app store  ok
 ...
 ```
 
@@ -94,7 +111,6 @@ Xcode                 26.2            26.2           mas        ok
 ```
 $ updater update 1Password
 Updating 1Password (8.12.0 -> 8.12.2) via brew-info...
-  Opening 1Password for in-app update...
 ```
 
 **Update all** apps with available updates:
@@ -103,22 +119,58 @@ Updating 1Password (8.12.0 -> 8.12.2) via brew-info...
 $ updater update --all
 ```
 
-**Interactive TUI** for browsing and updating:
+**JSON output** for scripting:
 
 ```
-$ updater ui
+$ updater outdated
+[{"name":"1Password","bundle_id":"com.1password.1password","current_version":"8.12.0","latest_version":"8.12.2","source":"brew-info","download_url":"..."}]
 ```
 
-The TUI shows all checkable apps in a scrollable list. Use `j`/`k` to navigate, `Enter` to update the selected app, `a` to update all, `i` to ignore, `r` to refresh, `q` to quit.
+**Pin** an app to skip it during `update --all`:
+
+```
+$ updater pin 1Password
+$ updater unpin 1Password
+```
+
+**Install** a new app via Homebrew:
+
+```
+$ updater install firefox
+```
+
+**Find unused apps:**
+
+```
+$ updater cleanup --days 90
+$ updater cleanup --days 90 --delete   # move to Trash
+```
+
+**Rollback** to a previous version:
+
+```
+$ updater rollback 1Password
+```
+
+**Schedule** automatic update checks with macOS notifications:
+
+```
+$ updater schedule --interval 24   # check every 24 hours
+$ updater schedule --remove        # remove scheduled check
+```
 
 ## Configuration
 
 Config file: `~/.config/updater/config.yaml`
 
 ```yaml
-# Apps to skip (by bundle ID)
+# Apps to skip entirely (by bundle ID)
 ignored_apps:
   - com.apple.Safari
+
+# Apps to show but skip during "update --all"
+pinned_apps:
+  - com.google.Chrome
 
 # Map bundle IDs to GitHub repos for GitHub Releases checking
 github_mappings:
@@ -128,6 +180,15 @@ github_mappings:
 # Map bundle IDs to Homebrew cask tokens (when the automatic name guess is wrong)
 cask_mappings:
   com.readdle.PDFExpert-Mac: "pdf-expert"
+
+# GitHub API token for higher rate limits (also reads GITHUB_TOKEN env var)
+github_token: "ghp_..."
+
+# Max concurrent update checks (default: 10)
+max_concurrent: 10
+
+# Number of app backups to keep per app (default: 1)
+max_backups: 1
 ```
 
 ### When do you need `cask_mappings`?
@@ -143,10 +204,12 @@ Most of the time, you don't. `updater` guesses the cask name from the app's disp
         |
     [Enrichment] Cross-reference with config mappings, brew casks, brew info
         |
-    [Checking]   Try checkers in order: Sparkle > Brew > MAS > GitHub > Brew Info
+    [Checking]   Try checkers in order: Sparkle > Brew > MAS > GitHub > System > Brew Info
         |         (fall through on stale feeds or errors)
         |
-    [Update]     brew upgrade | open app | open download URL | mas upgrade
+    [Update]     brew upgrade | direct install | open app | open download URL | mas upgrade
+        |
+    [Backup]     Back up current version before updating (configurable retention)
 ```
 
 ## Building
