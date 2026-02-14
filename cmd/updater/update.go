@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/luzhengda/updater/internal/checker"
 	"github.com/luzhengda/updater/internal/config"
@@ -48,6 +49,21 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 
 	apps = filterIgnored(apps, cfg)
 
+	// If a specific app name was given, verify it exists before checking.
+	if len(args) > 0 && !flagAll {
+		name := args[0]
+		found := false
+		for _, a := range apps {
+			if strings.EqualFold(a.Name, name) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return fmt.Errorf("app %q not found. Run 'updater scan' to see available apps", name)
+		}
+	}
+
 	checkers := buildCheckers(runner)
 	results := checkAll(ctx, apps, checkers)
 
@@ -59,24 +75,23 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	if len(updatable) == 0 {
-		fmt.Fprintln(cmd.OutOrStdout(), "All apps are up to date.")
-		return nil
-	}
-
 	// If a specific app name was given, filter to just that app.
 	if len(args) > 0 && !flagAll {
 		name := args[0]
 		var matched []*checker.UpdateResult
 		for _, r := range updatable {
-			if r.App.Name == name {
+			if strings.EqualFold(r.App.Name, name) {
 				matched = append(matched, r)
 			}
 		}
 		if len(matched) == 0 {
-			return fmt.Errorf("no update found for %q", name)
+			fmt.Fprintf(cmd.OutOrStdout(), "%s is up to date.\n", name)
+			return nil
 		}
 		updatable = matched
+	} else if len(updatable) == 0 {
+		fmt.Fprintln(cmd.OutOrStdout(), "All apps are up to date.")
+		return nil
 	} else if !flagAll {
 		// Without --all and without a specific app name, show what's available.
 		fmt.Fprintf(cmd.OutOrStdout(), "%d updates available. Use --all to update all, or specify an app name.\n", len(updatable))
