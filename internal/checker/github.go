@@ -84,7 +84,7 @@ func (g *GitHubChecker) Check(ctx context.Context, a *app.App) (*UpdateResult, e
 		return nil, fmt.Errorf("failed to parse release for %s: %w", a.Name, err)
 	}
 
-	latestVersion := strings.TrimPrefix(release.TagName, "v")
+	latestVersion := cleanTagVersion(release.TagName)
 	downloadURL := findMacAsset(release.Assets)
 
 	return &UpdateResult{
@@ -96,6 +96,17 @@ func (g *GitHubChecker) Check(ctx context.Context, a *app.App) (*UpdateResult, e
 		ReleaseNotes:   release.Body,
 		HasUpdate:      version.IsNewer(a.Version, latestVersion),
 	}, nil
+}
+
+// cleanTagVersion strips common tag prefixes from GitHub release tags.
+// e.g., "v1.0.0" -> "1.0.0", "release-3.5.4" -> "3.5.4", "release/3.5.4" -> "3.5.4"
+func cleanTagVersion(tag string) string {
+	prefixes := []string{"v", "release-", "release/", "ver-", "ver/", "version-", "version/"}
+	result := tag
+	for _, p := range prefixes {
+		result = strings.TrimPrefix(result, p)
+	}
+	return result
 }
 
 // macExtensions are file extensions commonly used for macOS installers.
