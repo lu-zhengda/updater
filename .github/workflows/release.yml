@@ -1,0 +1,97 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-latest
+    timeout-minutes: 15
+    env:
+      TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.x"
+
+      - name: Test
+        run: go test -race ./...
+
+      - name: Build arm64
+        run: GOARCH=arm64 go build -ldflags "-s -w -X main.version=$TAG" -o updater-darwin-arm64 ./cmd/updater
+
+      - name: Build amd64
+        run: GOARCH=amd64 go build -ldflags "-s -w -X main.version=$TAG" -o updater-darwin-amd64 ./cmd/updater
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release create "$TAG" updater-darwin-arm64 updater-darwin-amd64 --generate-notes
+
+      - name: Update Homebrew tap
+        env:
+          GH_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          # Download source tarball and compute SHA256
+          curl -sfL "https://github.com/lu-zhengda/updater/archive/refs/tags/${TAG}.tar.gz" -o source.tar.gz
+          SHA256=$(shasum -a 256 source.tar.gz | awk '{print $1}')
+          echo "SHA256: $SHA256"
+
+          # Build updated formula
+          cat > updater.rb <<FORMULA
+          class Updater < Formula
+            desc "macOS app update manager"
+            homepage "https://github.com/lu-zhengda/updater"
+            url "https://github.com/lu-zhengda/updater/archive/refs/tags/${TAG}.tar.gz"
+            sha256 "${SHA256}"
+            license "MIT"
+
+            depends_on "go" => :build
+            depends_on :macos
+
+            def install
+              ldflags = "-s -w -X main.version=#{version}"
+              system "go", "build", *std_go_args(ldflags:), "./cmd/updater"
+            end
+
+            test do
+              assert_match version.to_s, shell_output("#{bin}/updater --version")
+            end
+          end
+          FORMULA
+
+          # Remove leading whitespace from heredoc
+          sed -i '' 's/^          //' updater.rb
+
+          # Get current file SHA (needed for update via Contents API)
+          FILE_SHA=$(gh api repos/lu-zhengda/homebrew-tap/contents/Formula/updater.rb --jq '.sha' 2>/dev/null || echo "")
+
+          # Base64 encode the formula
+          CONTENT=$(base64 < updater.rb | tr -d '\n')
+
+          if [ -n "$FILE_SHA" ]; then
+            # Update existing file
+            gh api repos/lu-zhengda/homebrew-tap/contents/Formula/updater.rb \
+              -X PUT \
+              -f message="updater ${TAG}" \
+              -f content="$CONTENT" \
+              -f sha="$FILE_SHA"
+          else
+            # Create new file
+            gh api repos/lu-zhengda/homebrew-tap/contents/Formula/updater.rb \
+              -X PUT \
+              -f message="updater ${TAG}" \
+              -f content="$CONTENT"
+          fi
