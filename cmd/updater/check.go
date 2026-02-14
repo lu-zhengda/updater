@@ -73,6 +73,8 @@ func discoverApps() ([]*app.App, error) {
 	dirs := []string{
 		"/Applications",
 		filepath.Join(home, "Applications"),
+		"/Applications/Setapp",
+		filepath.Join(home, "Applications", "Setapp"),
 	}
 
 	apps, err := app.Discover(dirs...)
@@ -104,7 +106,7 @@ func macOSSystemApp() *app.App {
 		Name:     "macOS",
 		BundleID: "com.apple.macOS",
 		Version:  version,
-		Source:   app.Source("system"),
+		Source:   app.SourceSystem,
 	}
 }
 
@@ -238,6 +240,8 @@ func buildCheckers(runner checker.CmdRunner, githubToken string) []checker.Check
 		checker.NewGitHubChecker(nil, "", githubToken),
 		checker.NewSystemChecker(runner),
 		checker.NewBrewFormulaChecker(runner),
+		checker.NewElectronChecker(nil),
+		checker.NewManagedChecker(),
 		checker.NewBrewInfoChecker(runner), // fallback: any app with a CaskName
 	}
 }
@@ -383,6 +387,8 @@ func cliSourceName(source string) string {
 		return "homebrew"
 	case "formula":
 		return "formula"
+	case "electron", "setapp", "toolbox", "adobe":
+		return source
 	default:
 		return source
 	}

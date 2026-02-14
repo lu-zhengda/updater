@@ -3,10 +3,8 @@ package main
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 	"text/tabwriter"
 
-	"github.com/luzhengda/updater/internal/app"
 	"github.com/luzhengda/updater/internal/checker"
 	"github.com/spf13/cobra"
 )
@@ -24,19 +22,9 @@ func init() {
 func runScan(cmd *cobra.Command, args []string) error {
 	ctx := cmd.Context()
 
-	home, err := os.UserHomeDir()
+	apps, err := discoverApps()
 	if err != nil {
-		return fmt.Errorf("failed to get home directory: %w", err)
-	}
-
-	dirs := []string{
-		"/Applications",
-		filepath.Join(home, "Applications"),
-	}
-
-	apps, err := app.Discover(dirs...)
-	if err != nil {
-		return fmt.Errorf("failed to discover apps: %w", err)
+		return err
 	}
 
 	runner := &checker.RealCmdRunner{}

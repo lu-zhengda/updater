@@ -11,6 +11,11 @@ const (
 	SourceBrew        Source = "brew"
 	SourceGitHub      Source = "github"
 	SourceBrewFormula Source = "formula"
+	SourceSystem      Source = "system"
+	SourceElectron    Source = "electron"
+	SourceSetapp      Source = "setapp"
+	SourceToolbox     Source = "toolbox"
+	SourceAdobe       Source = "adobe"
 	SourceUnknown     Source = "unknown"
 )
 
@@ -26,8 +31,9 @@ type App struct {
 	CaskName         string
 	MASID            string
 	GitHubRepo       string // "owner/repo"
-	FormulaName      string // Homebrew formula name (e.g. "node", "python@3.12")
-	InstalledViaBrew bool   // true only if actually installed via brew
+	FormulaName       string // Homebrew formula name (e.g. "node", "python@3.12")
+	InstalledViaBrew  bool   // true only if actually installed via brew
+	ElectronUpdateURL string // Generic update server base URL from app-update.yml
 }
 
 // ToCaskName converts an app display name to a likely Homebrew cask name.

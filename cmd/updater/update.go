@@ -225,6 +225,36 @@ func executeUpdate(ctx context.Context, r *checker.UpdateResult, runner checker.
 		}
 		return checker.ErrOpenedExternally
 
+	case "electron":
+		// Try direct install from ElectronUpdateURL if available.
+		if r.DownloadURL != "" && inst != nil && r.App.Path != "" {
+			wasRunning := quitAppIfRunning(ctx, r.App, runner)
+			err := inst.Install(ctx, r.DownloadURL, r.App.Path, r.App.Name)
+			if err == nil {
+				if wasRunning {
+					fmt.Printf("  Reopening %s...\n", r.App.Name)
+					_, _ = runner.Run(ctx, "open", "-a", r.App.Path)
+				}
+				return nil
+			}
+			fmt.Fprintf(os.Stderr, "  direct install failed, opening app for self-update: %v\n", err)
+		}
+		// Fallback: open app for self-update.
+		_, _ = runner.Run(ctx, "open", "-a", r.App.Path)
+		return checker.ErrOpenedExternally
+
+	case "setapp":
+		_, _ = runner.Run(ctx, "open", "-a", "/Applications/Setapp.app")
+		return checker.ErrOpenedExternally
+
+	case "toolbox":
+		_, _ = runner.Run(ctx, "open", "-a", "JetBrains Toolbox")
+		return checker.ErrOpenedExternally
+
+	case "adobe":
+		_, _ = runner.Run(ctx, "open", "-a", "/Applications/Adobe Creative Cloud/Adobe Creative Cloud.app")
+		return checker.ErrOpenedExternally
+
 	default:
 		return fmt.Errorf("unsupported update source: %s", r.Source)
 	}
