@@ -5,12 +5,16 @@ import (
 	"encoding/xml"
 	"fmt"
 	"net/http"
+	"os/exec"
+	"strings"
 
 	"github.com/luzhengda/updater/internal/app"
 	"github.com/luzhengda/updater/internal/version"
 )
 
-// Sparkle RSS/appcast XML structures with proper namespace handling.
+// Sparkle RSS/appcast XML structures.
+// In real-world Sparkle feeds, version info is typically on enclosure attributes,
+// not child elements. We support both for maximum compatibility.
 type sparkleRSS struct {
 	XMLName xml.Name       `xml:"rss"`
 	Channel sparkleChannel `xml:"channel"`
@@ -25,13 +29,17 @@ type sparkleItem struct {
 	Version            string           `xml:"http://www.andymatuschak.org/xml-namespaces/sparkle version"`
 	ShortVersionString string           `xml:"http://www.andymatuschak.org/xml-namespaces/sparkle shortVersionString"`
 	ReleaseNotesLink   string           `xml:"http://www.andymatuschak.org/xml-namespaces/sparkle releaseNotesLink"`
+	MinSystemVersion   string           `xml:"http://www.andymatuschak.org/xml-namespaces/sparkle minimumSystemVersion"`
+	MaxSystemVersion   string           `xml:"http://www.andymatuschak.org/xml-namespaces/sparkle maximumSystemVersion"`
 	Enclosure          sparkleEnclosure `xml:"enclosure"`
 }
 
 type sparkleEnclosure struct {
-	URL    string `xml:"url,attr"`
-	Length string `xml:"length,attr"`
-	Type   string `xml:"type,attr"`
+	URL                string `xml:"url,attr"`
+	Length             string `xml:"length,attr"`
+	Type               string `xml:"type,attr"`
+	Version            string `xml:"http://www.andymatuschak.org/xml-namespaces/sparkle version,attr"`
+	ShortVersionString string `xml:"http://www.andymatuschak.org/xml-namespaces/sparkle shortVersionString,attr"`
 }
 
 // SparkleChecker checks for updates via Sparkle appcast feeds.
@@ -88,8 +96,20 @@ func (s *SparkleChecker) Check(ctx context.Context, a *app.App) (*UpdateResult, 
 		return nil, fmt.Errorf("failed to check sparkle update: no items in appcast for %s", a.Name)
 	}
 
-	item := rss.Channel.Items[0]
-	latestVersion := item.ShortVersionString
+	// Find the best matching item: filter by macOS version, pick the last
+	// compatible item (feeds often list oldest first, newest last, or newest first).
+	macOSVersion := getMacOSVersion()
+	item := findBestItem(rss.Channel.Items, macOSVersion)
+
+	// Extract version: prefer enclosure attributes (most common in real feeds),
+	// fall back to item child elements.
+	latestVersion := item.Enclosure.ShortVersionString
+	if latestVersion == "" {
+		latestVersion = item.ShortVersionString
+	}
+	if latestVersion == "" {
+		latestVersion = item.Enclosure.Version
+	}
 	if latestVersion == "" {
 		latestVersion = item.Version
 	}
@@ -103,4 +123,57 @@ func (s *SparkleChecker) Check(ctx context.Context, a *app.App) (*UpdateResult, 
 		ReleaseNotes:   item.ReleaseNotesLink,
 		HasUpdate:      version.IsNewer(a.Version, latestVersion),
 	}, nil
+}
+
+// findBestItem picks the most appropriate item from the feed,
+// filtering by macOS compatibility and preferring the newest version.
+func findBestItem(items []sparkleItem, macOSVersion string) sparkleItem {
+	var best sparkleItem
+	bestVersion := ""
+
+	for _, item := range items {
+		// Skip items incompatible with current macOS
+		if item.MinSystemVersion != "" && macOSVersion != "" {
+			if !version.IsNewerOrEqual(item.MinSystemVersion, macOSVersion) {
+				continue
+			}
+		}
+		if item.MaxSystemVersion != "" && macOSVersion != "" {
+			if version.IsNewer(macOSVersion, item.MaxSystemVersion) {
+				continue
+			}
+		}
+
+		// Get this item's version
+		v := item.Enclosure.ShortVersionString
+		if v == "" {
+			v = item.ShortVersionString
+		}
+		if v == "" {
+			v = item.Enclosure.Version
+		}
+		if v == "" {
+			v = item.Version
+		}
+
+		if bestVersion == "" || version.IsNewer(bestVersion, v) {
+			best = item
+			bestVersion = v
+		}
+	}
+
+	// If no compatible item found, return the first one
+	if bestVersion == "" && len(items) > 0 {
+		return items[0]
+	}
+	return best
+}
+
+// getMacOSVersion returns the current macOS version (e.g., "15.3").
+func getMacOSVersion() string {
+	out, err := exec.Command("sw_vers", "-productVersion").Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
 }

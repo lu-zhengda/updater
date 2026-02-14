@@ -41,17 +41,13 @@ func (m *MASChecker) Name() string {
 	return "mas"
 }
 
-// CanCheck returns true if the app is from the Mac App Store and has a MASID.
+// CanCheck returns true if the app is from the Mac App Store.
 func (m *MASChecker) CanCheck(a *app.App) bool {
-	return a.Source == app.SourceMAS && a.MASID != ""
+	return a.Source == app.SourceMAS
 }
 
-// Check runs `mas outdated` and looks for the app by MASID.
+// Check runs `mas outdated` and looks for the app by MASID or name.
 func (m *MASChecker) Check(ctx context.Context, a *app.App) (*UpdateResult, error) {
-	if a.MASID == "" {
-		return nil, fmt.Errorf("failed to check MAS update: no MASID for %s", a.Name)
-	}
-
 	output, err := m.runner.Run(ctx, "mas", "outdated")
 	if err != nil {
 		return nil, fmt.Errorf("failed to run mas outdated: %w", err)
@@ -62,8 +58,24 @@ func (m *MASChecker) Check(ctx context.Context, a *app.App) (*UpdateResult, erro
 		return nil, fmt.Errorf("failed to parse mas outdated output: %w", err)
 	}
 
+	// Match by MASID first, then by name
 	for _, item := range items {
-		if item.ID == a.MASID {
+		if a.MASID != "" && item.ID == a.MASID {
+			a.MASID = item.ID // ensure MASID is set for updates
+			return &UpdateResult{
+				App:            a,
+				Source:         "mas",
+				CurrentVersion: a.Version,
+				LatestVersion:  item.LatestVersion,
+				HasUpdate:      version.IsNewer(a.Version, item.LatestVersion),
+			}, nil
+		}
+	}
+
+	// Fallback: match by name (case-insensitive, partial match)
+	for _, item := range items {
+		if strings.EqualFold(item.Name, a.Name) || strings.Contains(strings.ToLower(item.Name), strings.ToLower(a.Name)) {
+			a.MASID = item.ID // populate MASID for future use
 			return &UpdateResult{
 				App:            a,
 				Source:         "mas",

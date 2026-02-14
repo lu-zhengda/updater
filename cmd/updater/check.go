@@ -185,21 +185,28 @@ func checkAll(ctx context.Context, apps []*app.App, checkers []checker.Checker) 
 // printCheckResults prints a table of check results to stdout.
 func printCheckResults(cmd *cobra.Command, results []*checker.UpdateResult) {
 	w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
-	fmt.Fprintln(w, "NAME\tCURRENT\tLATEST\tSOURCE")
+	fmt.Fprintln(w, "NAME\tCURRENT\tLATEST\tSOURCE\tSTATUS")
 
 	updateCount := 0
+	errCount := 0
 	for _, r := range results {
 		if r.Error != nil {
-			fmt.Fprintf(w, "%s\t%s\terror\t%s\n", r.App.Name, r.CurrentVersion, r.Source)
+			errCount++
+			fmt.Fprintf(w, "%s\t%s\t-\t%s\tERROR: %v\n", r.App.Name, r.CurrentVersion, r.Source, r.Error)
 			continue
 		}
-		status := r.LatestVersion
 		if r.HasUpdate {
 			updateCount++
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\tUPDATE AVAILABLE\n", r.App.Name, r.CurrentVersion, r.LatestVersion, r.Source)
+		} else {
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\tok\n", r.App.Name, r.CurrentVersion, r.LatestVersion, r.Source)
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", r.App.Name, r.CurrentVersion, status, r.Source)
 	}
 	w.Flush()
 
-	fmt.Fprintf(os.Stderr, "\n%d apps checked, %d updates available\n", len(results), updateCount)
+	fmt.Fprintf(os.Stderr, "\n%d apps checked, %d updates available", len(results), updateCount)
+	if errCount > 0 {
+		fmt.Fprintf(os.Stderr, ", %d errors", errCount)
+	}
+	fmt.Fprintln(os.Stderr)
 }

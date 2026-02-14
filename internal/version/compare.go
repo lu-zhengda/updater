@@ -7,6 +7,14 @@ import (
 	"github.com/Masterminds/semver/v3"
 )
 
+// IsNewerOrEqual reports whether version is >= threshold.
+func IsNewerOrEqual(threshold, version string) bool {
+	if version == threshold {
+		return true
+	}
+	return IsNewer(threshold, version) || version == threshold
+}
+
 // IsNewer reports whether latest is a newer version than current.
 // It handles semver, two-part versions, plain build numbers, and
 // v-prefixed versions.

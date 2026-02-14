@@ -63,7 +63,7 @@ func TestMASChecker_CanCheck(t *testing.T) {
 		{
 			name: "MAS source without ID",
 			app:  &app.App{Source: app.SourceMAS},
-			want: false,
+			want: true,
 		},
 		{
 			name: "non-MAS app",
@@ -112,6 +112,37 @@ func TestMASChecker_CheckWithMock(t *testing.T) {
 	}
 	if result.Source != "mas" {
 		t.Errorf("expected Source mas, got %s", result.Source)
+	}
+}
+
+func TestMASChecker_CheckByName(t *testing.T) {
+	masOutput := "441258766 Magnet (3.0.6 -> 3.0.7)\n"
+	runner := &MockCmdRunner{
+		Output: []byte(masOutput),
+	}
+
+	checker := NewMASChecker(runner)
+	a := &app.App{
+		Name:    "Magnet",
+		Version: "3.0.6",
+		Source:  app.SourceMAS,
+		// No MASID set — should match by name
+	}
+
+	result, err := checker.Check(context.Background(), a)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !result.HasUpdate {
+		t.Error("expected HasUpdate to be true")
+	}
+	if result.LatestVersion != "3.0.7" {
+		t.Errorf("LatestVersion = %q, want %q", result.LatestVersion, "3.0.7")
+	}
+	// Verify MASID was populated
+	if a.MASID != "441258766" {
+		t.Errorf("MASID = %q, want %q", a.MASID, "441258766")
 	}
 }
 

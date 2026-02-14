@@ -89,6 +89,56 @@ func TestSparkleChecker_NoUpdate(t *testing.T) {
 	}
 }
 
+// testAppcastEnclosureAttrs mimics real-world feeds (iTerm2, PDF Expert) where
+// version info is on enclosure attributes, not child elements.
+const testAppcastEnclosureAttrs = `<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
+  <channel>
+    <title>TestApp Updates</title>
+    <item>
+      <title>Version 3.6.6</title>
+      <sparkle:releaseNotesLink>https://example.com/notes.txt</sparkle:releaseNotesLink>
+      <pubDate>Mon, 17 Nov 2025 18:53:41 -0800</pubDate>
+      <sparkle:minimumSystemVersion>12.4</sparkle:minimumSystemVersion>
+      <enclosure url="https://example.com/app-3.6.6.zip"
+          sparkle:version="3.6.6"
+          sparkle:shortVersionString="3.6.6"
+          length="52976511"
+          type="application/octet-stream" />
+    </item>
+  </channel>
+</rss>`
+
+func TestSparkleChecker_EnclosureAttributes(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(testAppcastEnclosureAttrs))
+	}))
+	defer ts.Close()
+
+	checker := NewSparkleChecker(ts.Client())
+	a := &app.App{
+		Name:    "iTerm2",
+		Version: "3.5.0",
+		Source:  app.SourceSparkle,
+		FeedURL: ts.URL,
+	}
+
+	result, err := checker.Check(context.Background(), a)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !result.HasUpdate {
+		t.Error("expected HasUpdate to be true")
+	}
+	if result.LatestVersion != "3.6.6" {
+		t.Errorf("LatestVersion = %q, want %q", result.LatestVersion, "3.6.6")
+	}
+	if result.DownloadURL != "https://example.com/app-3.6.6.zip" {
+		t.Errorf("DownloadURL = %q, want %q", result.DownloadURL, "https://example.com/app-3.6.6.zip")
+	}
+}
+
 func TestSparkleChecker_CanCheck(t *testing.T) {
 	checker := NewSparkleChecker(nil)
 
