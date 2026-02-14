@@ -7,6 +7,7 @@ import (
 	"text/tabwriter"
 
 	"github.com/luzhengda/updater/internal/app"
+	"github.com/luzhengda/updater/internal/checker"
 	"github.com/spf13/cobra"
 )
 
@@ -21,6 +22,8 @@ func init() {
 }
 
 func runScan(cmd *cobra.Command, args []string) error {
+	ctx := cmd.Context()
+
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return fmt.Errorf("failed to get home directory: %w", err)
@@ -34,6 +37,14 @@ func runScan(cmd *cobra.Command, args []string) error {
 	apps, err := app.Discover(dirs...)
 	if err != nil {
 		return fmt.Errorf("failed to discover apps: %w", err)
+	}
+
+	runner := &checker.RealCmdRunner{}
+	formulaApps, fErr := discoverBrewFormulae(ctx, runner)
+	if fErr != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not discover brew formulae: %v\n", fErr)
+	} else {
+		apps = append(apps, formulaApps...)
 	}
 
 	w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)

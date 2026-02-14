@@ -86,6 +86,8 @@ func styledSource(source string) string {
 		return sourceStyleSparkle.Render("sparkle")
 	case "brew":
 		return sourceStyleBrew.Render("homebrew")
+	case "formula":
+		return sourceStyleBrew.Render("formula")
 	case "brew-info":
 		return sourceStyleBrewInfo.Render("homebrew")
 	case "github":
@@ -111,6 +113,8 @@ func sourceDisplayName(source string) string {
 		return "app store"
 	case "brew", "brew-info":
 		return "homebrew"
+	case "formula":
+		return "formula"
 	default:
 		return source
 	}

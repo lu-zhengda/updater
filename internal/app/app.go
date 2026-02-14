@@ -6,26 +6,28 @@ import "strings"
 type Source string
 
 const (
-	SourceMAS     Source = "mas"
-	SourceSparkle Source = "sparkle"
-	SourceBrew    Source = "brew"
-	SourceGitHub  Source = "github"
-	SourceUnknown Source = "unknown"
+	SourceMAS         Source = "mas"
+	SourceSparkle     Source = "sparkle"
+	SourceBrew        Source = "brew"
+	SourceGitHub      Source = "github"
+	SourceBrewFormula Source = "formula"
+	SourceUnknown     Source = "unknown"
 )
 
 // App represents an installed macOS application.
 type App struct {
-	Name            string
-	BundleID        string
-	Version         string // CFBundleShortVersionString
-	Build           string // CFBundleVersion
-	Path            string
-	Source          Source
-	FeedURL         string // SUFeedURL
-	CaskName        string
-	MASID           string
-	GitHubRepo      string // "owner/repo"
-	InstalledViaBrew bool  // true only if actually installed via brew
+	Name             string
+	BundleID         string
+	Version          string // CFBundleShortVersionString
+	Build            string // CFBundleVersion
+	Path             string
+	Source           Source
+	FeedURL          string // SUFeedURL
+	CaskName         string
+	MASID            string
+	GitHubRepo       string // "owner/repo"
+	FormulaName      string // Homebrew formula name (e.g. "node", "python@3.12")
+	InstalledViaBrew bool   // true only if actually installed via brew
 }
 
 // ToCaskName converts an app display name to a likely Homebrew cask name.

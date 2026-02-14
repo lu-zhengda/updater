@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"text/tabwriter"
@@ -39,6 +40,14 @@ func runCheck(cmd *cobra.Command, args []string) error {
 	}
 
 	runner := &checker.RealCmdRunner{}
+
+	formulaApps, err := discoverBrewFormulae(ctx, runner)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not discover brew formulae: %v\n", err)
+	} else {
+		apps = append(apps, formulaApps...)
+	}
+
 	apps, err = enrichApps(ctx, apps, cfg, runner)
 	if err != nil {
 		return err
@@ -97,6 +106,33 @@ func macOSSystemApp() *app.App {
 		Version:  version,
 		Source:   app.Source("system"),
 	}
+}
+
+// discoverBrewFormulae creates synthetic App entries for each installed Homebrew formula.
+func discoverBrewFormulae(ctx context.Context, runner checker.CmdRunner) ([]*app.App, error) {
+	formulae, err := checker.ListInstalledFormulae(ctx, runner)
+	if err != nil {
+		return nil, err
+	}
+
+	names := make([]string, 0, len(formulae))
+	for name := range formulae {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	apps := make([]*app.App, 0, len(formulae))
+	for _, name := range names {
+		apps = append(apps, &app.App{
+			Name:             name,
+			BundleID:         "homebrew.formula." + name,
+			Version:          formulae[name],
+			Source:           app.SourceBrewFormula,
+			FormulaName:      name,
+			InstalledViaBrew: true,
+		})
+	}
+	return apps, nil
 }
 
 // enrichApps applies config mappings and cross-references with brew casks
@@ -201,6 +237,7 @@ func buildCheckers(runner checker.CmdRunner, githubToken string) []checker.Check
 		checker.NewMASChecker(runner),
 		checker.NewGitHubChecker(nil, "", githubToken),
 		checker.NewSystemChecker(runner),
+		checker.NewBrewFormulaChecker(runner),
 		checker.NewBrewInfoChecker(runner), // fallback: any app with a CaskName
 	}
 }
@@ -344,6 +381,8 @@ func cliSourceName(source string) string {
 		return "app store"
 	case "brew", "brew-info":
 		return "homebrew"
+	case "formula":
+		return "formula"
 	default:
 		return source
 	}

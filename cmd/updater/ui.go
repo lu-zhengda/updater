@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"os"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/luzhengda/updater/internal/app"
@@ -46,6 +47,13 @@ func runUI(_ *cobra.Command, _ []string) error {
 		apps, err := discoverApps()
 		if err != nil {
 			return nil, err
+		}
+
+		formulaApps, fErr := discoverBrewFormulae(ctx, runner)
+		if fErr != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not discover brew formulae: %v\n", fErr)
+		} else {
+			apps = append(apps, formulaApps...)
 		}
 
 		apps, err = enrichApps(ctx, apps, cfg, runner)
