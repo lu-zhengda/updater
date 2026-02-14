@@ -70,6 +70,9 @@ type Model struct {
 	loadFn     LoadFunc
 	checkFn    CheckFunc
 	updateFn   UpdateFunc
+	selected       map[int]bool // row indices toggled for batch update
+	showAll        bool         // true = show everything; false = actionable only
+	visible        []int        // indices into m.rows for currently displayed items
 	statusMsg      string
 	showDetail     bool
 	detailIdx      int
@@ -91,6 +94,7 @@ func NewModel(loadFn LoadFunc, checkFn CheckFunc, updateFn UpdateFunc) Model {
 		ignored:   make(map[int]bool),
 		pinned:    make(map[int]bool),
 		pinnedIDs: make(map[string]bool),
+		selected:  make(map[int]bool),
 		spinner:   s,
 		loadFn:    loadFn,
 		checkFn:   checkFn,
@@ -172,12 +176,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		m.checking = true
+		m.rebuildVisible()
 		m.statusMsg = fmt.Sprintf("Found %d apps, checking for updates...", len(m.apps))
 		return m, tea.Batch(m.startCheck(), m.spinner.Tick)
 
 	case checkDoneMsg:
 		m.checking = false
 		m.applyResults(msg.results)
+		m.rebuildVisible()
 		m.statusMsg = fmt.Sprintf("Checked %d apps", len(msg.results))
 		return m, nil
 
@@ -195,6 +201,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.rows[msg.index].result.HasUpdate = false
 			}
 		}
+		delete(m.selected, msg.index)
+		m.rebuildVisible()
 		// Keep spinner ticking if there are still active updates.
 		if len(m.updating) > 0 {
 			return m, m.spinner.Tick
@@ -225,6 +233,9 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleUpdate()
 	case tea.KeyEsc:
 		return m, tea.Quit
+	case tea.KeySpace:
+		m.toggleSelection()
+		return m, nil
 	case tea.KeyRunes:
 		switch string(msg.Runes) {
 		case "q":
@@ -246,6 +257,12 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m.toggleDetail()
 		case "p":
 			m.togglePin()
+			return m, nil
+		case "t":
+			m.toggleShowAll()
+			return m, nil
+		case " ":
+			m.toggleSelection()
 			return m, nil
 		}
 	}
@@ -285,14 +302,14 @@ func (m Model) handleDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // moveCursor moves the cursor up or down by delta, clamping to valid range
 // and adjusting the scroll offset to keep the cursor visible.
 func (m *Model) moveCursor(delta int) {
-	if len(m.rows) == 0 {
+	if len(m.visible) == 0 {
 		return
 	}
 	m.cursor += delta
 	if m.cursor < 0 {
-		m.cursor = len(m.rows) - 1
+		m.cursor = len(m.visible) - 1
 	}
-	if m.cursor >= len(m.rows) {
+	if m.cursor >= len(m.visible) {
 		m.cursor = 0
 	}
 	m.adjustOffset()
@@ -300,15 +317,15 @@ func (m *Model) moveCursor(delta int) {
 
 // adjustOffset ensures the cursor is visible within the viewport.
 func (m *Model) adjustOffset() {
-	visible := m.visibleRows()
+	viewportRows := m.visibleRows()
 	if m.cursor < m.offset {
 		m.offset = m.cursor
 	}
-	if m.cursor >= m.offset+visible {
-		m.offset = m.cursor - visible + 1
+	if m.cursor >= m.offset+viewportRows {
+		m.offset = m.cursor - viewportRows + 1
 	}
 	// Clamp offset.
-	maxOffset := len(m.rows) - visible
+	maxOffset := len(m.visible) - viewportRows
 	if maxOffset < 0 {
 		maxOffset = 0
 	}
@@ -331,32 +348,43 @@ func (m Model) visibleRows() int {
 	return visible
 }
 
+// cursorRowIdx returns the real row index for the current cursor position,
+// or -1 if the visible list is empty.
+func (m *Model) cursorRowIdx() int {
+	if len(m.visible) == 0 || m.cursor < 0 || m.cursor >= len(m.visible) {
+		return -1
+	}
+	return m.visible[m.cursor]
+}
+
 // toggleIgnore toggles the ignored state of the currently selected app.
 func (m *Model) toggleIgnore() {
-	if len(m.rows) == 0 {
+	idx := m.cursorRowIdx()
+	if idx < 0 {
 		return
 	}
-	if m.ignored[m.cursor] {
-		delete(m.ignored, m.cursor)
-		m.statusMsg = fmt.Sprintf("Unignored %s", m.rows[m.cursor].app.Name)
+	if m.ignored[idx] {
+		delete(m.ignored, idx)
+		m.statusMsg = fmt.Sprintf("Unignored %s", m.rows[idx].app.Name)
 	} else {
-		m.ignored[m.cursor] = true
-		m.statusMsg = fmt.Sprintf("Ignored %s", m.rows[m.cursor].app.Name)
+		m.ignored[idx] = true
+		m.statusMsg = fmt.Sprintf("Ignored %s", m.rows[idx].app.Name)
 	}
 }
 
 // toggleDetail opens or closes the release notes detail view.
 func (m Model) toggleDetail() (tea.Model, tea.Cmd) {
-	if len(m.rows) == 0 {
-		return m, nil
-	}
-
 	if m.showDetail {
 		m.showDetail = false
 		return m, nil
 	}
 
-	r := m.rows[m.cursor]
+	idx := m.cursorRowIdx()
+	if idx < 0 {
+		return m, nil
+	}
+
+	r := m.rows[idx]
 	if r.result == nil || r.result.ReleaseNotes == "" {
 		m.statusMsg = "No release notes available"
 		return m, nil
@@ -372,34 +400,94 @@ func (m Model) toggleDetail() (tea.Model, tea.Cmd) {
 	vp.SetContent(content)
 
 	m.showDetail = true
-	m.detailIdx = m.cursor
+	m.detailIdx = idx
 	m.detailViewport = vp
 	return m, nil
 }
 
 // togglePin toggles the pinned state of the currently selected app.
 func (m *Model) togglePin() {
-	if len(m.rows) == 0 {
+	idx := m.cursorRowIdx()
+	if idx < 0 {
 		return
 	}
-	bundleID := m.rows[m.cursor].app.BundleID
-	if m.pinned[m.cursor] {
-		delete(m.pinned, m.cursor)
+	bundleID := m.rows[idx].app.BundleID
+	if m.pinned[idx] {
+		delete(m.pinned, idx)
 		delete(m.pinnedIDs, bundleID)
-		m.statusMsg = fmt.Sprintf("Unpinned %s", m.rows[m.cursor].app.Name)
+		m.statusMsg = fmt.Sprintf("Unpinned %s", m.rows[idx].app.Name)
 	} else {
-		m.pinned[m.cursor] = true
+		m.pinned[idx] = true
 		m.pinnedIDs[bundleID] = true
-		m.statusMsg = fmt.Sprintf("Pinned %s", m.rows[m.cursor].app.Name)
+		m.statusMsg = fmt.Sprintf("Pinned %s", m.rows[idx].app.Name)
 	}
 }
 
-// handleUpdate starts an update for the currently selected app.
+// toggleSelection toggles the selection checkbox on the cursor row.
+func (m *Model) toggleSelection() {
+	idx := m.cursorRowIdx()
+	if idx < 0 {
+		return
+	}
+	if m.selected[idx] {
+		delete(m.selected, idx)
+	} else {
+		m.selected[idx] = true
+	}
+	m.rebuildVisible()
+}
+
+// toggleShowAll flips between showing all apps and showing only actionable ones.
+func (m *Model) toggleShowAll() {
+	m.showAll = !m.showAll
+	m.rebuildVisible()
+	if m.showAll {
+		m.statusMsg = "Showing all apps"
+	} else {
+		hidden := len(m.rows) - len(m.visible)
+		m.statusMsg = fmt.Sprintf("Showing actionable apps (%d hidden)", hidden)
+	}
+}
+
+// handleUpdate starts updates for selected apps, or the cursor row if none selected.
 func (m Model) handleUpdate() (tea.Model, tea.Cmd) {
-	if len(m.rows) == 0 || m.checking {
+	if m.checking {
 		return m, nil
 	}
-	idx := m.cursor
+
+	// If there are selections, batch-update all selected.
+	if len(m.selected) > 0 {
+		var cmds []tea.Cmd
+		count := 0
+		for idx := range m.selected {
+			r := m.rows[idx]
+			if r.result == nil || !r.result.HasUpdate || r.result.Error != nil {
+				continue
+			}
+			if m.updating[idx] || m.ignored[idx] {
+				continue
+			}
+			m.updating[idx] = true
+			m.rows[idx].updating = true
+			cmds = append(cmds, m.startUpdate(idx))
+			count++
+		}
+		m.selected = make(map[int]bool)
+		m.rebuildVisible()
+		if count == 0 {
+			m.statusMsg = "No updates available for selected apps"
+			return m, nil
+		}
+		m.statusMsg = fmt.Sprintf("Updating %d selected apps...", count)
+		cmds = append(cmds, m.spinner.Tick)
+		return m, tea.Batch(cmds...)
+	}
+
+	// No selections — update cursor row.
+	idx := m.cursorRowIdx()
+	if idx < 0 {
+		return m, nil
+	}
 	r := m.rows[idx]
 	if r.result == nil || !r.result.HasUpdate || r.result.Error != nil {
 		m.statusMsg = "No update available for this app"
@@ -414,7 +502,7 @@ func (m Model) handleUpdate() (tea.Model, tea.Cmd) {
 	return m, tea.Batch(m.startUpdate(idx), m.spinner.Tick)
 }
 
-// handleUpdateAll starts updates for all apps with available updates.
+// handleUpdateAll starts updates for all visible apps with available updates.
 // Pinned apps are skipped.
 func (m Model) handleUpdateAll() (tea.Model, tea.Cmd) {
 	if m.checking {
@@ -423,7 +511,8 @@ func (m Model) handleUpdateAll() (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 	count := 0
 	skippedPinned := 0
-	for i, r := range m.rows {
+	for _, i := range m.visible {
+		r := m.rows[i]
 		if r.result == nil || !r.result.HasUpdate || r.result.Error != nil {
 			continue
 		}
@@ -464,6 +553,8 @@ func (m Model) handleRefresh() (tea.Model, tea.Cmd) {
 	m.loading = true
 	m.rows = nil
 	m.apps = nil
+	m.selected = make(map[int]bool)
+	m.visible = m.visible[:0]
 	m.statusMsg = "Refreshing..."
 	return m, tea.Batch(m.startLoad(), m.spinner.Tick)
 }
@@ -480,6 +571,30 @@ func (m *Model) applyResults(results []*checker.UpdateResult) {
 			m.rows[i].checked = true
 		}
 	}
+}
+
+// rebuildVisible recomputes the visible slice based on the current showAll flag.
+// In filtered mode (showAll=false), only actionable rows are shown:
+// updating, selected, unchecked (pending), or having an update/error.
+func (m *Model) rebuildVisible() {
+	m.visible = m.visible[:0]
+	for i, r := range m.rows {
+		if m.showAll {
+			m.visible = append(m.visible, i)
+			continue
+		}
+		if r.updating || m.selected[i] || m.updating[i] {
+			m.visible = append(m.visible, i)
+		} else if !r.checked {
+			m.visible = append(m.visible, i)
+		} else if r.result != nil && (r.result.HasUpdate || r.result.Error != nil) {
+			m.visible = append(m.visible, i)
+		}
+	}
+	if m.cursor >= len(m.visible) {
+		m.cursor = max(0, len(m.visible)-1)
+	}
+	m.adjustOffset()
 }
 
 // View renders the TUI.
@@ -510,26 +625,36 @@ func (m Model) View() string {
 		return b.String()
 	}
 
-	visible := m.visibleRows()
+	viewportRows := m.visibleRows()
+
+	// Empty state when filtered view has nothing to show.
+	if len(m.visible) == 0 && !m.showAll {
+		b.WriteString(lipgloss.NewStyle().Foreground(colorGray).Render(
+			"All apps are up to date. Press t to show all."))
+		b.WriteString("\n")
+		b.WriteString(m.renderStatusBar())
+		return b.String()
+	}
 
 	// Column headers.
 	b.WriteString(renderColumnHeaders(m.width))
 	b.WriteString("\n")
 
 	// Render visible rows based on current offset.
-	end := m.offset + visible
-	if end > len(m.rows) {
-		end = len(m.rows)
+	end := m.offset + viewportRows
+	if end > len(m.visible) {
+		end = len(m.visible)
 	}
 	for i := m.offset; i < end; i++ {
-		b.WriteString(m.renderRow(i, i == m.cursor))
+		rowIdx := m.visible[i]
+		b.WriteString(m.renderRow(rowIdx, i == m.cursor, m.selected[rowIdx]))
 		b.WriteString("\n")
 	}
 
 	// Scroll indicator.
-	if len(m.rows) > visible {
+	if len(m.visible) > viewportRows {
 		b.WriteString(lipgloss.NewStyle().Foreground(colorGray).Render(
-			fmt.Sprintf("  showing %d-%d of %d", m.offset+1, end, len(m.rows))))
+			fmt.Sprintf("  showing %d-%d of %d", m.offset+1, end, len(m.visible))))
 		b.WriteString("\n")
 	}
 
@@ -562,7 +687,7 @@ func (m Model) viewDetail() string {
 func renderColumnHeaders(width int) string {
 	nameW, curW, latW, srcW := columnWidths(width)
 
-	return fmt.Sprintf("  %s  %s  %s  %s  %s",
+	return fmt.Sprintf("   %s  %s  %s  %s  %s",
 		styleColumnHeader.Render(pad("NAME", nameW)),
 		styleColumnHeader.Render(pad("CURRENT", curW)),
 		styleColumnHeader.Render(pad("LATEST", latW)),
@@ -572,14 +697,21 @@ func renderColumnHeaders(width int) string {
 }
 
 // renderRow renders a single table row.
-func (m Model) renderRow(index int, isCursor bool) string {
+func (m Model) renderRow(index int, isCursor bool, isSelected bool) string {
 	r := m.rows[index]
 	nameW, curW, latW, srcW := columnWidths(m.width)
 
-	// Cursor indicator.
-	cursor := "  "
-	if isCursor {
-		cursor = styleCursor.Render("> ")
+	// 3-char cursor/selection prefix.
+	var cursor string
+	switch {
+	case isCursor && isSelected:
+		cursor = styleCursor.Render(">") + styleUpdate.Render("✓") + " "
+	case isCursor:
+		cursor = styleCursor.Render(">") + "  "
+	case isSelected:
+		cursor = " " + styleUpdate.Render("✓") + " "
+	default:
+		cursor = "   "
 	}
 
 	name := truncate(r.app.Name, nameW)
@@ -641,8 +773,32 @@ func (m Model) renderRow(index int, isCursor bool) string {
 
 // renderStatusBar renders the bottom status bar with key help and status message.
 func (m Model) renderStatusBar() string {
-	help := styleStatusBar.Render(
-		"j/k: navigate | enter: update | a: update all | d: details | p: pin | i: ignore | r: refresh | q: quit")
+	var helpParts []string
+
+	helpParts = append(helpParts, "j/k: navigate", "space: select")
+
+	if len(m.selected) > 0 {
+		helpParts = append(helpParts, fmt.Sprintf("enter: update %d selected", len(m.selected)))
+	} else {
+		helpParts = append(helpParts, "enter: update")
+	}
+
+	helpParts = append(helpParts, "a: update all", "d: details", "p: pin", "i: ignore")
+
+	if m.showAll {
+		helpParts = append(helpParts, "t: show updatable")
+	} else {
+		hidden := len(m.rows) - len(m.visible)
+		if hidden > 0 {
+			helpParts = append(helpParts, fmt.Sprintf("t: show all (%d hidden)", hidden))
+		} else {
+			helpParts = append(helpParts, "t: show all")
+		}
+	}
+
+	helpParts = append(helpParts, "r: refresh", "q: quit")
+
+	help := styleStatusBar.Render(strings.Join(helpParts, " | "))
 
 	var msg string
 	if m.statusMsg != "" {
@@ -657,9 +813,9 @@ func columnWidths(width int) (name, current, latest, source int) {
 	if width < 80 {
 		width = 80
 	}
-	// Subtract cursor (2) + gaps between columns (4*2=8) = 10 chars overhead.
+	// Subtract cursor (3) + gaps between columns (4*2=8) = 11 chars overhead.
 	// Plus STATUS column gets the rest, so we don't allocate for it.
-	available := width - 10 - 18 // 18 for status text approximate
+	available := width - 11 - 18 // 18 for status text approximate
 	if available < 40 {
 		available = 40
 	}

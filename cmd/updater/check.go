@@ -167,8 +167,11 @@ func enrichApps(ctx context.Context, apps []*app.App, cfg *config.Config, runner
 	}
 
 	for _, a := range apps {
-		// If no cask name from config, try heuristic only for unknown-source apps.
-		if a.CaskName == "" && a.Source == app.SourceUnknown {
+		// Try heuristic cask name for apps that have no checker-matchable metadata:
+		// SourceUnknown and SourceElectron without an update URL or GitHub repo.
+		needsCaskFallback := a.Source == app.SourceUnknown ||
+			(a.Source == app.SourceElectron && a.ElectronUpdateURL == "" && a.GitHubRepo == "")
+		if a.CaskName == "" && needsCaskFallback {
 			a.CaskName = app.ToCaskName(a.Name)
 		}
 
@@ -189,7 +192,11 @@ func enrichApps(ctx context.Context, apps []*app.App, cfg *config.Config, runner
 	}
 	var toProbe []*app.App
 	for _, a := range apps {
-		if a.Source != app.SourceUnknown || a.CaskName == "" {
+		// Probe apps that still need a checker: unknown-source apps and
+		// electron apps without native update metadata.
+		needsProbe := a.Source == app.SourceUnknown ||
+			(a.Source == app.SourceElectron && a.ElectronUpdateURL == "" && a.GitHubRepo == "" && !a.InstalledViaBrew)
+		if !needsProbe || a.CaskName == "" {
 			continue
 		}
 		if cfg.CaskToken(a.BundleID) != "" {
