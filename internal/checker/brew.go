@@ -10,11 +10,17 @@ import (
 	"github.com/luzhengda/updater/internal/version"
 )
 
-// brewOutdatedItem represents a single entry from `brew outdated --cask --greedy --json`.
+// brewOutdatedItem represents a single entry from `brew outdated --json`.
 type brewOutdatedItem struct {
-	Name              string `json:"name"`
-	InstalledVersions string `json:"installed_versions"`
-	CurrentVersion    string `json:"current_version"`
+	Name              string          `json:"name"`
+	InstalledVersions json.RawMessage `json:"installed_versions"`
+	CurrentVersion    string          `json:"current_version"`
+}
+
+// brewOutdatedWrapper is the top-level object from `brew outdated --json` (Homebrew 4.x+).
+type brewOutdatedWrapper struct {
+	Formulae []brewOutdatedItem `json:"formulae"`
+	Casks    []brewOutdatedItem `json:"casks"`
 }
 
 // BrewChecker checks for Homebrew Cask updates.
@@ -80,13 +86,25 @@ func (b *BrewChecker) Check(ctx context.Context, a *app.App) (*UpdateResult, err
 	}, nil
 }
 
-// parseBrewOutdated parses the JSON output of `brew outdated --cask --greedy --json`.
+// parseBrewOutdated parses the JSON output of `brew outdated --json`.
+// Handles both the flat array format and the wrapped {"formulae":[],"casks":[]} format (Homebrew 4.x+).
 func parseBrewOutdated(data []byte) ([]brewOutdatedItem, error) {
+	// Try flat array first (legacy format / test mocks).
 	var items []brewOutdatedItem
-	if err := json.Unmarshal(data, &items); err != nil {
+	if err := json.Unmarshal(data, &items); err == nil {
+		return items, nil
+	}
+
+	// Try wrapped format (Homebrew 4.x+).
+	var wrapper brewOutdatedWrapper
+	if err := json.Unmarshal(data, &wrapper); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal brew outdated JSON: %w", err)
 	}
-	return items, nil
+	// Merge formulae and casks into a single list.
+	all := make([]brewOutdatedItem, 0, len(wrapper.Formulae)+len(wrapper.Casks))
+	all = append(all, wrapper.Formulae...)
+	all = append(all, wrapper.Casks...)
+	return all, nil
 }
 
 // ListInstalledCasks runs `brew list --cask` and returns a set of installed cask names.
