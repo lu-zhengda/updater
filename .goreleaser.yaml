@@ -18,15 +18,14 @@ builds:
     goos:
       - darwin
     goarch:
-      - amd64
       - arm64
+    env:
+      - CGO_ENABLED=1
     ldflags:
       - -s -w
 
 universal_binaries:
   - id: updater
-    replace: true
-  - id: updater-menubar
     replace: true
 
 archives:
