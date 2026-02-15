@@ -7,6 +7,8 @@ import (
 
 	"github.com/lu-zhengda/updater/internal/app"
 	"github.com/lu-zhengda/updater/internal/checker"
+	"github.com/lu-zhengda/updater/internal/config"
+	"gopkg.in/yaml.v3"
 )
 
 func TestBuildNotificationBody(t *testing.T) {
@@ -210,6 +212,22 @@ func TestRunNotify_AutoUpdateFlag(t *testing.T) {
 	}
 	if f.DefValue != "false" {
 		t.Errorf("default = %q, want %q", f.DefValue, "false")
+	}
+}
+
+func TestInteractiveNotificationsConfig(t *testing.T) {
+	cfg := &config.Config{InteractiveNotifications: true}
+	if !cfg.InteractiveNotifications {
+		t.Error("expected InteractiveNotifications to be true")
+	}
+
+	// Verify YAML serialization
+	data, err := yaml.Marshal(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "interactive_notifications: true") {
+		t.Errorf("expected yaml to contain interactive_notifications, got: %s", string(data))
 	}
 }
 

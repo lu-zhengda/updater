@@ -79,7 +79,7 @@ func runNotify(cmd *cobra.Command, _ []string) error {
 	body := buildNotificationBody(updatable)
 	subtitle := buildNotificationSubtitle(updatable)
 
-	if flagInteractive {
+	if flagInteractive || cfg.InteractiveNotifications {
 		return sendInteractiveNotification(ctx, runner, len(updatable), body)
 	}
 	if err := sendNotification(ctx, runner, len(updatable), body, subtitle); err != nil {
