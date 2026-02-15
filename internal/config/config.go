@@ -168,6 +168,73 @@ func (c *Config) Unpin(bundleID string) {
 	c.PinnedApps = filtered
 }
 
+// Merge merges an imported config into the current one and returns the result.
+// Lists are unioned (deduplicated), maps are merged (imported overrides current),
+// and non-zero scalars from imported override current values.
+func Merge(current, imported *Config) *Config {
+	result := *current // shallow copy
+
+	// Union string slices with deduplication.
+	result.IgnoredApps = unionStrings(current.IgnoredApps, imported.IgnoredApps)
+	result.PinnedApps = unionStrings(current.PinnedApps, imported.PinnedApps)
+
+	// Merge maps: imported overrides current.
+	result.GitHubMappings = mergeMaps(current.GitHubMappings, imported.GitHubMappings)
+	result.CaskMappings = mergeMaps(current.CaskMappings, imported.CaskMappings)
+
+	// Non-zero scalar overrides.
+	if imported.GitHubToken != "" {
+		result.GitHubToken = imported.GitHubToken
+	}
+	if imported.MaxConcurrent > 0 {
+		result.MaxConcurrent = imported.MaxConcurrent
+	}
+	if imported.MaxBackups > 0 {
+		result.MaxBackups = imported.MaxBackups
+	}
+	if imported.ScheduleInterval > 0 {
+		result.ScheduleInterval = imported.ScheduleInterval
+	}
+
+	result.buildIgnoredSet()
+	result.buildPinnedSet()
+	return &result
+}
+
+// unionStrings returns the union of two string slices, preserving order and removing duplicates.
+func unionStrings(a, b []string) []string {
+	seen := make(map[string]bool, len(a)+len(b))
+	var result []string
+	for _, s := range a {
+		if !seen[s] {
+			seen[s] = true
+			result = append(result, s)
+		}
+	}
+	for _, s := range b {
+		if !seen[s] {
+			seen[s] = true
+			result = append(result, s)
+		}
+	}
+	return result
+}
+
+// mergeMaps merges two string maps. Values from b override values from a.
+func mergeMaps(a, b map[string]string) map[string]string {
+	if len(a) == 0 && len(b) == 0 {
+		return nil
+	}
+	result := make(map[string]string, len(a)+len(b))
+	for k, v := range a {
+		result[k] = v
+	}
+	for k, v := range b {
+		result[k] = v
+	}
+	return result
+}
+
 // defaultConfig returns a Config with sensible zero values.
 func defaultConfig() *Config {
 	return &Config{

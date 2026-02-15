@@ -54,11 +54,11 @@ func runNotify(cmd *cobra.Command, _ []string) error {
 	checkers := buildCheckers(runner, cfg.ResolveGitHubToken())
 	results := checkAll(ctx, apps, checkers, cfg.MaxConcurrentOrDefault())
 
-	// Count updatable apps.
-	var updatable []string
+	// Collect updatable apps.
+	var updatable []*checker.UpdateResult
 	for _, r := range results {
 		if r.HasUpdate && r.Error == nil && !cfg.IsPinned(r.App.BundleID) {
-			updatable = append(updatable, r.App.Name)
+			updatable = append(updatable, r)
 		}
 	}
 
@@ -67,23 +67,53 @@ func runNotify(cmd *cobra.Command, _ []string) error {
 	}
 
 	body := buildNotificationBody(updatable)
-	return sendNotification(ctx, runner, len(updatable), body)
+	subtitle := buildNotificationSubtitle(updatable)
+	return sendNotification(ctx, runner, len(updatable), body, subtitle)
 }
 
-// buildNotificationBody creates the notification body text, truncating at 200 chars.
-func buildNotificationBody(names []string) string {
-	body := strings.Join(names, ", ")
+// buildNotificationBody creates the notification body text showing version transitions,
+// truncating at 200 chars.
+func buildNotificationBody(results []*checker.UpdateResult) string {
+	parts := make([]string, 0, len(results))
+	for _, r := range results {
+		parts = append(parts, fmt.Sprintf("%s (%s\u2192%s)", r.App.Name, r.CurrentVersion, r.LatestVersion))
+	}
+	body := strings.Join(parts, ", ")
 	if len(body) > 200 {
 		body = body[:197] + "..."
 	}
 	return body
 }
 
+// buildNotificationSubtitle returns a subtitle highlighting major updates.
+// Returns empty string if no major updates are present.
+func buildNotificationSubtitle(results []*checker.UpdateResult) string {
+	var majorCount int
+	for _, r := range results {
+		if r.IsMajorUpdate {
+			majorCount++
+		}
+	}
+	switch majorCount {
+	case 0:
+		return ""
+	case 1:
+		return "1 major update"
+	default:
+		return fmt.Sprintf("%d major updates", majorCount)
+	}
+}
+
 // sendNotification sends a macOS notification via osascript.
-func sendNotification(ctx context.Context, runner checker.CmdRunner, count int, body string) error {
+// subtitle is optional; if non-empty it is included in the notification.
+func sendNotification(ctx context.Context, runner checker.CmdRunner, count int, body, subtitle string) error {
 	title := fmt.Sprintf("%d app update(s) available", count)
 	script := fmt.Sprintf(`display notification "%s" with title "%s"`,
 		escapeAppleScript(body), escapeAppleScript(title))
+	if subtitle != "" {
+		script = fmt.Sprintf(`display notification "%s" with title "%s" subtitle "%s"`,
+			escapeAppleScript(body), escapeAppleScript(title), escapeAppleScript(subtitle))
+	}
 
 	_, err := runner.Run(ctx, "osascript", "-e", script)
 	if err != nil {

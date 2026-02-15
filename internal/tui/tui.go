@@ -657,7 +657,7 @@ func (m Model) toggleDetail() (tea.Model, tea.Cmd) {
 	// Determine content: strip HTML for Sparkle, use markdown as-is for GitHub.
 	content := r.result.ReleaseNotes
 	if r.result.Source == "sparkle" {
-		content = stripHTML(content)
+		content = StripHTML(content)
 	}
 
 	vp := viewport.New(m.width, m.height-4) // reserve header + help bar

@@ -113,7 +113,16 @@ func isBrewInstall(path string) bool {
 
 // fetchLatestRelease fetches the latest release from the updater's GitHub repo.
 func fetchLatestRelease(token string) (*checker.GitHubRelease, error) {
-	url := "https://api.github.com/repos/lu-zhengda/updater/releases/latest"
+	return fetchLatestReleaseFrom(
+		"https://api.github.com/repos/lu-zhengda/updater/releases/latest",
+		token,
+		http.DefaultClient,
+	)
+}
+
+// fetchLatestReleaseFrom fetches a GitHub release from the given URL using the
+// provided token and HTTP client. Extracted for testability.
+func fetchLatestReleaseFrom(url, token string, client *http.Client) (*checker.GitHubRelease, error) {
 	req, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
@@ -123,7 +132,7 @@ func fetchLatestRelease(token string) (*checker.GitHubRelease, error) {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch latest release: %w", err)
 	}
@@ -145,6 +154,12 @@ func fetchLatestRelease(token string) (*checker.GitHubRelease, error) {
 
 // downloadFile downloads the given URL into the provided file.
 func downloadFile(dst *os.File, url, token string) error {
+	return downloadFileWith(dst, url, token, http.DefaultClient)
+}
+
+// downloadFileWith downloads the given URL into the provided file using the
+// specified HTTP client. Extracted for testability.
+func downloadFileWith(dst *os.File, url, token string, client *http.Client) error {
 	req, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
 		return fmt.Errorf("failed to create download request: %w", err)
@@ -153,7 +168,7 @@ func downloadFile(dst *os.File, url, token string) error {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("failed to download asset: %w", err)
 	}

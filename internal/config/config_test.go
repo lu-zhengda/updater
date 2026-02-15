@@ -354,3 +354,135 @@ func TestDefaultPath(t *testing.T) {
 		t.Errorf("DefaultPath() should end with config.yaml, got %s", filepath.Base(p))
 	}
 }
+
+func TestMerge_EmptyImport(t *testing.T) {
+	current := &Config{
+		IgnoredApps:    []string{"com.example.a"},
+		GitHubMappings: map[string]string{"com.x": "x/repo"},
+		GitHubToken:    "token-1",
+		MaxConcurrent:  5,
+	}
+	current.buildIgnoredSet()
+	current.buildPinnedSet()
+
+	imported := &Config{}
+
+	result := Merge(current, imported)
+	if len(result.IgnoredApps) != 1 || result.IgnoredApps[0] != "com.example.a" {
+		t.Errorf("IgnoredApps = %v, want [com.example.a]", result.IgnoredApps)
+	}
+	if result.GitHubToken != "token-1" {
+		t.Errorf("GitHubToken = %q, want %q", result.GitHubToken, "token-1")
+	}
+	if result.MaxConcurrent != 5 {
+		t.Errorf("MaxConcurrent = %d, want 5", result.MaxConcurrent)
+	}
+}
+
+func TestMerge_ListsUnion(t *testing.T) {
+	current := &Config{
+		IgnoredApps: []string{"com.a", "com.b"},
+		PinnedApps:  []string{"com.x"},
+	}
+	current.buildIgnoredSet()
+	current.buildPinnedSet()
+
+	imported := &Config{
+		IgnoredApps: []string{"com.b", "com.c"}, // com.b is duplicate
+		PinnedApps:  []string{"com.y"},
+	}
+
+	result := Merge(current, imported)
+
+	if len(result.IgnoredApps) != 3 {
+		t.Fatalf("IgnoredApps length = %d, want 3", len(result.IgnoredApps))
+	}
+	// Expect: com.a, com.b, com.c (union, deduplicated)
+	want := map[string]bool{"com.a": true, "com.b": true, "com.c": true}
+	for _, id := range result.IgnoredApps {
+		if !want[id] {
+			t.Errorf("unexpected ignored app: %q", id)
+		}
+	}
+
+	if len(result.PinnedApps) != 2 {
+		t.Fatalf("PinnedApps length = %d, want 2", len(result.PinnedApps))
+	}
+	if !result.IsPinned("com.x") || !result.IsPinned("com.y") {
+		t.Error("expected both com.x and com.y to be pinned")
+	}
+}
+
+func TestMerge_MapsOverride(t *testing.T) {
+	current := &Config{
+		GitHubMappings: map[string]string{
+			"com.a": "old/repo",
+			"com.b": "keep/this",
+		},
+		CaskMappings: map[string]string{
+			"com.x": "cask-x",
+		},
+	}
+	current.buildIgnoredSet()
+	current.buildPinnedSet()
+
+	imported := &Config{
+		GitHubMappings: map[string]string{
+			"com.a": "new/repo", // override
+			"com.c": "add/new", // new entry
+		},
+		CaskMappings: map[string]string{
+			"com.y": "cask-y", // new entry
+		},
+	}
+
+	result := Merge(current, imported)
+
+	if got := result.GitHubRepo("com.a"); got != "new/repo" {
+		t.Errorf("GitHubRepo(com.a) = %q, want %q", got, "new/repo")
+	}
+	if got := result.GitHubRepo("com.b"); got != "keep/this" {
+		t.Errorf("GitHubRepo(com.b) = %q, want %q", got, "keep/this")
+	}
+	if got := result.GitHubRepo("com.c"); got != "add/new" {
+		t.Errorf("GitHubRepo(com.c) = %q, want %q", got, "add/new")
+	}
+	if got := result.CaskToken("com.x"); got != "cask-x" {
+		t.Errorf("CaskToken(com.x) = %q, want %q", got, "cask-x")
+	}
+	if got := result.CaskToken("com.y"); got != "cask-y" {
+		t.Errorf("CaskToken(com.y) = %q, want %q", got, "cask-y")
+	}
+}
+
+func TestMerge_ScalarOverride(t *testing.T) {
+	current := &Config{
+		GitHubToken:      "old-token",
+		MaxConcurrent:    5,
+		MaxBackups:       2,
+		ScheduleInterval: 24,
+	}
+	current.buildIgnoredSet()
+	current.buildPinnedSet()
+
+	imported := &Config{
+		GitHubToken:      "new-token",
+		MaxConcurrent:    20,
+		ScheduleInterval: 0, // zero → should NOT override
+	}
+
+	result := Merge(current, imported)
+
+	if result.GitHubToken != "new-token" {
+		t.Errorf("GitHubToken = %q, want %q", result.GitHubToken, "new-token")
+	}
+	if result.MaxConcurrent != 20 {
+		t.Errorf("MaxConcurrent = %d, want 20", result.MaxConcurrent)
+	}
+	if result.MaxBackups != 2 {
+		t.Errorf("MaxBackups = %d, want 2 (preserved from current)", result.MaxBackups)
+	}
+	if result.ScheduleInterval != 24 {
+		t.Errorf("ScheduleInterval = %d, want 24 (zero import should not override)", result.ScheduleInterval)
+	}
+}

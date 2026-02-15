@@ -12,6 +12,7 @@ import (
 	"github.com/luzhengda/updater/internal/backup"
 	"github.com/luzhengda/updater/internal/checker"
 	"github.com/luzhengda/updater/internal/config"
+	"github.com/luzhengda/updater/internal/history"
 	"github.com/luzhengda/updater/internal/installer"
 	"github.com/spf13/cobra"
 )
@@ -88,8 +89,29 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	// Auto mode: filter to safe, unattended updates only.
+	if flagAuto {
+		autoSkipSources := map[string]bool{
+			"system": true, "setapp": true, "toolbox": true, "adobe": true,
+		}
+		var autoUpdatable []*checker.UpdateResult
+		for _, r := range updatable {
+			if cfg.IsPinned(r.App.BundleID) {
+				continue
+			}
+			if r.IsMajorUpdate {
+				continue
+			}
+			if autoSkipSources[r.Source] {
+				continue
+			}
+			autoUpdatable = append(autoUpdatable, r)
+		}
+		updatable = autoUpdatable
+	}
+
 	// If a specific app name was given, filter to just that app.
-	if len(args) > 0 && !flagAll {
+	if len(args) > 0 && !flagAll && !flagAuto {
 		name := args[0]
 		var matched []*checker.UpdateResult
 		for _, r := range updatable {
@@ -105,8 +127,8 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 	} else if len(updatable) == 0 {
 		fmt.Fprintln(cmd.OutOrStdout(), "All apps are up to date.")
 		return nil
-	} else if !flagAll {
-		// Without --all and without a specific app name, show what's available.
+	} else if !flagAll && !flagAuto {
+		// Without --all/--auto and without a specific app name, show what's available.
 		fmt.Fprintf(cmd.OutOrStdout(), "%d updates available. Use --all to update all, or specify an app name.\n", len(updatable))
 		printCheckResults(cmd, updatable, cfg)
 		return nil
@@ -126,11 +148,23 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 		fmt.Fprintf(cmd.OutOrStdout(), "Updating %s (%s -> %s) via %s...\n",
 			r.App.Name, r.CurrentVersion, r.LatestVersion, r.Source)
 
-		if err := executeUpdate(ctx, r, runner, bm, inst); errors.Is(err, checker.ErrOpenedExternally) {
+		updateErr := executeUpdate(ctx, r, runner, bm, inst)
+		if errors.Is(updateErr, checker.ErrOpenedExternally) {
 			// Not an error — just opened externally for the user to handle.
-		} else if err != nil {
-			fmt.Fprintf(os.Stderr, "  error: %v\n", err)
+		} else if updateErr != nil {
+			fmt.Fprintf(os.Stderr, "  error: %v\n", updateErr)
 		}
+
+		// Record in update history (non-fatal on error).
+		_ = history.Append(history.DefaultPath(), history.Entry{
+			AppName:     r.App.Name,
+			BundleID:    r.App.BundleID,
+			FromVersion: r.CurrentVersion,
+			ToVersion:   r.LatestVersion,
+			Source:      r.Source,
+			Timestamp:   time.Now(),
+			Success:     updateErr == nil || errors.Is(updateErr, checker.ErrOpenedExternally),
+		})
 	}
 
 	return nil
