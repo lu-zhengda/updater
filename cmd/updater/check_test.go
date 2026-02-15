@@ -168,3 +168,30 @@ func TestToCheckEntries_DownloadURL(t *testing.T) {
 		t.Errorf("ReleaseNotes = %q, want %q", e.ReleaseNotes, "Bug fixes and performance improvements")
 	}
 }
+
+func TestCliSourceName(t *testing.T) {
+	tests := []struct {
+		source string
+		want   string
+	}{
+		{"mas", "app store"},
+		{"brew", "homebrew"},
+		{"brew-info", "homebrew"},
+		{"formula", "formula"},
+		{"sparkle", "sparkle"},
+		{"github", "github"},
+		{"electron", "electron"},
+		{"setapp", "setapp"},
+		{"toolbox", "toolbox"},
+		{"adobe", "adobe"},
+		{"unknown", "unknown"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.source, func(t *testing.T) {
+			got := cliSourceName(tt.source)
+			if got != tt.want {
+				t.Errorf("cliSourceName(%q) = %q, want %q", tt.source, got, tt.want)
+			}
+		})
+	}
+}

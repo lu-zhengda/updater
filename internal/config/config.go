@@ -28,8 +28,9 @@ type Config struct {
 	ScheduleOffered  bool              `yaml:"schedule_offered"`
 	ScheduleInterval int               `yaml:"schedule_interval"`
 	LastChecked      time.Time         `yaml:"last_checked,omitempty"`
-	Policies         map[string]string `yaml:"policies,omitempty"` // bundleID → "auto"|"manual"|"notify-only"
-	ignoredSet       map[string]bool   `yaml:"-"`
+	Policies                 map[string]string `yaml:"policies,omitempty"` // bundleID → "auto"|"manual"|"notify-only"
+	InteractiveNotifications bool              `yaml:"interactive_notifications"`
+	ignoredSet               map[string]bool   `yaml:"-"`
 	pinnedSet        map[string]bool   `yaml:"-"`
 }
 
