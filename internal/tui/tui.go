@@ -50,6 +50,12 @@ type ScheduleFuncs struct {
 // HistoryFunc loads update history entries.
 type HistoryFunc func() ([]history.Entry, error)
 
+// RollbackFunc executes a rollback for a single app by name.
+type RollbackFunc func(ctx context.Context, appName string) error
+
+// HasBackupFunc checks whether a backup exists for the given app.
+type HasBackupFunc func(appName string) bool
+
 // row represents a single row in the TUI table.
 type row struct {
 	app      *app.App
@@ -75,6 +81,11 @@ type updateDoneMsg struct {
 
 type historyLoadedMsg struct {
 	entries []history.Entry
+	err     error
+}
+
+type rollbackDoneMsg struct {
+	appName string
 	err     error
 }
 
@@ -119,10 +130,15 @@ type Model struct {
 	searchMode     bool
 	searchInput    textinput.Model
 	searchQuery    string
-	historyFn      HistoryFunc
-	showHistory    bool
-	historyEntries []history.Entry
-	historyOffset  int
+	historyFn        HistoryFunc
+	showHistory      bool
+	historyEntries   []history.Entry
+	historyOffset    int
+	rollbackFn       RollbackFunc
+	hasBackupFn      HasBackupFunc
+	rollbackConfirm  bool   // true when showing y/n confirmation
+	rollbackAppName  string // app being rolled back
+	rollingBack      bool   // true while rollback is in progress
 }
 
 // NewModel creates a new TUI model that launches instantly.
@@ -130,7 +146,7 @@ type Model struct {
 // checkFn runs after loading to check for updates.
 // updateFn executes updates for individual apps.
 // scheduleFns, cfg, and cfgPath are optional — pass nil/empty to disable scheduler UI.
-func NewModel(loadFn LoadFunc, checkFn CheckFunc, updateFn UpdateFunc, scheduleFns *ScheduleFuncs, cfg *config.Config, cfgPath string, historyFn ...HistoryFunc) Model {
+func NewModel(loadFn LoadFunc, checkFn CheckFunc, updateFn UpdateFunc, scheduleFns *ScheduleFuncs, cfg *config.Config, cfgPath string, rollbackFn RollbackFunc, hasBackupFn HasBackupFunc, historyFn ...HistoryFunc) Model {
 	s := spinner.New()
 	s.Spinner = spinner.Dot
 	s.Style = lipgloss.NewStyle().Foreground(colorCyan)
@@ -161,6 +177,8 @@ func NewModel(loadFn LoadFunc, checkFn CheckFunc, updateFn UpdateFunc, scheduleF
 		cfgPath:     cfgPath,
 		searchInput: ti,
 		historyFn:   hFn,
+		rollbackFn:  rollbackFn,
+		hasBackupFn: hasBackupFn,
 	}
 }
 
