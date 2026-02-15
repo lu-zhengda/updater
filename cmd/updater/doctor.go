@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/luzhengda/updater/internal/backup"
@@ -48,6 +49,9 @@ func runDoctor(cmd *cobra.Command, _ []string) error {
 
 	// Config file.
 	checks = append(checks, checkConfig())
+
+	// Config validation (cross-reference mappings with discovered apps).
+	checks = append(checks, checkConfigValidation()...)
 
 	// Backup directory.
 	checks = append(checks, checkBackups())
@@ -115,6 +119,54 @@ func checkConfig() doctorCheck {
 		return doctorCheck{Name: "Config", Status: "ok", Detail: "using defaults"}
 	}
 	return doctorCheck{Name: "Config", Status: "ok", Detail: cfgPath}
+}
+
+func checkConfigValidation() []doctorCheck {
+	cfg, err := config.Load(config.DefaultPath())
+	if err != nil {
+		return []doctorCheck{{Name: "Config validation", Status: "warning", Detail: fmt.Sprintf("cannot load config: %v", err)}}
+	}
+
+	// Discover apps for cross-reference.
+	apps, err := discoverApps()
+	if err != nil {
+		return []doctorCheck{{Name: "Config validation", Status: "warning", Detail: fmt.Sprintf("cannot discover apps: %v", err)}}
+	}
+
+	bundleIDs := make(map[string]bool, len(apps))
+	for _, a := range apps {
+		bundleIDs[a.BundleID] = true
+	}
+
+	var stale []string
+
+	for id := range cfg.GitHubMappings {
+		if !bundleIDs[id] {
+			stale = append(stale, fmt.Sprintf("github_mappings: %s", id))
+		}
+	}
+	for id := range cfg.CaskMappings {
+		if !bundleIDs[id] {
+			stale = append(stale, fmt.Sprintf("cask_mappings: %s", id))
+		}
+	}
+	for id := range cfg.Policies {
+		if !bundleIDs[id] {
+			stale = append(stale, fmt.Sprintf("policies: %s", id))
+		}
+	}
+	for _, id := range cfg.PinnedApps {
+		if !bundleIDs[id] {
+			stale = append(stale, fmt.Sprintf("pinned_apps: %s", id))
+		}
+	}
+
+	if len(stale) == 0 {
+		return []doctorCheck{{Name: "Config validation", Status: "ok", Detail: "all mappings valid"}}
+	}
+
+	detail := fmt.Sprintf("%d stale: %s", len(stale), strings.Join(stale, ", "))
+	return []doctorCheck{{Name: "Config validation", Status: "warning", Detail: detail}}
 }
 
 func checkBackups() doctorCheck {
