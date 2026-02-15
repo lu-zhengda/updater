@@ -177,12 +177,12 @@ func TestGitHubChecker_AuthorizationHeader(t *testing.T) {
 func TestGitHubChecker_FindMacAsset(t *testing.T) {
 	tests := []struct {
 		name   string
-		assets []githubAsset
+		assets []GitHubAsset
 		want   string
 	}{
 		{
 			name: "dmg with mac in name",
-			assets: []githubAsset{
+			assets: []GitHubAsset{
 				{Name: "app-linux.tar.gz", DownloadURL: "https://example.com/linux.tar.gz"},
 				{Name: "app-mac.dmg", DownloadURL: "https://example.com/mac.dmg"},
 			},
@@ -190,21 +190,21 @@ func TestGitHubChecker_FindMacAsset(t *testing.T) {
 		},
 		{
 			name: "pkg with darwin in name",
-			assets: []githubAsset{
+			assets: []GitHubAsset{
 				{Name: "app-darwin.pkg", DownloadURL: "https://example.com/darwin.pkg"},
 			},
 			want: "https://example.com/darwin.pkg",
 		},
 		{
 			name: "zip with macos in name",
-			assets: []githubAsset{
+			assets: []GitHubAsset{
 				{Name: "app-macos.zip", DownloadURL: "https://example.com/macos.zip"},
 			},
 			want: "https://example.com/macos.zip",
 		},
 		{
 			name:   "no mac asset",
-			assets: []githubAsset{
+			assets: []GitHubAsset{
 				{Name: "app-linux.tar.gz", DownloadURL: "https://example.com/linux.tar.gz"},
 			},
 			want: "",

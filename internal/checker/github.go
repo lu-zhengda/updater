@@ -13,16 +13,16 @@ import (
 
 const defaultGitHubAPI = "https://api.github.com"
 
-// githubRelease represents a GitHub release from the API.
-type githubRelease struct {
+// GitHubRelease represents a GitHub release from the API.
+type GitHubRelease struct {
 	TagName string        `json:"tag_name"`
 	Name    string        `json:"name"`
 	Body    string        `json:"body"`
-	Assets  []githubAsset `json:"assets"`
+	Assets  []GitHubAsset `json:"assets"`
 }
 
-// githubAsset represents a downloadable asset in a GitHub release.
-type githubAsset struct {
+// GitHubAsset represents a downloadable asset in a GitHub release.
+type GitHubAsset struct {
 	Name        string `json:"name"`
 	DownloadURL string `json:"browser_download_url"`
 }
@@ -84,12 +84,12 @@ func (g *GitHubChecker) Check(ctx context.Context, a *app.App) (*UpdateResult, e
 		return nil, fmt.Errorf("failed to fetch release for %s: status %d", a.Name, resp.StatusCode)
 	}
 
-	var release githubRelease
+	var release GitHubRelease
 	if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
 		return nil, fmt.Errorf("failed to parse release for %s: %w", a.Name, err)
 	}
 
-	latestVersion := cleanTagVersion(release.TagName)
+	latestVersion := CleanTagVersion(release.TagName)
 	downloadURL := findMacAsset(release.Assets)
 
 	return &UpdateResult{
@@ -100,12 +100,13 @@ func (g *GitHubChecker) Check(ctx context.Context, a *app.App) (*UpdateResult, e
 		DownloadURL:    downloadURL,
 		ReleaseNotes:   release.Body,
 		HasUpdate:      version.IsNewer(a.Version, latestVersion),
+		IsMajorUpdate:  version.IsMajorUpgrade(a.Version, latestVersion),
 	}, nil
 }
 
-// cleanTagVersion strips common tag prefixes from GitHub release tags.
+// CleanTagVersion strips common tag prefixes from GitHub release tags.
 // e.g., "v1.0.0" -> "1.0.0", "release-3.5.4" -> "3.5.4", "release/3.5.4" -> "3.5.4"
-func cleanTagVersion(tag string) string {
+func CleanTagVersion(tag string) string {
 	prefixes := []string{"v", "release-", "release/", "ver-", "ver/", "version-", "version/"}
 	result := tag
 	for _, p := range prefixes {
@@ -123,7 +124,7 @@ var macKeywords = []string{"mac", "darwin", "macos", "osx"}
 // findMacAsset searches the release assets for a macOS download.
 // It looks for assets with macOS file extensions (.dmg, .pkg, .zip) that
 // also contain a macOS keyword (mac, darwin, macos, osx) in their name.
-func findMacAsset(assets []githubAsset) string {
+func findMacAsset(assets []GitHubAsset) string {
 	for _, asset := range assets {
 		nameLower := strings.ToLower(asset.Name)
 		if hasMacExtension(nameLower) && hasMacKeyword(nameLower) {

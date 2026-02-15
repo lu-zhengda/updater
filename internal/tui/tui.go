@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/spinner"
+	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -104,6 +106,9 @@ type Model struct {
 	showSchedule   bool   // schedule settings modal
 	cfg            *config.Config
 	cfgPath        string
+	searchMode     bool
+	searchInput    textinput.Model
+	searchQuery    string
 }
 
 // NewModel creates a new TUI model that launches instantly.
@@ -115,6 +120,11 @@ func NewModel(loadFn LoadFunc, checkFn CheckFunc, updateFn UpdateFunc, scheduleF
 	s := spinner.New()
 	s.Spinner = spinner.Dot
 	s.Style = lipgloss.NewStyle().Foreground(colorCyan)
+
+	ti := textinput.New()
+	ti.Placeholder = "search..."
+	ti.Prompt = "/ "
+	ti.CharLimit = 64
 
 	return Model{
 		loading:     true,
@@ -130,6 +140,7 @@ func NewModel(loadFn LoadFunc, checkFn CheckFunc, updateFn UpdateFunc, scheduleF
 		scheduleFns: scheduleFns,
 		cfg:         cfg,
 		cfgPath:     cfgPath,
+		searchInput: ti,
 	}
 }
 
@@ -201,6 +212,17 @@ func (m Model) removeSchedule() tea.Cmd {
 	}
 }
 
+// saveLastChecked persists the current time as the last-checked timestamp.
+func (m *Model) saveLastChecked() {
+	if m.cfg == nil {
+		return
+	}
+	m.cfg.LastChecked = time.Now()
+	if err := m.cfg.Save(m.cfgPath); err != nil {
+		m.statusMsg = fmt.Sprintf("Warning: failed to save config: %v", err)
+	}
+}
+
 // saveScheduleOffered persists the ScheduleOffered flag to config.
 func (m *Model) saveScheduleOffered() {
 	if m.cfg == nil {
@@ -267,6 +289,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.applyResults(msg.results)
 		m.rebuildVisible()
 		m.statusMsg = fmt.Sprintf("Checked %d apps", len(msg.results))
+		m.saveLastChecked()
 		return m, nil
 
 	case scheduleCheckMsg:
@@ -338,6 +361,11 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleDetailKey(msg)
 	}
 
+	// Search mode: forward input to textinput.
+	if m.searchMode {
+		return m.handleSearchKey(msg)
+	}
+
 	switch msg.Type {
 	case tea.KeyCtrlC:
 		return m, tea.Quit
@@ -384,9 +412,38 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case " ":
 			m.toggleSelection()
 			return m, nil
+		case "/":
+			m.searchMode = true
+			m.searchInput.Focus()
+			return m, textinput.Blink
 		}
 	}
 	return m, nil
+}
+
+// handleSearchKey processes keyboard input during search mode.
+func (m Model) handleSearchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.Type {
+	case tea.KeyCtrlC:
+		return m, tea.Quit
+	case tea.KeyEsc:
+		m.searchMode = false
+		m.searchQuery = ""
+		m.searchInput.SetValue("")
+		m.searchInput.Blur()
+		m.rebuildVisible()
+		return m, nil
+	case tea.KeyEnter:
+		m.searchMode = false
+		m.searchInput.Blur()
+		return m, nil
+	}
+
+	var cmd tea.Cmd
+	m.searchInput, cmd = m.searchInput.Update(msg)
+	m.searchQuery = m.searchInput.Value()
+	m.rebuildVisible()
+	return m, cmd
 }
 
 // handleDetailKey processes keyboard input when the detail view is active.
@@ -543,8 +600,12 @@ func (m *Model) adjustOffset() {
 // visibleRows returns how many table rows fit in the viewport.
 func (m Model) visibleRows() int {
 	// Reserve lines for: header (2), column headers (1), status bar (2), padding (1).
-	const reservedLines = 6
-	visible := m.height - reservedLines
+	reserved := 6
+	// Extra line for search bar when active.
+	if m.searchMode || m.searchQuery != "" {
+		reserved++
+	}
+	visible := m.height - reserved
 	if visible < 1 {
 		visible = 1
 	}
@@ -776,12 +837,17 @@ func (m *Model) applyResults(results []*checker.UpdateResult) {
 	}
 }
 
-// rebuildVisible recomputes the visible slice based on the current showAll flag.
-// In filtered mode (showAll=false), only actionable rows are shown:
+// rebuildVisible recomputes the visible slice based on the current showAll flag
+// and search query. In filtered mode (showAll=false), only actionable rows are shown:
 // updating, selected, unchecked (pending), or having an update/error.
 func (m *Model) rebuildVisible() {
 	m.visible = m.visible[:0]
+	query := strings.ToLower(m.searchQuery)
 	for i, r := range m.rows {
+		// Apply search filter.
+		if query != "" && !strings.Contains(strings.ToLower(r.app.Name), query) {
+			continue
+		}
 		if m.showAll {
 			m.visible = append(m.visible, i)
 			continue
@@ -845,6 +911,16 @@ func (m Model) View() string {
 		b.WriteString("\n")
 		b.WriteString(m.renderStatusBar())
 		return b.String()
+	}
+
+	// Search bar (shown when in search mode or when a query is active).
+	if m.searchMode {
+		b.WriteString(m.searchInput.View())
+		b.WriteString("\n")
+	} else if m.searchQuery != "" {
+		b.WriteString(lipgloss.NewStyle().Foreground(colorGray).Render(
+			fmt.Sprintf("  filtered: %q (/ to search, esc to clear)", m.searchQuery)))
+		b.WriteString("\n")
 	}
 
 	// Column headers.
@@ -981,6 +1057,10 @@ func (m Model) renderRow(index int, isCursor bool, isSelected bool) string {
 		latest = r.result.LatestVersion
 		rawSource = r.result.Source
 		status = stylePinned.Render("pinned")
+	} else if r.result.HasUpdate && r.result.IsMajorUpdate {
+		latest = r.result.LatestVersion
+		rawSource = r.result.Source
+		status = styleMajorUpdate.Render("MAJOR update")
 	} else if r.result.HasUpdate {
 		latest = r.result.LatestVersion
 		rawSource = r.result.Source
@@ -1047,7 +1127,12 @@ func (m Model) renderStatusBar() string {
 		helpParts = append(helpParts, "s: schedule")
 	}
 
-	helpParts = append(helpParts, "r: refresh", "q: quit")
+	helpParts = append(helpParts, "/: search", "r: refresh", "q: quit")
+
+	// Append last-checked timestamp.
+	if m.cfg != nil {
+		helpParts = append(helpParts, "last checked: "+formatRelativeTime(m.cfg.LastChecked))
+	}
 
 	help := styleStatusBar.Render(strings.Join(helpParts, " | "))
 
@@ -1057,6 +1142,24 @@ func (m Model) renderStatusBar() string {
 	}
 
 	return help + msg
+}
+
+// formatRelativeTime returns a human-readable relative time string.
+func formatRelativeTime(t time.Time) string {
+	if t.IsZero() {
+		return "never"
+	}
+	d := time.Since(t)
+	switch {
+	case d < time.Minute:
+		return "just now"
+	case d < time.Hour:
+		return fmt.Sprintf("%dm ago", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh ago", int(d.Hours()))
+	default:
+		return fmt.Sprintf("%dd ago", int(d.Hours()/24))
+	}
 }
 
 // columnWidths returns proportional widths for each column based on terminal width.

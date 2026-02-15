@@ -72,6 +72,9 @@ var sourceStyleSystem = lipgloss.NewStyle().Foreground(colorWhite).Bold(true)
 // Status style for pinned apps.
 var stylePinned = lipgloss.NewStyle().Foreground(colorBlue).Bold(true)
 
+// Status style for major version upgrades.
+var styleMajorUpdate = lipgloss.NewStyle().Foreground(colorRed).Bold(true)
+
 // styledSource returns the source name rendered in its color.
 func styledSource(source string) string {
 	// Handle +brew suffix: style the base source, then append styled "+brew".

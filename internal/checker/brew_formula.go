@@ -74,6 +74,7 @@ func (b *BrewFormulaChecker) Check(ctx context.Context, a *app.App) (*UpdateResu
 				CurrentVersion: a.Version,
 				LatestVersion:  latestVersion,
 				HasUpdate:      version.IsNewer(a.Version, latestVersion),
+				IsMajorUpdate:  version.IsMajorUpgrade(a.Version, latestVersion),
 			}, nil
 		}
 	}

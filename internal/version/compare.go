@@ -61,6 +61,28 @@ func normalize(v string) string {
 	}
 }
 
+// IsMajorUpgrade reports whether latest has a higher major version than current.
+// Returns false for non-semver versions, pure build numbers, or when latest is not newer.
+func IsMajorUpgrade(current, latest string) bool {
+	if current == "" || latest == "" {
+		return false
+	}
+
+	// Pure integer build numbers (e.g., "100" → "200") are not real major upgrades.
+	if _, err := strconv.Atoi(strings.TrimPrefix(current, "v")); err == nil {
+		return false
+	}
+
+	cv, errC := semver.NewVersion(normalize(current))
+	lv, errL := semver.NewVersion(normalize(latest))
+
+	if errC != nil || errL != nil {
+		return false
+	}
+
+	return lv.Major() > cv.Major()
+}
+
 // stringFallback compares versions that semver can't parse by splitting
 // on '.' and comparing each numeric segment left to right.
 func stringFallback(current, latest string) bool {

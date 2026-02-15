@@ -47,3 +47,36 @@ func TestIsNewer(t *testing.T) {
 		})
 	}
 }
+
+func TestIsMajorUpgrade(t *testing.T) {
+	tests := []struct {
+		name    string
+		current string
+		latest  string
+		want    bool
+	}{
+		{"major bump", "1.0.0", "2.0.0", true},
+		{"same major", "1.0.0", "1.1.0", false},
+		{"same version", "1.0.0", "1.0.0", false},
+		{"downgrade major", "2.0.0", "1.0.0", false},
+		{"v prefix major bump", "v4.0.0", "v5.0.0", true},
+		{"two-part major bump", "1.0", "2.0", true},
+		{"two-part same major", "1.0", "1.5", false},
+		{"build number bump", "100", "200", false},
+		{"empty current", "", "2.0.0", false},
+		{"empty latest", "1.0.0", "", false},
+		{"both empty", "", "", false},
+		{"non-semver", "alpha", "beta", false},
+		{"large major bump", "1.2.3", "5.0.0", true},
+		{"pre-release major bump", "1.0.0-beta", "2.0.0", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := IsMajorUpgrade(tt.current, tt.latest)
+			if got != tt.want {
+				t.Errorf("IsMajorUpgrade(%q, %q) = %v, want %v",
+					tt.current, tt.latest, got, tt.want)
+			}
+		})
+	}
+}

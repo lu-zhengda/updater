@@ -128,6 +128,7 @@ func (s *SparkleChecker) Check(ctx context.Context, a *app.App) (*UpdateResult, 
 		DownloadURL:    item.Enclosure.URL,
 		ReleaseNotes:   item.ReleaseNotesLink,
 		HasUpdate:      hasUpdate,
+		IsMajorUpdate:  version.IsMajorUpgrade(a.Version, latestVersion),
 		StaleSource:    stale,
 	}, nil
 }

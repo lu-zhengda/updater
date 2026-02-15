@@ -89,5 +89,6 @@ func (e *ElectronChecker) Check(ctx context.Context, a *app.App) (*UpdateResult,
 		LatestVersion:  latest.Version,
 		DownloadURL:    downloadURL,
 		HasUpdate:      version.IsNewer(a.Version, latest.Version),
+		IsMajorUpdate:  version.IsMajorUpgrade(a.Version, latest.Version),
 	}, nil
 }

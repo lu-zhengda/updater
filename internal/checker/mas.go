@@ -68,6 +68,7 @@ func (m *MASChecker) Check(ctx context.Context, a *app.App) (*UpdateResult, erro
 				CurrentVersion: a.Version,
 				LatestVersion:  item.LatestVersion,
 				HasUpdate:      version.IsNewer(a.Version, item.LatestVersion),
+				IsMajorUpdate:  version.IsMajorUpgrade(a.Version, item.LatestVersion),
 			}, nil
 		}
 	}
@@ -82,6 +83,7 @@ func (m *MASChecker) Check(ctx context.Context, a *app.App) (*UpdateResult, erro
 				CurrentVersion: a.Version,
 				LatestVersion:  item.LatestVersion,
 				HasUpdate:      version.IsNewer(a.Version, item.LatestVersion),
+				IsMajorUpdate:  version.IsMajorUpgrade(a.Version, item.LatestVersion),
 			}, nil
 		}
 	}

@@ -23,6 +23,7 @@ type UpdateResult struct {
 	DownloadURL    string
 	ReleaseNotes   string
 	HasUpdate      bool
+	IsMajorUpdate  bool // true when latest has a higher major version
 	StaleSource    bool // true when the source's latest is older than installed
 	Error          error
 }

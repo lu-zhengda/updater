@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -19,6 +20,7 @@ type Config struct {
 	MaxBackups       int               `yaml:"max_backups"`
 	ScheduleOffered  bool              `yaml:"schedule_offered"`
 	ScheduleInterval int               `yaml:"schedule_interval"`
+	LastChecked      time.Time         `yaml:"last_checked,omitempty"`
 	ignoredSet       map[string]bool   `yaml:"-"`
 	pinnedSet        map[string]bool   `yaml:"-"`
 }

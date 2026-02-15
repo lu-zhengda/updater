@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"text/tabwriter"
+	"time"
 
 	"github.com/luzhengda/updater/internal/app"
 	"github.com/luzhengda/updater/internal/checker"
@@ -59,6 +60,9 @@ func runCheck(cmd *cobra.Command, args []string) error {
 	results := checkAll(ctx, apps, checkers, cfg.MaxConcurrentOrDefault())
 
 	printCheckResults(cmd, results, cfg)
+
+	cfg.LastChecked = time.Now()
+	_ = cfg.Save(config.DefaultPath())
 	return nil
 }
 
@@ -366,6 +370,9 @@ func printCheckResults(cmd *cobra.Command, results []*checker.UpdateResult, cfg 
 		if r.HasUpdate && cfg.IsPinned(r.App.BundleID) {
 			pinnedCount++
 			fmt.Fprintf(w, "%s\t%s\t%s\t%s\tPINNED\n", r.App.Name, r.CurrentVersion, r.LatestVersion, src)
+		} else if r.HasUpdate && r.IsMajorUpdate {
+			updateCount++
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\tMAJOR UPDATE\n", r.App.Name, r.CurrentVersion, r.LatestVersion, src)
 		} else if r.HasUpdate {
 			updateCount++
 			fmt.Fprintf(w, "%s\t%s\t%s\t%s\tUPDATE AVAILABLE\n", r.App.Name, r.CurrentVersion, r.LatestVersion, src)

@@ -3,7 +3,9 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 )
 
 func TestLoadConfig(t *testing.T) {
@@ -299,6 +301,47 @@ func TestScheduleFieldsPersist(t *testing.T) {
 	}
 	if loaded.ScheduleInterval != 12 {
 		t.Errorf("ScheduleInterval = %d, want 12", loaded.ScheduleInterval)
+	}
+}
+
+func TestLastCheckedPersists(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+
+	now := time.Now().Truncate(time.Second)
+	cfg := defaultConfig()
+	cfg.LastChecked = now
+
+	if err := cfg.Save(cfgPath); err != nil {
+		t.Fatalf("Save failed: %v", err)
+	}
+
+	loaded, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+
+	if !loaded.LastChecked.Equal(now) {
+		t.Errorf("LastChecked = %v, want %v", loaded.LastChecked, now)
+	}
+}
+
+func TestLastCheckedOmittedWhenZero(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+
+	cfg := defaultConfig()
+	if err := cfg.Save(cfgPath); err != nil {
+		t.Fatalf("Save failed: %v", err)
+	}
+
+	data, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatalf("ReadFile failed: %v", err)
+	}
+
+	if strings.Contains(string(data), "last_checked") {
+		t.Error("expected last_checked to be omitted when zero")
 	}
 }
 
