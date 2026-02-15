@@ -2,10 +2,12 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"strings"
+	"text/tabwriter"
 	"time"
 
 	"github.com/luzhengda/updater/internal/app"
@@ -18,8 +20,10 @@ import (
 )
 
 var (
-	flagAll  bool
-	flagAuto bool
+	flagAll        bool
+	flagAuto       bool
+	flagDryRun     bool
+	flagDryRunJSON bool
 )
 
 var updateCmd = &cobra.Command{
@@ -31,6 +35,8 @@ var updateCmd = &cobra.Command{
 func init() {
 	updateCmd.Flags().BoolVar(&flagAll, "all", false, "update all apps with available updates")
 	updateCmd.Flags().BoolVar(&flagAuto, "auto", false, "unattended mode (no prompts)")
+	updateCmd.Flags().BoolVar(&flagDryRun, "dry-run", false, "show what would be updated without making changes")
+	updateCmd.Flags().BoolVar(&flagDryRunJSON, "json", false, "output dry run results as JSON (requires --dry-run)")
 	rootCmd.AddCommand(updateCmd)
 }
 
@@ -144,6 +150,11 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 
 	// Execute updates. When using --all, skip pinned apps unless explicitly named.
 	isExplicit := len(args) > 0 && !flagAll
+
+	if flagDryRun {
+		return printDryRun(cmd, updatable, isExplicit, cfg)
+	}
+
 	for _, r := range updatable {
 		if !isExplicit && cfg.IsPinned(r.App.BundleID) {
 			fmt.Fprintf(cmd.OutOrStdout(), "Skipping %s (pinned)\n", r.App.Name)
@@ -379,4 +390,102 @@ func quitAppIfRunning(ctx context.Context, a *app.App, runner checker.CmdRunner)
 // openForSelfUpdate opens an app so it can self-update via its built-in updater.
 func openForSelfUpdate(ctx context.Context, a *app.App, runner checker.CmdRunner) {
 	_, _ = runner.Run(ctx, "open", "-a", a.Path)
+}
+
+// describeAction returns a human-readable action string for each update source.
+func describeAction(r *checker.UpdateResult) string {
+	switch r.Source {
+	case "brew", "brew-info":
+		if r.App.InstalledViaBrew && r.App.CaskName != "" {
+			return fmt.Sprintf("brew upgrade --cask %s", r.App.CaskName)
+		}
+		return "open app for self-update"
+	case "mas":
+		if r.App.MASID != "" {
+			return fmt.Sprintf("mas upgrade %s", r.App.MASID)
+		}
+		return "open App Store"
+	case "formula":
+		return fmt.Sprintf("brew upgrade %s", r.App.FormulaName)
+	case "system":
+		return "open Software Update"
+	case "sparkle", "github":
+		if r.DownloadURL != "" && r.App.Path != "" {
+			return "direct install"
+		}
+		return "open download URL"
+	case "electron":
+		if r.DownloadURL != "" && r.App.Path != "" {
+			return "direct install"
+		}
+		return "open app for self-update"
+	case "setapp":
+		return "open Setapp"
+	case "toolbox":
+		return "open JetBrains Toolbox"
+	case "adobe":
+		return "open Adobe Creative Cloud"
+	default:
+		return "unsupported source"
+	}
+}
+
+// printDryRun displays what updates would be applied without making changes.
+func printDryRun(cmd *cobra.Command, updatable []*checker.UpdateResult, isExplicit bool, cfg *config.Config) error {
+	var planned []*checker.UpdateResult
+	for _, r := range updatable {
+		if !isExplicit && cfg.IsPinned(r.App.BundleID) {
+			continue
+		}
+		if !isExplicit && cfg.Policy(r.App.BundleID) == config.PolicyNotifyOnly {
+			continue
+		}
+		planned = append(planned, r)
+	}
+
+	if len(planned) == 0 {
+		fmt.Fprintln(cmd.OutOrStdout(), "DRY RUN — nothing to update.")
+		return nil
+	}
+
+	if flagDryRunJSON {
+		return printDryRunJSON(cmd, planned)
+	}
+
+	fmt.Fprintf(cmd.OutOrStdout(), "DRY RUN — no changes will be made\n\n")
+	w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
+	fmt.Fprintln(w, "APP\tFROM\tTO\tSOURCE\tACTION")
+	for _, r := range planned {
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
+			r.App.Name, r.CurrentVersion, r.LatestVersion, r.Source, describeAction(r))
+	}
+	w.Flush()
+	fmt.Fprintf(cmd.OutOrStdout(), "\n%d update(s) would be applied.\n", len(planned))
+	return nil
+}
+
+// dryRunEntry represents a single entry in the JSON dry-run output.
+type dryRunEntry struct {
+	App    string `json:"app"`
+	From   string `json:"from"`
+	To     string `json:"to"`
+	Source string `json:"source"`
+	Action string `json:"action"`
+}
+
+// printDryRunJSON outputs planned updates as a JSON array.
+func printDryRunJSON(cmd *cobra.Command, planned []*checker.UpdateResult) error {
+	entries := make([]dryRunEntry, len(planned))
+	for i, r := range planned {
+		entries[i] = dryRunEntry{
+			App:    r.App.Name,
+			From:   r.CurrentVersion,
+			To:     r.LatestVersion,
+			Source: r.Source,
+			Action: describeAction(r),
+		}
+	}
+	enc := json.NewEncoder(cmd.OutOrStdout())
+	enc.SetIndent("", "  ")
+	return enc.Encode(entries)
 }
