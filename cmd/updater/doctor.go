@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/lu-zhengda/updater/internal/app"
@@ -75,6 +76,15 @@ func runDoctor(cmd *cobra.Command, _ []string) error {
 
 	// Network.
 	checks = append(checks, checkNetwork())
+
+	// Disk space.
+	checks = append(checks, checkDiskSpace())
+
+	// Brew index freshness.
+	checks = append(checks, checkBrewFreshness(ctx, runner))
+
+	// Sparkle feed connectivity.
+	checks = append(checks, checkSparkleFeedConnectivity())
 
 	if flagDoctorJSON {
 		enc := json.NewEncoder(cmd.OutOrStdout())
@@ -292,4 +302,65 @@ func checkNetwork() doctorCheck {
 	}
 	resp.Body.Close()
 	return doctorCheck{Name: "Network", Status: "ok", Detail: "reachable"}
+}
+
+func checkDiskSpace() doctorCheck {
+	var stat syscall.Statfs_t
+	if err := syscall.Statfs("/", &stat); err != nil {
+		return doctorCheck{Name: "Disk space", Status: "warning", Detail: fmt.Sprintf("error: %v", err)}
+	}
+	freeGB := float64(stat.Bavail) * float64(stat.Bsize) / (1 << 30)
+	if freeGB < 1.0 {
+		return doctorCheck{Name: "Disk space", Status: "warning", Detail: fmt.Sprintf("%.1f GB free (low)", freeGB)}
+	}
+	return doctorCheck{Name: "Disk space", Status: "ok", Detail: fmt.Sprintf("%.1f GB free", freeGB)}
+}
+
+func checkBrewFreshness(ctx context.Context, runner checker.CmdRunner) doctorCheck {
+	output, err := runner.Run(ctx, "brew", "--cache")
+	if err != nil {
+		return doctorCheck{Name: "Brew index", Status: "warning", Detail: "brew not available"}
+	}
+	cacheDir := strings.TrimSpace(string(output))
+	info, err := os.Stat(cacheDir)
+	if err != nil {
+		return doctorCheck{Name: "Brew index", Status: "ok", Detail: "no cache directory"}
+	}
+	age := time.Since(info.ModTime())
+	days := int(age.Hours() / 24)
+	if days > 7 {
+		return doctorCheck{Name: "Brew index", Status: "warning", Detail: fmt.Sprintf("stale (%d days since last update)", days)}
+	}
+	return doctorCheck{Name: "Brew index", Status: "ok", Detail: fmt.Sprintf("fresh (%d days)", days)}
+}
+
+func checkSparkleFeedConnectivity() doctorCheck {
+	apps, err := discoverApps()
+	if err != nil {
+		return doctorCheck{Name: "Sparkle feeds", Status: "warning", Detail: "cannot discover apps"}
+	}
+	var feedURLs []string
+	for _, a := range apps {
+		if a.FeedURL != "" && len(feedURLs) < 3 {
+			feedURLs = append(feedURLs, a.FeedURL)
+		}
+	}
+	if len(feedURLs) == 0 {
+		return doctorCheck{Name: "Sparkle feeds", Status: "ok", Detail: "no feeds to check"}
+	}
+	client := &http.Client{Timeout: 5 * time.Second}
+	reachable := 0
+	for _, u := range feedURLs {
+		resp, err := client.Get(u)
+		if err == nil {
+			resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				reachable++
+			}
+		}
+	}
+	if reachable == len(feedURLs) {
+		return doctorCheck{Name: "Sparkle feeds", Status: "ok", Detail: fmt.Sprintf("%d/%d reachable", reachable, len(feedURLs))}
+	}
+	return doctorCheck{Name: "Sparkle feeds", Status: "warning", Detail: fmt.Sprintf("%d/%d reachable", reachable, len(feedURLs))}
 }
