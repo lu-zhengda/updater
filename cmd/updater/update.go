@@ -41,6 +41,10 @@ func init() {
 }
 
 func runUpdate(cmd *cobra.Command, args []string) error {
+	if flagDryRunJSON && !flagDryRun {
+		return fmt.Errorf("--json requires --dry-run flag")
+	}
+
 	ctx := cmd.Context()
 
 	cfg, err := config.Load(config.DefaultPath())
