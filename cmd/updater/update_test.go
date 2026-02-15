@@ -1,17 +1,21 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/luzhengda/updater/internal/app"
 	"github.com/luzhengda/updater/internal/backup"
 	"github.com/luzhengda/updater/internal/checker"
+	"github.com/luzhengda/updater/internal/config"
+	"github.com/spf13/cobra"
 )
 
 // createFakeBackup manually creates a backup directory structure that
@@ -126,5 +130,417 @@ func TestRollback_NilManager(t *testing.T) {
 	rolledBack := rollbackAfterFailedInstall(context.Background(), nil, "TestApp")
 	if rolledBack {
 		t.Error("expected rollback to return false with nil manager")
+	}
+}
+
+func TestDescribeAction(t *testing.T) {
+	tests := []struct {
+		name   string
+		result *checker.UpdateResult
+		want   string
+	}{
+		{
+			name: "brew cask installed via brew",
+			result: &checker.UpdateResult{
+				App:    &app.App{CaskName: "firefox", InstalledViaBrew: true},
+				Source: "brew",
+			},
+			want: "brew upgrade --cask firefox",
+		},
+		{
+			name: "brew not installed via brew",
+			result: &checker.UpdateResult{
+				App:    &app.App{CaskName: "firefox", InstalledViaBrew: false},
+				Source: "brew",
+			},
+			want: "open app for self-update",
+		},
+		{
+			name: "brew-info installed via brew",
+			result: &checker.UpdateResult{
+				App:    &app.App{CaskName: "iterm2", InstalledViaBrew: true},
+				Source: "brew-info",
+			},
+			want: "brew upgrade --cask iterm2",
+		},
+		{
+			name: "brew-info not installed via brew",
+			result: &checker.UpdateResult{
+				App:    &app.App{InstalledViaBrew: false},
+				Source: "brew-info",
+			},
+			want: "open app for self-update",
+		},
+		{
+			name: "mas with MASID",
+			result: &checker.UpdateResult{
+				App:    &app.App{MASID: "441258766"},
+				Source: "mas",
+			},
+			want: "mas upgrade 441258766",
+		},
+		{
+			name: "mas without MASID",
+			result: &checker.UpdateResult{
+				App:    &app.App{},
+				Source: "mas",
+			},
+			want: "open App Store",
+		},
+		{
+			name: "formula",
+			result: &checker.UpdateResult{
+				App:    &app.App{FormulaName: "node"},
+				Source: "formula",
+			},
+			want: "brew upgrade node",
+		},
+		{
+			name: "system",
+			result: &checker.UpdateResult{
+				App:    &app.App{},
+				Source: "system",
+			},
+			want: "open Software Update",
+		},
+		{
+			name: "sparkle with download URL and path",
+			result: &checker.UpdateResult{
+				App:         &app.App{Path: "/Applications/App.app"},
+				Source:      "sparkle",
+				DownloadURL: "https://example.com/app.dmg",
+			},
+			want: "direct install",
+		},
+		{
+			name: "sparkle without download URL",
+			result: &checker.UpdateResult{
+				App:    &app.App{Path: "/Applications/App.app"},
+				Source: "sparkle",
+			},
+			want: "open download URL",
+		},
+		{
+			name: "github with download URL and path",
+			result: &checker.UpdateResult{
+				App:         &app.App{Path: "/Applications/App.app"},
+				Source:      "github",
+				DownloadURL: "https://github.com/owner/repo/releases/download/v1.0/app.dmg",
+			},
+			want: "direct install",
+		},
+		{
+			name: "github without download URL",
+			result: &checker.UpdateResult{
+				App:    &app.App{},
+				Source: "github",
+			},
+			want: "open download URL",
+		},
+		{
+			name: "electron with download URL and path",
+			result: &checker.UpdateResult{
+				App:         &app.App{Path: "/Applications/App.app"},
+				Source:      "electron",
+				DownloadURL: "https://example.com/app.dmg",
+			},
+			want: "direct install",
+		},
+		{
+			name: "electron without download URL",
+			result: &checker.UpdateResult{
+				App:    &app.App{},
+				Source: "electron",
+			},
+			want: "open app for self-update",
+		},
+		{
+			name: "setapp",
+			result: &checker.UpdateResult{
+				App:    &app.App{},
+				Source: "setapp",
+			},
+			want: "open Setapp",
+		},
+		{
+			name: "toolbox",
+			result: &checker.UpdateResult{
+				App:    &app.App{},
+				Source: "toolbox",
+			},
+			want: "open JetBrains Toolbox",
+		},
+		{
+			name: "adobe",
+			result: &checker.UpdateResult{
+				App:    &app.App{},
+				Source: "adobe",
+			},
+			want: "open Adobe Creative Cloud",
+		},
+		{
+			name: "unknown source",
+			result: &checker.UpdateResult{
+				App:    &app.App{},
+				Source: "something-else",
+			},
+			want: "unsupported source",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := describeAction(tt.result)
+			if got != tt.want {
+				t.Errorf("describeAction() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestPrintDryRun_Table(t *testing.T) {
+	cmd := &cobra.Command{}
+	buf := &bytes.Buffer{}
+	cmd.SetOut(buf)
+
+	cfg := &config.Config{}
+
+	updatable := []*checker.UpdateResult{
+		{
+			App:            &app.App{Name: "Firefox", BundleID: "org.mozilla.firefox", CaskName: "firefox", InstalledViaBrew: true},
+			Source:         "brew",
+			CurrentVersion: "120.0",
+			LatestVersion:  "121.0",
+		},
+		{
+			App:            &app.App{Name: "Keynote", BundleID: "com.apple.iWork.Keynote", MASID: "409183694"},
+			Source:         "mas",
+			CurrentVersion: "13.0",
+			LatestVersion:  "14.0",
+		},
+	}
+
+	err := printDryRun(cmd, updatable, false, cfg)
+	if err != nil {
+		t.Fatalf("printDryRun() error = %v", err)
+	}
+
+	out := buf.String()
+
+	// Verify header columns.
+	for _, header := range []string{"APP", "FROM", "TO", "SOURCE", "ACTION"} {
+		if !strings.Contains(out, header) {
+			t.Errorf("output missing header %q", header)
+		}
+	}
+
+	// Verify content rows.
+	if !strings.Contains(out, "Firefox") {
+		t.Error("output missing Firefox")
+	}
+	if !strings.Contains(out, "120.0") {
+		t.Error("output missing version 120.0")
+	}
+	if !strings.Contains(out, "121.0") {
+		t.Error("output missing version 121.0")
+	}
+	if !strings.Contains(out, "brew upgrade --cask firefox") {
+		t.Error("output missing brew upgrade action")
+	}
+	if !strings.Contains(out, "Keynote") {
+		t.Error("output missing Keynote")
+	}
+	if !strings.Contains(out, "mas upgrade 409183694") {
+		t.Error("output missing mas upgrade action")
+	}
+	if !strings.Contains(out, "DRY RUN") {
+		t.Error("output missing DRY RUN header")
+	}
+	if !strings.Contains(out, "2 update(s) would be applied") {
+		t.Error("output missing update count summary")
+	}
+}
+
+func TestPrintDryRun_JSON(t *testing.T) {
+	flagDryRunJSON = true
+	defer func() { flagDryRunJSON = false }()
+
+	cmd := &cobra.Command{}
+	buf := &bytes.Buffer{}
+	cmd.SetOut(buf)
+
+	cfg := &config.Config{}
+
+	updatable := []*checker.UpdateResult{
+		{
+			App:            &app.App{Name: "Firefox", BundleID: "org.mozilla.firefox", CaskName: "firefox", InstalledViaBrew: true},
+			Source:         "brew",
+			CurrentVersion: "120.0",
+			LatestVersion:  "121.0",
+		},
+	}
+
+	err := printDryRun(cmd, updatable, false, cfg)
+	if err != nil {
+		t.Fatalf("printDryRun() error = %v", err)
+	}
+
+	var entries []dryRunEntry
+	if err := json.Unmarshal(buf.Bytes(), &entries); err != nil {
+		t.Fatalf("failed to parse JSON output: %v\n%s", err, buf.String())
+	}
+
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(entries))
+	}
+
+	e := entries[0]
+	if e.App != "Firefox" {
+		t.Errorf("App = %q, want %q", e.App, "Firefox")
+	}
+	if e.From != "120.0" {
+		t.Errorf("From = %q, want %q", e.From, "120.0")
+	}
+	if e.To != "121.0" {
+		t.Errorf("To = %q, want %q", e.To, "121.0")
+	}
+	if e.Source != "brew" {
+		t.Errorf("Source = %q, want %q", e.Source, "brew")
+	}
+	if e.Action != "brew upgrade --cask firefox" {
+		t.Errorf("Action = %q, want %q", e.Action, "brew upgrade --cask firefox")
+	}
+}
+
+func TestPrintDryRun_Empty(t *testing.T) {
+	cmd := &cobra.Command{}
+	buf := &bytes.Buffer{}
+	cmd.SetOut(buf)
+
+	cfg := &config.Config{}
+	cfg.Pin("com.test.pinned")
+
+	// All apps are pinned — nothing to update.
+	updatable := []*checker.UpdateResult{
+		{
+			App:            &app.App{Name: "PinnedApp", BundleID: "com.test.pinned"},
+			Source:         "brew",
+			CurrentVersion: "1.0",
+			LatestVersion:  "2.0",
+		},
+	}
+
+	err := printDryRun(cmd, updatable, false, cfg)
+	if err != nil {
+		t.Fatalf("printDryRun() error = %v", err)
+	}
+
+	out := buf.String()
+	if !strings.Contains(out, "nothing to update") {
+		t.Errorf("expected 'nothing to update' message, got: %s", out)
+	}
+}
+
+func TestPrintDryRun_SkipsPinned(t *testing.T) {
+	cmd := &cobra.Command{}
+	buf := &bytes.Buffer{}
+	cmd.SetOut(buf)
+
+	cfg := &config.Config{}
+	cfg.Pin("com.test.pinned")
+
+	updatable := []*checker.UpdateResult{
+		{
+			App:            &app.App{Name: "PinnedApp", BundleID: "com.test.pinned", CaskName: "pinned", InstalledViaBrew: true},
+			Source:         "brew",
+			CurrentVersion: "1.0",
+			LatestVersion:  "2.0",
+		},
+		{
+			App:            &app.App{Name: "NormalApp", BundleID: "com.test.normal", CaskName: "normal", InstalledViaBrew: true},
+			Source:         "brew",
+			CurrentVersion: "3.0",
+			LatestVersion:  "4.0",
+		},
+	}
+
+	err := printDryRun(cmd, updatable, false, cfg)
+	if err != nil {
+		t.Fatalf("printDryRun() error = %v", err)
+	}
+
+	out := buf.String()
+	if strings.Contains(out, "PinnedApp") {
+		t.Error("pinned app should be excluded from dry run output")
+	}
+	if !strings.Contains(out, "NormalApp") {
+		t.Error("normal app should be included in dry run output")
+	}
+	if !strings.Contains(out, "1 update(s) would be applied") {
+		t.Errorf("expected 1 update count, got: %s", out)
+	}
+}
+
+func TestPrintDryRun_SkipsNotifyOnly(t *testing.T) {
+	cmd := &cobra.Command{}
+	buf := &bytes.Buffer{}
+	cmd.SetOut(buf)
+
+	cfg := &config.Config{}
+	cfg.SetPolicy("com.test.notify", config.PolicyNotifyOnly)
+
+	updatable := []*checker.UpdateResult{
+		{
+			App:            &app.App{Name: "NotifyApp", BundleID: "com.test.notify", CaskName: "notify", InstalledViaBrew: true},
+			Source:         "brew",
+			CurrentVersion: "1.0",
+			LatestVersion:  "2.0",
+		},
+		{
+			App:            &app.App{Name: "AutoApp", BundleID: "com.test.auto", CaskName: "auto", InstalledViaBrew: true},
+			Source:         "brew",
+			CurrentVersion: "5.0",
+			LatestVersion:  "6.0",
+		},
+	}
+
+	err := printDryRun(cmd, updatable, false, cfg)
+	if err != nil {
+		t.Fatalf("printDryRun() error = %v", err)
+	}
+
+	out := buf.String()
+	if strings.Contains(out, "NotifyApp") {
+		t.Error("notify-only app should be excluded from dry run output")
+	}
+	if !strings.Contains(out, "AutoApp") {
+		t.Error("auto app should be included in dry run output")
+	}
+}
+
+func TestRunUpdate_JSONRequiresDryRun(t *testing.T) {
+	// Save and restore global flags.
+	origJSON := flagDryRunJSON
+	origDryRun := flagDryRun
+	defer func() {
+		flagDryRunJSON = origJSON
+		flagDryRun = origDryRun
+	}()
+
+	flagDryRunJSON = true
+	flagDryRun = false
+
+	cmd := &cobra.Command{
+		RunE: runUpdate,
+	}
+	buf := &bytes.Buffer{}
+	cmd.SetOut(buf)
+
+	err := cmd.RunE(cmd, nil)
+	if err == nil {
+		t.Fatal("expected error when --json used without --dry-run")
+	}
+	if !strings.Contains(err.Error(), "--json requires --dry-run") {
+		t.Errorf("unexpected error message: %v", err)
 	}
 }
