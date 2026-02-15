@@ -220,6 +220,10 @@ make test     # Run tests with race detection
 make clean    # Remove binary
 ```
 
+## Claude Code
+
+Available as a skill in the [macos-toolkit](https://github.com/lu-zhengda/macos-toolkit) Claude Code plugin. Ask Claude "check for updates" or "update Firefox" and it runs updater automatically.
+
 ## License
 
 MIT
