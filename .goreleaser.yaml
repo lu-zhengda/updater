@@ -29,11 +29,16 @@ universal_binaries:
     replace: true
 
 archives:
-  - formats:
+  - id: updater
+    builds:
+      - updater
+      - updater-menubar
+    formats:
       - tar.gz
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}"
     files:
       - completions/*
+    allow_different_binary_count: true
 
 checksum:
   name_template: "checksums.txt"
