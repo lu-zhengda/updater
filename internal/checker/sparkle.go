@@ -98,7 +98,7 @@ func (s *SparkleChecker) Check(ctx context.Context, a *app.App) (*UpdateResult, 
 
 	// Find the best matching item: filter by macOS version, pick the last
 	// compatible item (feeds often list oldest first, newest last, or newest first).
-	macOSVersion := getMacOSVersion()
+	macOSVersion := getMacOSVersionFn()
 	item := findBestItem(rss.Channel.Items, macOSVersion)
 
 	// Extract version: prefer enclosure attributes (most common in real feeds),
@@ -147,7 +147,7 @@ func findBestItem(items []sparkleItem, macOSVersion string) sparkleItem {
 			}
 		}
 		if item.MaxSystemVersion != "" && macOSVersion != "" {
-			if version.IsNewer(macOSVersion, item.MaxSystemVersion) {
+			if version.IsNewer(item.MaxSystemVersion, macOSVersion) {
 				continue
 			}
 		}
@@ -177,8 +177,9 @@ func findBestItem(items []sparkleItem, macOSVersion string) sparkleItem {
 	return best
 }
 
-// getMacOSVersion returns the current macOS version (e.g., "15.3").
-func getMacOSVersion() string {
+// getMacOSVersionFn returns the current macOS version (e.g., "15.3").
+// It is a variable so tests can override it.
+var getMacOSVersionFn = func() string {
 	out, err := exec.Command("sw_vers", "-productVersion").Output()
 	if err != nil {
 		return ""

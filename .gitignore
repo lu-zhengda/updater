@@ -1,5 +1,6 @@
 # Binary
 /updater
+/updater-menubar
 
 # GoReleaser
 dist/

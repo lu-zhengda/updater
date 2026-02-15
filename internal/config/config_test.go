@@ -486,3 +486,70 @@ func TestMerge_ScalarOverride(t *testing.T) {
 		t.Errorf("ScheduleInterval = %d, want 24 (zero import should not override)", result.ScheduleInterval)
 	}
 }
+
+func TestPolicy_GetSetRemove(t *testing.T) {
+	cfg := defaultConfig()
+
+	// Default: no policy.
+	if got := cfg.Policy("com.example.app"); got != "" {
+		t.Errorf("Policy() = %q, want empty", got)
+	}
+
+	// Set policy.
+	cfg.SetPolicy("com.example.app", PolicyNotifyOnly)
+	if got := cfg.Policy("com.example.app"); got != PolicyNotifyOnly {
+		t.Errorf("Policy() = %q, want %q", got, PolicyNotifyOnly)
+	}
+
+	// Override policy.
+	cfg.SetPolicy("com.example.app", PolicyManual)
+	if got := cfg.Policy("com.example.app"); got != PolicyManual {
+		t.Errorf("Policy() = %q, want %q", got, PolicyManual)
+	}
+
+	// Remove policy.
+	cfg.RemovePolicy("com.example.app")
+	if got := cfg.Policy("com.example.app"); got != "" {
+		t.Errorf("Policy() = %q, want empty after remove", got)
+	}
+
+	// Remove non-existent (no panic).
+	cfg.RemovePolicy("com.example.nonexistent")
+}
+
+func TestPolicy_DefaultEmpty(t *testing.T) {
+	cfg := &Config{}
+	if got := cfg.Policy("com.example.any"); got != "" {
+		t.Errorf("Policy() on nil map = %q, want empty", got)
+	}
+}
+
+func TestMerge_Policies(t *testing.T) {
+	current := &Config{
+		Policies: map[string]string{
+			"com.a": PolicyAuto,
+			"com.b": PolicyManual,
+		},
+	}
+	current.buildIgnoredSet()
+	current.buildPinnedSet()
+
+	imported := &Config{
+		Policies: map[string]string{
+			"com.b": PolicyNotifyOnly, // override
+			"com.c": PolicyAuto,       // new
+		},
+	}
+
+	result := Merge(current, imported)
+
+	if got := result.Policy("com.a"); got != PolicyAuto {
+		t.Errorf("Policy(com.a) = %q, want %q", got, PolicyAuto)
+	}
+	if got := result.Policy("com.b"); got != PolicyNotifyOnly {
+		t.Errorf("Policy(com.b) = %q, want %q (imported should override)", got, PolicyNotifyOnly)
+	}
+	if got := result.Policy("com.c"); got != PolicyAuto {
+		t.Errorf("Policy(com.c) = %q, want %q", got, PolicyAuto)
+	}
+}

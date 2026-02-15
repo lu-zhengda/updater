@@ -176,3 +176,46 @@ func (r *captureNotifyRunner) Run(_ context.Context, name string, args ...string
 	r.args = args
 	return nil, nil
 }
+
+func TestSendInteractiveNotification(t *testing.T) {
+	captureRunner := &captureNotifyRunner{}
+
+	err := sendInteractiveNotification(context.Background(), captureRunner, 3, "Firefox, Chrome, Safari")
+	if err != nil {
+		t.Fatalf("sendInteractiveNotification failed: %v", err)
+	}
+
+	if captureRunner.name != "osascript" {
+		t.Errorf("expected osascript, got %s", captureRunner.name)
+	}
+	if len(captureRunner.args) < 2 {
+		t.Fatal("expected at least 2 args")
+	}
+	script := captureRunner.args[1]
+	if !strings.Contains(script, "display dialog") {
+		t.Error("expected 'display dialog' in interactive script")
+	}
+	if !strings.Contains(script, "Open Updater") {
+		t.Error("expected 'Open Updater' button in script")
+	}
+	if !strings.Contains(script, "Dismiss") {
+		t.Error("expected 'Dismiss' button in script")
+	}
+}
+
+func TestSendNotification_PassiveDefault(t *testing.T) {
+	captureRunner := &captureNotifyRunner{}
+
+	err := sendNotification(context.Background(), captureRunner, 1, "Firefox (120→121)", "")
+	if err != nil {
+		t.Fatalf("sendNotification failed: %v", err)
+	}
+
+	script := captureRunner.args[1]
+	if !strings.Contains(script, "display notification") {
+		t.Error("expected 'display notification' (passive) for default mode")
+	}
+	if strings.Contains(script, "display dialog") {
+		t.Error("passive mode should NOT use 'display dialog'")
+	}
+}

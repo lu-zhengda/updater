@@ -10,6 +10,7 @@ import (
 	"github.com/luzhengda/updater/internal/backup"
 	"github.com/luzhengda/updater/internal/checker"
 	"github.com/luzhengda/updater/internal/config"
+	"github.com/luzhengda/updater/internal/history"
 	"github.com/luzhengda/updater/internal/installer"
 	"github.com/luzhengda/updater/internal/tui"
 	"github.com/spf13/cobra"
@@ -80,7 +81,8 @@ func runUI(_ *cobra.Command, _ []string) error {
 	}
 
 	updateFn := func(ctx context.Context, result *checker.UpdateResult) error {
-		return executeUpdate(ctx, result, runner, bm, inst)
+		err, _ := executeUpdate(ctx, result, runner, bm, inst)
+		return err
 	}
 
 	scheduleFns := &tui.ScheduleFuncs{
@@ -103,7 +105,10 @@ func runUI(_ *cobra.Command, _ []string) error {
 		},
 	}
 
-	model := tui.NewModel(loadFn, checkFn, updateFn, scheduleFns, cfg, cfgPath)
+	historyFn := func() ([]history.Entry, error) {
+		return history.List(history.DefaultPath())
+	}
+	model := tui.NewModel(loadFn, checkFn, updateFn, scheduleFns, cfg, cfgPath, historyFn)
 	p := tea.NewProgram(model, tea.WithAltScreen())
 
 	if _, err := p.Run(); err != nil {

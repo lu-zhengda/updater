@@ -9,6 +9,13 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// Policy constants for per-app update policies.
+const (
+	PolicyAuto       = "auto"
+	PolicyManual     = "manual"
+	PolicyNotifyOnly = "notify-only"
+)
+
 // Config holds the user configuration for the updater.
 type Config struct {
 	IgnoredApps    []string          `yaml:"ignored_apps"`
@@ -21,6 +28,7 @@ type Config struct {
 	ScheduleOffered  bool              `yaml:"schedule_offered"`
 	ScheduleInterval int               `yaml:"schedule_interval"`
 	LastChecked      time.Time         `yaml:"last_checked,omitempty"`
+	Policies         map[string]string `yaml:"policies,omitempty"` // bundleID → "auto"|"manual"|"notify-only"
 	ignoredSet       map[string]bool   `yaml:"-"`
 	pinnedSet        map[string]bool   `yaml:"-"`
 }
@@ -168,6 +176,28 @@ func (c *Config) Unpin(bundleID string) {
 	c.PinnedApps = filtered
 }
 
+// Policy returns the update policy for the given bundle ID.
+// Returns empty string if no policy is set (defaults to normal behavior).
+func (c *Config) Policy(bundleID string) string {
+	if c.Policies == nil {
+		return ""
+	}
+	return c.Policies[bundleID]
+}
+
+// SetPolicy sets the update policy for the given bundle ID.
+func (c *Config) SetPolicy(bundleID, policy string) {
+	if c.Policies == nil {
+		c.Policies = make(map[string]string)
+	}
+	c.Policies[bundleID] = policy
+}
+
+// RemovePolicy removes the update policy for the given bundle ID.
+func (c *Config) RemovePolicy(bundleID string) {
+	delete(c.Policies, bundleID)
+}
+
 // Merge merges an imported config into the current one and returns the result.
 // Lists are unioned (deduplicated), maps are merged (imported overrides current),
 // and non-zero scalars from imported override current values.
@@ -181,6 +211,7 @@ func Merge(current, imported *Config) *Config {
 	// Merge maps: imported overrides current.
 	result.GitHubMappings = mergeMaps(current.GitHubMappings, imported.GitHubMappings)
 	result.CaskMappings = mergeMaps(current.CaskMappings, imported.CaskMappings)
+	result.Policies = mergeMaps(current.Policies, imported.Policies)
 
 	// Non-zero scalar overrides.
 	if imported.GitHubToken != "" {

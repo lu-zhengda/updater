@@ -17,10 +17,12 @@ type Entry struct {
 	Source      string    `json:"source"`
 	Timestamp   time.Time `json:"timestamp"`
 	Success     bool      `json:"success"`
+	RolledBack  bool      `json:"rolled_back,omitempty"`
 }
 
 // DefaultPath returns the default history file path (~/.local/share/updater/history.json).
-func DefaultPath() string {
+// It is a variable so tests can override it.
+var DefaultPath = func() string {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return ""

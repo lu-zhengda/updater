@@ -105,6 +105,10 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 			if autoSkipSources[r.Source] {
 				continue
 			}
+			policy := cfg.Policy(r.App.BundleID)
+			if policy == config.PolicyManual || policy == config.PolicyNotifyOnly {
+				continue
+			}
 			autoUpdatable = append(autoUpdatable, r)
 		}
 		updatable = autoUpdatable
@@ -145,10 +149,14 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 			fmt.Fprintf(cmd.OutOrStdout(), "Skipping %s (pinned)\n", r.App.Name)
 			continue
 		}
+		if !isExplicit && cfg.Policy(r.App.BundleID) == config.PolicyNotifyOnly {
+			fmt.Fprintf(cmd.OutOrStdout(), "Skipping %s (notify-only)\n", r.App.Name)
+			continue
+		}
 		fmt.Fprintf(cmd.OutOrStdout(), "Updating %s (%s -> %s) via %s...\n",
 			r.App.Name, r.CurrentVersion, r.LatestVersion, r.Source)
 
-		updateErr := executeUpdate(ctx, r, runner, bm, inst)
+		updateErr, rolledBack := executeUpdate(ctx, r, runner, bm, inst)
 		if errors.Is(updateErr, checker.ErrOpenedExternally) {
 			// Not an error — just opened externally for the user to handle.
 		} else if updateErr != nil {
@@ -164,6 +172,7 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 			Source:      r.Source,
 			Timestamp:   time.Now(),
 			Success:     updateErr == nil || errors.Is(updateErr, checker.ErrOpenedExternally),
+			RolledBack:  rolledBack,
 		})
 	}
 
@@ -172,7 +181,8 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 
 // executeUpdate performs the actual update for a single app.
 // It backs up the current version before updating when possible.
-func executeUpdate(ctx context.Context, r *checker.UpdateResult, runner checker.CmdRunner, bm *backup.Manager, inst *installer.Installer) error {
+// Returns the error (if any) and whether a rollback was performed.
+func executeUpdate(ctx context.Context, r *checker.UpdateResult, runner checker.CmdRunner, bm *backup.Manager, inst *installer.Installer) (error, bool) {
 	// Backup before update (non-fatal on failure).
 	if bm != nil && r.App.Path != "" {
 		if err := bm.Backup(ctx, r.App.Name, r.App.BundleID, r.CurrentVersion, r.App.Path); err != nil {
@@ -185,20 +195,20 @@ func executeUpdate(ctx context.Context, r *checker.UpdateResult, runner checker.
 	switch r.Source {
 	case "brew":
 		if r.App.CaskName == "" {
-			return fmt.Errorf("no cask name for %s", r.App.Name)
+			return fmt.Errorf("no cask name for %s", r.App.Name), false
 		}
 		if !r.App.InstalledViaBrew {
 			openForSelfUpdate(ctx, r.App, runner)
-			return checker.ErrOpenedExternally
+			return checker.ErrOpenedExternally, false
 		}
-		return brewUpgrade(ctx, r.App, runner)
+		return brewUpgrade(ctx, r.App, runner), false
 
 	case "brew-info":
 		if r.App.InstalledViaBrew && r.App.CaskName != "" {
-			return brewUpgrade(ctx, r.App, runner)
+			return brewUpgrade(ctx, r.App, runner), false
 		}
 		openForSelfUpdate(ctx, r.App, runner)
-		return checker.ErrOpenedExternally
+		return checker.ErrOpenedExternally, false
 
 	case "mas":
 		if r.App.MASID != "" {
@@ -206,36 +216,36 @@ func executeUpdate(ctx context.Context, r *checker.UpdateResult, runner checker.
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "  mas upgrade failed, opening App Store: %v\n", err)
 				_, _ = runner.Run(ctx, "open", "macappstore://showUpdatesPage")
-				return checker.ErrOpenedExternally
+				return checker.ErrOpenedExternally, false
 			}
 			fmt.Println(string(output))
-			return nil
+			return nil, false
 		}
 		_, _ = runner.Run(ctx, "open", "macappstore://showUpdatesPage")
-		return checker.ErrOpenedExternally
+		return checker.ErrOpenedExternally, false
 
 	case "formula":
 		if r.App.FormulaName == "" {
-			return fmt.Errorf("no formula name for %s", r.App.Name)
+			return fmt.Errorf("no formula name for %s", r.App.Name), false
 		}
 		output, err := runner.Run(ctx, "brew", "upgrade", r.App.FormulaName)
 		if err != nil {
-			return fmt.Errorf("failed to upgrade formula %s: %w", r.App.FormulaName, err)
+			return fmt.Errorf("failed to upgrade formula %s: %w", r.App.FormulaName, err), false
 		}
 		fmt.Println(string(output))
-		return nil
+		return nil, false
 
 	case "system":
 		_, err := runner.Run(ctx, "open", "x-apple.systempreferences:com.apple.Software-Update-Settings.extension")
 		if err != nil {
-			return fmt.Errorf("failed to open Software Update settings: %w", err)
+			return fmt.Errorf("failed to open Software Update settings: %w", err), false
 		}
-		return checker.ErrOpenedExternally
+		return checker.ErrOpenedExternally, false
 
 	case "sparkle", "github":
 		if r.DownloadURL == "" {
 			fmt.Println("  No download URL available. Check the app for in-app updates.")
-			return nil
+			return nil, false
 		}
 
 		// Try direct install if installer is available.
@@ -247,17 +257,22 @@ func executeUpdate(ctx context.Context, r *checker.UpdateResult, runner checker.
 					fmt.Printf("  Reopening %s...\n", r.App.Name)
 					_, _ = runner.Run(ctx, "open", "-a", r.App.Path)
 				}
-				return nil
+				return nil, false
 			}
+			// Attempt rollback on failed direct install.
+			rolledBack := rollbackAfterFailedInstall(ctx, bm, r.App.Name)
 			fmt.Fprintf(os.Stderr, "  direct install failed, falling back to browser: %v\n", err)
+			if rolledBack {
+				return err, true
+			}
 		}
 
 		// Fallback: open in browser.
 		_, err := runner.Run(ctx, "open", r.DownloadURL)
 		if err != nil {
-			return fmt.Errorf("failed to open download URL: %w", err)
+			return fmt.Errorf("failed to open download URL: %w", err), false
 		}
-		return checker.ErrOpenedExternally
+		return checker.ErrOpenedExternally, false
 
 	case "electron":
 		// Try direct install from ElectronUpdateURL if available.
@@ -269,29 +284,48 @@ func executeUpdate(ctx context.Context, r *checker.UpdateResult, runner checker.
 					fmt.Printf("  Reopening %s...\n", r.App.Name)
 					_, _ = runner.Run(ctx, "open", "-a", r.App.Path)
 				}
-				return nil
+				return nil, false
 			}
+			// Attempt rollback on failed direct install.
+			rolledBack := rollbackAfterFailedInstall(ctx, bm, r.App.Name)
 			fmt.Fprintf(os.Stderr, "  direct install failed, opening app for self-update: %v\n", err)
+			if rolledBack {
+				return err, true
+			}
 		}
 		// Fallback: open app for self-update.
 		_, _ = runner.Run(ctx, "open", "-a", r.App.Path)
-		return checker.ErrOpenedExternally
+		return checker.ErrOpenedExternally, false
 
 	case "setapp":
 		_, _ = runner.Run(ctx, "open", "-a", "/Applications/Setapp.app")
-		return checker.ErrOpenedExternally
+		return checker.ErrOpenedExternally, false
 
 	case "toolbox":
 		_, _ = runner.Run(ctx, "open", "-a", "JetBrains Toolbox")
-		return checker.ErrOpenedExternally
+		return checker.ErrOpenedExternally, false
 
 	case "adobe":
 		_, _ = runner.Run(ctx, "open", "-a", "/Applications/Adobe Creative Cloud/Adobe Creative Cloud.app")
-		return checker.ErrOpenedExternally
+		return checker.ErrOpenedExternally, false
 
 	default:
-		return fmt.Errorf("unsupported update source: %s", r.Source)
+		return fmt.Errorf("unsupported update source: %s", r.Source), false
 	}
+}
+
+// rollbackAfterFailedInstall attempts to restore an app from backup after a failed install.
+func rollbackAfterFailedInstall(ctx context.Context, bm *backup.Manager, appName string) bool {
+	if bm == nil || !bm.HasBackup(appName) {
+		return false
+	}
+	fmt.Fprintf(os.Stderr, "  Attempting rollback for %s...\n", appName)
+	if err := bm.Restore(ctx, appName); err != nil {
+		fmt.Fprintf(os.Stderr, "  Rollback failed: %v\n", err)
+		return false
+	}
+	fmt.Printf("  Rolled back %s to previous version\n", appName)
+	return true
 }
 
 // brewUpgrade quits the app if running, runs brew upgrade, and reopens it.
