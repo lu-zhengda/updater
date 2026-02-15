@@ -6,7 +6,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/luzhengda/updater/internal/app"
+	"github.com/lu-zhengda/updater/internal/app"
 )
 
 func TestSparkleChecker_Name(t *testing.T) {

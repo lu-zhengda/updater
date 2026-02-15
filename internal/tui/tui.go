@@ -13,10 +13,10 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/luzhengda/updater/internal/app"
-	"github.com/luzhengda/updater/internal/checker"
-	"github.com/luzhengda/updater/internal/config"
-	"github.com/luzhengda/updater/internal/history"
+	"github.com/lu-zhengda/updater/internal/app"
+	"github.com/lu-zhengda/updater/internal/checker"
+	"github.com/lu-zhengda/updater/internal/config"
+	"github.com/lu-zhengda/updater/internal/history"
 )
 
 // CheckFunc checks all apps for updates and returns results.

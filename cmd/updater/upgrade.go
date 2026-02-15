@@ -10,8 +10,8 @@ import (
 	"runtime"
 	"strings"
 
-	"github.com/luzhengda/updater/internal/checker"
-	versionpkg "github.com/luzhengda/updater/internal/version"
+	"github.com/lu-zhengda/updater/internal/checker"
+	versionpkg "github.com/lu-zhengda/updater/internal/version"
 	"github.com/spf13/cobra"
 )
 

@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/luzhengda/updater/internal/app"
+	"github.com/lu-zhengda/updater/internal/app"
 )
 
 func TestRealCmdRunner_Run(t *testing.T) {

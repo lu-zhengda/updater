@@ -9,9 +9,9 @@ import (
 	"time"
 
 	"github.com/getlantern/systray"
-	"github.com/luzhengda/updater/internal/checker"
-	"github.com/luzhengda/updater/internal/config"
-	"github.com/luzhengda/updater/internal/updater"
+	"github.com/lu-zhengda/updater/internal/checker"
+	"github.com/lu-zhengda/updater/internal/config"
+	"github.com/lu-zhengda/updater/internal/updater"
 )
 
 const checkInterval = 1 * time.Hour

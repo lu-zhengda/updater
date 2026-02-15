@@ -9,10 +9,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/luzhengda/updater/internal/app"
-	"github.com/luzhengda/updater/internal/checker"
-	"github.com/luzhengda/updater/internal/config"
-	"github.com/luzhengda/updater/internal/history"
+	"github.com/lu-zhengda/updater/internal/app"
+	"github.com/lu-zhengda/updater/internal/checker"
+	"github.com/lu-zhengda/updater/internal/config"
+	"github.com/lu-zhengda/updater/internal/history"
 )
 
 func TestCheckTool_Present(t *testing.T) {

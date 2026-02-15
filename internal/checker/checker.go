@@ -7,7 +7,7 @@ import (
 	"os/exec"
 	"strings"
 
-	"github.com/luzhengda/updater/internal/app"
+	"github.com/lu-zhengda/updater/internal/app"
 )
 
 // ErrOpenedExternally is returned by executeUpdate when the update action

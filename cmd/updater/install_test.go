@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/luzhengda/updater/internal/checker"
+	"github.com/lu-zhengda/updater/internal/checker"
 )
 
 func TestSearchCasks(t *testing.T) {

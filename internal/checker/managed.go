@@ -3,7 +3,7 @@ package checker
 import (
 	"context"
 
-	"github.com/luzhengda/updater/internal/app"
+	"github.com/lu-zhengda/updater/internal/app"
 )
 
 // ManagedChecker handles apps managed by external platforms (Setapp, JetBrains Toolbox, Adobe CC).

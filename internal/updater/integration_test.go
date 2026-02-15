@@ -6,8 +6,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/luzhengda/updater/internal/app"
-	"github.com/luzhengda/updater/internal/checker"
+	"github.com/lu-zhengda/updater/internal/app"
+	"github.com/lu-zhengda/updater/internal/checker"
 )
 
 func TestFallthrough_SparkleStale_ToBrewInfo(t *testing.T) {

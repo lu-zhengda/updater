@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/luzhengda/updater/internal/app"
-	"github.com/luzhengda/updater/internal/checker"
+	"github.com/lu-zhengda/updater/internal/app"
+	"github.com/lu-zhengda/updater/internal/checker"
 )
 
 func TestGetLastUsedDate(t *testing.T) {

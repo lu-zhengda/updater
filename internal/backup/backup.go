@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/luzhengda/updater/internal/checker"
+	"github.com/lu-zhengda/updater/internal/checker"
 )
 
 // Metadata describes a backup.

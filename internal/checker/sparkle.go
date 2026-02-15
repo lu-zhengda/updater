@@ -8,8 +8,8 @@ import (
 	"os/exec"
 	"strings"
 
-	"github.com/luzhengda/updater/internal/app"
-	"github.com/luzhengda/updater/internal/version"
+	"github.com/lu-zhengda/updater/internal/app"
+	"github.com/lu-zhengda/updater/internal/version"
 )
 
 // Sparkle RSS/appcast XML structures.

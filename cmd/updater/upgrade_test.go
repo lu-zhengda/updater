@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/luzhengda/updater/internal/checker"
+	"github.com/lu-zhengda/updater/internal/checker"
 )
 
 func TestIsBrewInstall(t *testing.T) {

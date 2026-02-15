@@ -11,10 +11,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/luzhengda/updater/internal/app"
-	"github.com/luzhengda/updater/internal/backup"
-	"github.com/luzhengda/updater/internal/checker"
-	"github.com/luzhengda/updater/internal/config"
+	"github.com/lu-zhengda/updater/internal/app"
+	"github.com/lu-zhengda/updater/internal/backup"
+	"github.com/lu-zhengda/updater/internal/checker"
+	"github.com/lu-zhengda/updater/internal/config"
 	"github.com/spf13/cobra"
 )
 

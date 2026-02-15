@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/luzhengda/updater/internal/app"
+	"github.com/lu-zhengda/updater/internal/app"
 )
 
 func TestBrewInfoChecker_CanCheck(t *testing.T) {

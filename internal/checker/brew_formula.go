@@ -6,8 +6,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/luzhengda/updater/internal/app"
-	"github.com/luzhengda/updater/internal/version"
+	"github.com/lu-zhengda/updater/internal/app"
+	"github.com/lu-zhengda/updater/internal/version"
 )
 
 // BrewFormulaChecker checks for Homebrew formula updates.

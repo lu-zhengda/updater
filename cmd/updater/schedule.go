@@ -8,7 +8,7 @@ import (
 	"strings"
 	"text/template"
 
-	"github.com/luzhengda/updater/internal/checker"
+	"github.com/lu-zhengda/updater/internal/checker"
 	"github.com/spf13/cobra"
 )
 

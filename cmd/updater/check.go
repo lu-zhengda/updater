@@ -8,11 +8,11 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"github.com/luzhengda/updater/internal/app"
-	"github.com/luzhengda/updater/internal/checker"
-	"github.com/luzhengda/updater/internal/config"
-	"github.com/luzhengda/updater/internal/tui"
-	"github.com/luzhengda/updater/internal/updater"
+	"github.com/lu-zhengda/updater/internal/app"
+	"github.com/lu-zhengda/updater/internal/checker"
+	"github.com/lu-zhengda/updater/internal/config"
+	"github.com/lu-zhengda/updater/internal/tui"
+	"github.com/lu-zhengda/updater/internal/updater"
 	"github.com/spf13/cobra"
 )
 

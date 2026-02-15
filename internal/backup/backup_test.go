@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/luzhengda/updater/internal/checker"
+	"github.com/lu-zhengda/updater/internal/checker"
 )
 
 func TestBackupAndRestore(t *testing.T) {

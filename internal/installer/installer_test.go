@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/luzhengda/updater/internal/checker"
+	"github.com/lu-zhengda/updater/internal/checker"
 )
 
 func TestFilenameFromResponse(t *testing.T) {

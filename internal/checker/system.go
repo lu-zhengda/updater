@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/luzhengda/updater/internal/app"
+	"github.com/lu-zhengda/updater/internal/app"
 )
 
 // SystemChecker checks for macOS system updates via `softwareupdate -l`.

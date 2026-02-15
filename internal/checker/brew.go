@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/luzhengda/updater/internal/app"
-	"github.com/luzhengda/updater/internal/version"
+	"github.com/lu-zhengda/updater/internal/app"
+	"github.com/lu-zhengda/updater/internal/version"
 )
 
 // brewOutdatedItem represents a single entry from `brew outdated --json`.

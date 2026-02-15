@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/luzhengda/updater/internal/history"
+	"github.com/lu-zhengda/updater/internal/history"
 	"github.com/spf13/cobra"
 )
 
