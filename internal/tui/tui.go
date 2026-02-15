@@ -64,6 +64,9 @@ type row struct {
 	updating bool
 }
 
+// sourceFilterCycle defines the order in which the source filter cycles.
+var sourceFilterCycle = []string{"", "sparkle", "brew", "github", "mas", "system", "formula", "electron"}
+
 // Messages sent by background operations.
 type loadDoneMsg struct {
 	result *LoadResult
@@ -140,6 +143,7 @@ type Model struct {
 	rollbackAppName  string // app being rolled back
 	rollingBack      bool   // true while rollback is in progress
 	showHelp         bool   // true when help overlay is visible
+	sourceFilter     string // current source filter (empty = show all)
 }
 
 // NewModel creates a new TUI model that launches instantly.
@@ -489,6 +493,9 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case "h":
 			return m.openHistory()
+		case "f":
+			m.cycleSourceFilter()
+			return m, nil
 		case "/":
 			m.searchMode = true
 			m.searchInput.Focus()
@@ -834,6 +841,25 @@ func (m *Model) toggleShowAll() {
 	}
 }
 
+// cycleSourceFilter advances the source filter to the next value in the cycle.
+func (m *Model) cycleSourceFilter() {
+	current := 0
+	for i, s := range sourceFilterCycle {
+		if s == m.sourceFilter {
+			current = i
+			break
+		}
+	}
+	next := (current + 1) % len(sourceFilterCycle)
+	m.sourceFilter = sourceFilterCycle[next]
+	m.rebuildVisible()
+	if m.sourceFilter == "" {
+		m.statusMsg = "Showing all sources"
+	} else {
+		m.statusMsg = fmt.Sprintf("Filtering: %s", m.sourceFilter)
+	}
+}
+
 // handleUpdate starts updates for selected apps, or the cursor row if none selected.
 func (m Model) handleUpdate() (tea.Model, tea.Cmd) {
 	if m.checking {
@@ -968,6 +994,23 @@ func (m *Model) rebuildVisible() {
 		// Apply search filter.
 		if query != "" && !strings.Contains(strings.ToLower(r.app.Name), query) {
 			continue
+		}
+		// Apply source filter.
+		if m.sourceFilter != "" {
+			source := ""
+			if r.result != nil {
+				source = r.result.Source
+			} else {
+				source = string(r.app.Source)
+			}
+			// Match brew-info to brew filter, and include +brew suffix sources
+			if m.sourceFilter == "brew" {
+				if source != "brew" && source != "brew-info" && !strings.HasSuffix(source, "+brew") {
+					continue
+				}
+			} else if source != m.sourceFilter {
+				continue
+			}
 		}
 		if m.showAll {
 			m.visible = append(m.visible, i)
@@ -1278,6 +1321,12 @@ func (m Model) renderStatusBar() string {
 		helpParts = append(helpParts, "h: history")
 	}
 
+	if m.sourceFilter != "" {
+		helpParts = append(helpParts, fmt.Sprintf("f: filter (%s)", m.sourceFilter))
+	} else {
+		helpParts = append(helpParts, "f: filter")
+	}
+
 	helpParts = append(helpParts, "/: search", "?: help", "r: refresh", "q: quit")
 
 	// Append last-checked timestamp.
@@ -1390,6 +1439,7 @@ func (m Model) viewHelp() string {
 	b.WriteString(styleColumnHeader.Render("  Views"))
 	b.WriteString("\n")
 	b.WriteString("    t           Toggle show all / actionable\n")
+	b.WriteString("    f           Cycle source filter\n")
 	b.WriteString("    h           Update history\n")
 	b.WriteString("    s           Schedule settings\n")
 	b.WriteString("    /           Search\n")
