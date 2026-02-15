@@ -1,6 +1,13 @@
 # Binary
 /updater
 
+# GoReleaser
+dist/
+completions/
+
+# Worktrees
+.worktrees/
+
 # IDE
 .idea/
 .vscode/
