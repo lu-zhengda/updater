@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/luzhengda/updater/internal/app"
@@ -105,10 +106,26 @@ func runUI(_ *cobra.Command, _ []string) error {
 		},
 	}
 
+	rollbackFn := func(ctx context.Context, appName string) error {
+		// Quit app if running.
+		apps, _ := discoverApps()
+		for _, a := range apps {
+			if strings.EqualFold(a.Name, appName) {
+				quitAppIfRunning(ctx, a, runner)
+				break
+			}
+		}
+		return bm.Restore(ctx, appName)
+	}
+
+	hasBackupFn := func(appName string) bool {
+		return bm.HasBackup(appName)
+	}
+
 	historyFn := func() ([]history.Entry, error) {
 		return history.List(history.DefaultPath())
 	}
-	model := tui.NewModel(loadFn, checkFn, updateFn, scheduleFns, cfg, cfgPath, historyFn)
+	model := tui.NewModel(loadFn, checkFn, updateFn, scheduleFns, cfg, cfgPath, rollbackFn, hasBackupFn, historyFn)
 	p := tea.NewProgram(model, tea.WithAltScreen())
 
 	if _, err := p.Run(); err != nil {
