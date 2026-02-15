@@ -203,6 +203,16 @@ func TestSendInteractiveNotification(t *testing.T) {
 	}
 }
 
+func TestRunNotify_AutoUpdateFlag(t *testing.T) {
+	f := notifyCmd.Flags().Lookup("auto-update")
+	if f == nil {
+		t.Fatal("--auto-update flag not registered")
+	}
+	if f.DefValue != "false" {
+		t.Errorf("default = %q, want %q", f.DefValue, "false")
+	}
+}
+
 func TestSendNotification_PassiveDefault(t *testing.T) {
 	captureRunner := &captureNotifyRunner{}
 

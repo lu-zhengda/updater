@@ -474,13 +474,419 @@ func TestToCaskName(t *testing.T) {
 		{"Firefox", "firefox"},
 		{"Arc Browser", "arc-browser"},
 		{"1Password 7", "1password-7"},
+		{"PDF Expert", "pdf-expert"},
+		{"", ""},
+		{"UPPER CASE", "upper-case"},
+		{"App.Name.With.Dots", "appnamewithdots"},
 	}
 	for _, tt := range tests {
-		t.Run(tt.input, func(t *testing.T) {
+		name := tt.input
+		if name == "" {
+			name = "empty"
+		}
+		t.Run(name, func(t *testing.T) {
 			got := ToCaskName(tt.input)
 			if got != tt.want {
 				t.Errorf("ToCaskName(%q) = %q, want %q", tt.input, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestDiscoverSkipsNonAppEntries(t *testing.T) {
+	dir := t.TempDir()
+
+	// Create a non-.app directory — should be ignored.
+	if err := os.MkdirAll(filepath.Join(dir, "NotAnApp"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create a regular file (not a directory) — should be ignored.
+	if err := os.WriteFile(filepath.Join(dir, "readme.txt"), []byte("hi"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create a regular file with .app suffix — should be ignored (not a directory).
+	if err := os.WriteFile(filepath.Join(dir, "Fake.app"), []byte("not a real app"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	apps, err := Discover(dir)
+	if err != nil {
+		t.Fatalf("Discover failed: %v", err)
+	}
+	if len(apps) != 0 {
+		t.Errorf("expected 0 apps, got %d", len(apps))
+	}
+}
+
+func TestDiscoverSkipsUnparseableApp(t *testing.T) {
+	dir := t.TempDir()
+
+	// Create a .app directory with invalid Info.plist — should be skipped.
+	appDir := filepath.Join(dir, "Broken.app")
+	contentsDir := filepath.Join(appDir, "Contents")
+	if err := os.MkdirAll(contentsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(contentsDir, "Info.plist"), []byte("not valid plist"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Also create a valid app to ensure Discover still returns it.
+	createFakeApp(t, dir, "Valid", plistData{
+		BundleName:         "Valid",
+		BundleID:           "com.example.valid",
+		ShortVersionString: "1.0.0",
+		BundleVersion:      "1",
+	}, false, false)
+
+	apps, err := Discover(dir)
+	if err != nil {
+		t.Fatalf("Discover failed: %v", err)
+	}
+	if len(apps) != 1 {
+		t.Errorf("expected 1 app (broken skipped), got %d", len(apps))
+	}
+	if len(apps) == 1 && apps[0].Name != "Valid" {
+		t.Errorf("expected Valid app, got %s", apps[0].Name)
+	}
+}
+
+func TestDiscoverSymlinkAppToDirectory(t *testing.T) {
+	dir := t.TempDir()
+	targetDir := t.TempDir()
+
+	// Create a real app in the target directory.
+	appPath := createFakeApp(t, targetDir, "Linked", plistData{
+		BundleName:         "Linked",
+		BundleID:           "com.example.linked",
+		ShortVersionString: "1.0.0",
+		BundleVersion:      "1",
+	}, false, false)
+
+	// Create a symlink in the scan directory pointing to the real app.
+	symlinkPath := filepath.Join(dir, "Linked.app")
+	if err := os.Symlink(appPath, symlinkPath); err != nil {
+		t.Fatal(err)
+	}
+
+	apps, err := Discover(dir)
+	if err != nil {
+		t.Fatalf("Discover failed: %v", err)
+	}
+	if len(apps) != 1 {
+		t.Fatalf("expected 1 app via symlink, got %d", len(apps))
+	}
+	if apps[0].BundleID != "com.example.linked" {
+		t.Errorf("expected bundle ID com.example.linked, got %s", apps[0].BundleID)
+	}
+}
+
+func TestDiscoverSymlinkAppToFile(t *testing.T) {
+	dir := t.TempDir()
+
+	// Create a regular file and symlink a .app name to it — should be ignored.
+	targetFile := filepath.Join(dir, "target.txt")
+	if err := os.WriteFile(targetFile, []byte("not a dir"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	symlinkPath := filepath.Join(dir, "FakeLink.app")
+	if err := os.Symlink(targetFile, symlinkPath); err != nil {
+		t.Fatal(err)
+	}
+
+	apps, err := Discover(dir)
+	if err != nil {
+		t.Fatalf("Discover failed: %v", err)
+	}
+	if len(apps) != 0 {
+		t.Errorf("expected 0 apps (symlink to file), got %d", len(apps))
+	}
+}
+
+func TestDiscoverSymlinkAppBroken(t *testing.T) {
+	dir := t.TempDir()
+
+	// Create a dangling symlink (target does not exist).
+	symlinkPath := filepath.Join(dir, "Dangling.app")
+	if err := os.Symlink("/nonexistent/target", symlinkPath); err != nil {
+		t.Fatal(err)
+	}
+
+	apps, err := Discover(dir)
+	if err != nil {
+		t.Fatalf("Discover failed: %v", err)
+	}
+	if len(apps) != 0 {
+		t.Errorf("expected 0 apps (dangling symlink), got %d", len(apps))
+	}
+}
+
+func TestDiscoverUnreadableDirectory(t *testing.T) {
+	dir := t.TempDir()
+	unreadable := filepath.Join(dir, "noperm")
+	if err := os.MkdirAll(unreadable, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Remove read permission.
+	if err := os.Chmod(unreadable, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		os.Chmod(unreadable, 0o755)
+	})
+
+	_, err := Discover(unreadable)
+	if err == nil {
+		t.Fatal("expected error for unreadable directory, got nil")
+	}
+}
+
+func TestClassifySource_SparkleWithoutFeedURL(t *testing.T) {
+	dir := t.TempDir()
+
+	// Create an app with Sparkle framework but no SUFeedURL — should be SourceUnknown.
+	createFakeApp(t, dir, "SparkleNoFeed", plistData{
+		BundleName:         "SparkleNoFeed",
+		BundleID:           "com.example.sparkenofeed",
+		ShortVersionString: "1.0.0",
+		BundleVersion:      "1",
+	}, false, true) // sparkle=true adds the framework
+
+	apps, err := Discover(dir)
+	if err != nil {
+		t.Fatalf("Discover failed: %v", err)
+	}
+	if len(apps) != 1 {
+		t.Fatalf("expected 1 app, got %d", len(apps))
+	}
+	if apps[0].Source != SourceUnknown {
+		t.Errorf("expected source %q (Sparkle framework but no feed URL), got %q", SourceUnknown, apps[0].Source)
+	}
+}
+
+func TestParseApp_BundleNameFallback(t *testing.T) {
+	dir := t.TempDir()
+
+	// Create an app with BundleName set but BundleDisplayName empty.
+	createFakeApp(t, dir, "SomeName", plistData{
+		BundleName:         "ActualBundleName",
+		BundleID:           "com.example.bundlename",
+		ShortVersionString: "1.0.0",
+		BundleVersion:      "1",
+	}, false, false)
+
+	apps, err := Discover(dir)
+	if err != nil {
+		t.Fatalf("Discover failed: %v", err)
+	}
+	if len(apps) != 1 {
+		t.Fatalf("expected 1 app, got %d", len(apps))
+	}
+	if apps[0].Name != "ActualBundleName" {
+		t.Errorf("expected name ActualBundleName (from BundleName), got %s", apps[0].Name)
+	}
+}
+
+func TestIsToolboxPath_BrokenSymlink(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create a symlink pointing to a nonexistent target — EvalSymlinks will error.
+	brokenLink := filepath.Join(tmpDir, "Broken.app")
+	if err := os.Symlink("/nonexistent/path/app", brokenLink); err != nil {
+		t.Fatal(err)
+	}
+
+	if isToolboxPath(brokenLink) {
+		t.Error("expected isToolboxPath to be false for broken symlink")
+	}
+}
+
+func TestEnrichElectronApp_InvalidYAML(t *testing.T) {
+	dir := t.TempDir()
+
+	appPath := createFakeApp(t, dir, "BadYML", plistData{
+		BundleName:         "BadYML",
+		BundleID:           "com.example.badyml",
+		ShortVersionString: "1.0.0",
+		BundleVersion:      "1",
+	}, false, false)
+
+	// Add Electron Framework.
+	contentsDir := filepath.Join(appPath, "Contents")
+	electronDir := filepath.Join(contentsDir, "Frameworks", "Electron Framework.framework")
+	if err := os.MkdirAll(electronDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Write invalid YAML in app-update.yml.
+	resourceDir := filepath.Join(contentsDir, "Resources")
+	if err := os.MkdirAll(resourceDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(resourceDir, "app-update.yml"), []byte(":\ninvalid:\n  - [\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	apps, err := Discover(dir)
+	if err != nil {
+		t.Fatalf("Discover failed: %v", err)
+	}
+	if len(apps) != 1 {
+		t.Fatalf("expected 1 app, got %d", len(apps))
+	}
+	// Should remain SourceElectron with no enrichment.
+	if apps[0].Source != SourceElectron {
+		t.Errorf("expected source %q, got %q", SourceElectron, apps[0].Source)
+	}
+	if apps[0].GitHubRepo != "" {
+		t.Errorf("expected empty GitHubRepo, got %q", apps[0].GitHubRepo)
+	}
+}
+
+func TestEnrichElectronApp_GenericNonHTTPURL(t *testing.T) {
+	dir := t.TempDir()
+
+	appPath := createFakeApp(t, dir, "FTPElectron", plistData{
+		BundleName:         "FTPElectron",
+		BundleID:           "com.example.ftpelectron",
+		ShortVersionString: "1.0.0",
+		BundleVersion:      "1",
+	}, false, false)
+
+	// Add Electron Framework.
+	contentsDir := filepath.Join(appPath, "Contents")
+	electronDir := filepath.Join(contentsDir, "Frameworks", "Electron Framework.framework")
+	if err := os.MkdirAll(electronDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Write app-update.yml with generic provider and non-http URL.
+	resourceDir := filepath.Join(contentsDir, "Resources")
+	if err := os.MkdirAll(resourceDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	yml := "provider: generic\nurl: ftp://example.com/updates\n"
+	if err := os.WriteFile(filepath.Join(resourceDir, "app-update.yml"), []byte(yml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	apps, err := Discover(dir)
+	if err != nil {
+		t.Fatalf("Discover failed: %v", err)
+	}
+	if len(apps) != 1 {
+		t.Fatalf("expected 1 app, got %d", len(apps))
+	}
+	if apps[0].ElectronUpdateURL != "" {
+		t.Errorf("expected empty ElectronUpdateURL for non-http URL, got %q", apps[0].ElectronUpdateURL)
+	}
+}
+
+func TestEnrichElectronApp_GitHubMissingOwnerOrRepo(t *testing.T) {
+	dir := t.TempDir()
+
+	appPath := createFakeApp(t, dir, "PartialGH", plistData{
+		BundleName:         "PartialGH",
+		BundleID:           "com.example.partialgh",
+		ShortVersionString: "1.0.0",
+		BundleVersion:      "1",
+	}, false, false)
+
+	// Add Electron Framework.
+	contentsDir := filepath.Join(appPath, "Contents")
+	electronDir := filepath.Join(contentsDir, "Frameworks", "Electron Framework.framework")
+	if err := os.MkdirAll(electronDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Write app-update.yml with GitHub provider but missing repo.
+	resourceDir := filepath.Join(contentsDir, "Resources")
+	if err := os.MkdirAll(resourceDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	yml := "provider: github\nowner: myorg\n"
+	if err := os.WriteFile(filepath.Join(resourceDir, "app-update.yml"), []byte(yml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	apps, err := Discover(dir)
+	if err != nil {
+		t.Fatalf("Discover failed: %v", err)
+	}
+	if len(apps) != 1 {
+		t.Fatalf("expected 1 app, got %d", len(apps))
+	}
+	// Should stay SourceElectron since repo is missing.
+	if apps[0].Source != SourceElectron {
+		t.Errorf("expected source %q, got %q", SourceElectron, apps[0].Source)
+	}
+	if apps[0].GitHubRepo != "" {
+		t.Errorf("expected empty GitHubRepo, got %q", apps[0].GitHubRepo)
+	}
+}
+
+func TestDiscoverAppWithNoInfoPlist(t *testing.T) {
+	dir := t.TempDir()
+
+	// Create a .app directory with Contents but no Info.plist.
+	appDir := filepath.Join(dir, "NoInfoPlist.app")
+	if err := os.MkdirAll(filepath.Join(appDir, "Contents"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	apps, err := Discover(dir)
+	if err != nil {
+		t.Fatalf("Discover failed: %v", err)
+	}
+	if len(apps) != 0 {
+		t.Errorf("expected 0 apps (no Info.plist), got %d", len(apps))
+	}
+}
+
+func TestEnrichElectronApp_UnknownProvider(t *testing.T) {
+	dir := t.TempDir()
+
+	appPath := createFakeApp(t, dir, "CustomProvider", plistData{
+		BundleName:         "CustomProvider",
+		BundleID:           "com.example.custom",
+		ShortVersionString: "1.0.0",
+		BundleVersion:      "1",
+	}, false, false)
+
+	// Add Electron Framework.
+	contentsDir := filepath.Join(appPath, "Contents")
+	electronDir := filepath.Join(contentsDir, "Frameworks", "Electron Framework.framework")
+	if err := os.MkdirAll(electronDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Write app-update.yml with an unknown provider.
+	resourceDir := filepath.Join(contentsDir, "Resources")
+	if err := os.MkdirAll(resourceDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	yml := "provider: s3\nurl: https://s3.amazonaws.com/myapp\n"
+	if err := os.WriteFile(filepath.Join(resourceDir, "app-update.yml"), []byte(yml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	apps, err := Discover(dir)
+	if err != nil {
+		t.Fatalf("Discover failed: %v", err)
+	}
+	if len(apps) != 1 {
+		t.Fatalf("expected 1 app, got %d", len(apps))
+	}
+	// Unknown provider: stays SourceElectron, no enrichment.
+	if apps[0].Source != SourceElectron {
+		t.Errorf("expected source %q, got %q", SourceElectron, apps[0].Source)
+	}
+	if apps[0].GitHubRepo != "" {
+		t.Errorf("expected empty GitHubRepo, got %q", apps[0].GitHubRepo)
+	}
+	if apps[0].ElectronUpdateURL != "" {
+		t.Errorf("expected empty ElectronUpdateURL, got %q", apps[0].ElectronUpdateURL)
 	}
 }

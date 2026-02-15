@@ -2,16 +2,22 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
 
+	"github.com/luzhengda/updater/internal/backup"
 	"github.com/luzhengda/updater/internal/checker"
 	"github.com/luzhengda/updater/internal/config"
+	"github.com/luzhengda/updater/internal/installer"
 	"github.com/spf13/cobra"
 )
 
-var flagInteractive bool
+var (
+	flagInteractive bool
+	flagAutoUpdate  bool
+)
 
 var notifyCmd = &cobra.Command{
 	Use:    "notify",
@@ -22,6 +28,7 @@ var notifyCmd = &cobra.Command{
 
 func init() {
 	notifyCmd.Flags().BoolVar(&flagInteractive, "interactive", false, "show dialog with action buttons")
+	notifyCmd.Flags().BoolVar(&flagAutoUpdate, "auto-update", false, "automatically install safe updates after notification")
 	rootCmd.AddCommand(notifyCmd)
 }
 
@@ -75,7 +82,52 @@ func runNotify(cmd *cobra.Command, _ []string) error {
 	if flagInteractive {
 		return sendInteractiveNotification(ctx, runner, len(updatable), body)
 	}
-	return sendNotification(ctx, runner, len(updatable), body, subtitle)
+	if err := sendNotification(ctx, runner, len(updatable), body, subtitle); err != nil {
+		return err
+	}
+
+	if flagAutoUpdate {
+		autoUpdateAfterNotify(ctx, cfg, updatable)
+	}
+	return nil
+}
+
+// autoUpdateAfterNotify performs safe auto-updates for eligible apps after the
+// notification has been sent. It skips pinned, major-update, system/setapp/toolbox/adobe,
+// and manual/notify-only policy apps.
+func autoUpdateAfterNotify(ctx context.Context, cfg *config.Config, updatable []*checker.UpdateResult) {
+	runner := &checker.RealCmdRunner{}
+	bm := backup.NewManager(backup.DefaultBaseDir(), cfg.MaxBackupsOrDefault(), runner)
+	inst := installer.New(runner, nil)
+
+	autoSkipSources := map[string]bool{
+		"system": true, "setapp": true, "toolbox": true, "adobe": true,
+	}
+
+	var updated, failed []string
+	for _, r := range updatable {
+		if cfg.IsPinned(r.App.BundleID) || r.IsMajorUpdate || autoSkipSources[r.Source] {
+			continue
+		}
+		policy := cfg.Policy(r.App.BundleID)
+		if policy == config.PolicyManual || policy == config.PolicyNotifyOnly {
+			continue
+		}
+		updateErr, _ := executeUpdate(ctx, r, runner, bm, inst)
+		if updateErr == nil || errors.Is(updateErr, checker.ErrOpenedExternally) {
+			updated = append(updated, r.App.Name)
+		} else {
+			failed = append(failed, r.App.Name)
+		}
+	}
+
+	if len(updated) > 0 {
+		body := fmt.Sprintf("Updated: %s", strings.Join(updated, ", "))
+		if len(failed) > 0 {
+			body += fmt.Sprintf(". Failed: %s", strings.Join(failed, ", "))
+		}
+		_ = sendNotification(ctx, runner, len(updated), body, "")
+	}
 }
 
 // buildNotificationBody creates the notification body text showing version transitions,
