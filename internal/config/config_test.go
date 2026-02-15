@@ -524,6 +524,87 @@ func TestPolicy_DefaultEmpty(t *testing.T) {
 	}
 }
 
+func TestLoadConfig_ReadError(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+
+	// Create a valid file, then make it unreadable.
+	if err := os.WriteFile(cfgPath, []byte("ignored_apps: []"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(cfgPath, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(cfgPath, 0o644) })
+
+	_, err := Load(cfgPath)
+	if err == nil {
+		t.Fatal("expected error for unreadable file, got nil")
+	}
+	if !strings.Contains(err.Error(), "failed to read config file") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestLoadConfig_InvalidYAML(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+
+	if err := os.WriteFile(cfgPath, []byte(":::invalid yaml{{["), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := Load(cfgPath)
+	if err == nil {
+		t.Fatal("expected error for invalid YAML, got nil")
+	}
+	if !strings.Contains(err.Error(), "failed to parse config file") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestIsIgnored_NilSet(t *testing.T) {
+	cfg := &Config{} // no buildIgnoredSet called, ignoredSet is nil
+	if cfg.IsIgnored("com.example.app") {
+		t.Error("expected IsIgnored to return false when ignoredSet is nil")
+	}
+}
+
+func TestIsPinned_NilSet(t *testing.T) {
+	cfg := &Config{} // no buildPinnedSet called, pinnedSet is nil
+	if cfg.IsPinned("com.example.app") {
+		t.Error("expected IsPinned to return false when pinnedSet is nil")
+	}
+}
+
+func TestPin_NilPinnedSet(t *testing.T) {
+	cfg := &Config{} // pinnedSet is nil
+	cfg.Pin("com.example.app")
+	if !cfg.IsPinned("com.example.app") {
+		t.Error("expected com.example.app to be pinned after Pin on nil pinnedSet")
+	}
+	if len(cfg.PinnedApps) != 1 || cfg.PinnedApps[0] != "com.example.app" {
+		t.Errorf("PinnedApps = %v, want [com.example.app]", cfg.PinnedApps)
+	}
+}
+
+func TestMerge_MaxBackupsOverride(t *testing.T) {
+	current := &Config{
+		MaxBackups: 2,
+	}
+	current.buildIgnoredSet()
+	current.buildPinnedSet()
+
+	imported := &Config{
+		MaxBackups: 10, // non-zero → should override
+	}
+
+	result := Merge(current, imported)
+	if result.MaxBackups != 10 {
+		t.Errorf("MaxBackups = %d, want 10 (imported should override)", result.MaxBackups)
+	}
+}
+
 func TestMerge_Policies(t *testing.T) {
 	current := &Config{
 		Policies: map[string]string{

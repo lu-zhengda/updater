@@ -31,10 +31,11 @@ func onReady() {
 	systray.AddSeparator()
 	mQuit := systray.AddMenuItem("Quit", "Quit Updater")
 
-	// Track dynamic app menu items.
+	// Track dynamic app menu items and updatable results.
 	var (
-		mu       sync.Mutex
-		appItems []*systray.MenuItem
+		mu        sync.Mutex
+		appItems  []*systray.MenuItem
+		updatable []*checker.UpdateResult
 	)
 
 	// clearAppItems removes all dynamically added app menu items.
@@ -48,7 +49,8 @@ func onReady() {
 	}
 
 	// checkForUpdates runs update checks and populates the menu.
-	checkForUpdates := func() {
+	var checkForUpdates func()
+	checkForUpdates = func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		defer cancel()
 
@@ -83,10 +85,10 @@ func onReady() {
 		results := updater.CheckAll(ctx, apps, checkers, cfg.MaxConcurrentOrDefault())
 
 		// Collect updatable results.
-		var updatable []*checker.UpdateResult
+		var newUpdatable []*checker.UpdateResult
 		for _, r := range results {
 			if r.HasUpdate && r.Error == nil && !cfg.IsPinned(r.App.BundleID) {
-				updatable = append(updatable, r)
+				newUpdatable = append(newUpdatable, r)
 			}
 		}
 
@@ -94,6 +96,8 @@ func onReady() {
 		clearAppItems()
 		mu.Lock()
 		defer mu.Unlock()
+
+		updatable = newUpdatable
 
 		if len(updatable) == 0 {
 			systray.SetTitle("")
@@ -105,10 +109,13 @@ func onReady() {
 		mNoUpdates.Hide()
 		systray.SetTitle(fmt.Sprintf("%d", len(updatable)))
 
+		// Per-app menu items (indexed so Update All can reference them).
+		perAppItems := make([]*systray.MenuItem, 0, len(updatable))
 		for _, r := range updatable {
 			label := fmt.Sprintf("%s (%s \u2192 %s)", r.App.Name, r.CurrentVersion, r.LatestVersion)
 			item := systray.AddMenuItem(label, fmt.Sprintf("Update %s", r.App.Name))
 			appItems = append(appItems, item)
+			perAppItems = append(perAppItems, item)
 
 			// Launch update in background when clicked.
 			go func(appName string, menuItem *systray.MenuItem) {
@@ -122,6 +129,53 @@ func onReady() {
 				}
 			}(r.App.Name, item)
 		}
+
+		// Separator and "Update All" item.
+		sep := systray.AddMenuItem("", "")
+		sep.Disable()
+		appItems = append(appItems, sep)
+
+		updateAllItem := systray.AddMenuItem(
+			fmt.Sprintf("Update All (%d)", len(updatable)),
+			"Update all available apps",
+		)
+		appItems = append(appItems, updateAllItem)
+
+		// Snapshot updatable names and their menu items for the goroutine.
+		type appSnapshot struct {
+			name     string
+			menuItem *systray.MenuItem
+		}
+		snapshot := make([]appSnapshot, len(updatable))
+		for i, r := range updatable {
+			snapshot[i] = appSnapshot{name: r.App.Name, menuItem: perAppItems[i]}
+		}
+
+		go func() {
+			for range updateAllItem.ClickedCh {
+				updateAllItem.Disable()
+				updateAllItem.SetTitle("Updating...")
+
+				for _, s := range snapshot {
+					s.menuItem.SetTitle(fmt.Sprintf("Updating %s...", s.name))
+
+					cmd := exec.Command("updater", "update", s.name)
+					cmd.Stdout = os.Stdout
+					cmd.Stderr = os.Stderr
+					if err := cmd.Run(); err != nil {
+						fmt.Fprintf(os.Stderr, "update %s failed: %v\n", s.name, err)
+						s.menuItem.SetTitle(fmt.Sprintf("\u2717 %s (failed)", s.name))
+					} else {
+						s.menuItem.SetTitle(fmt.Sprintf("\u2713 %s (updated)", s.name))
+					}
+				}
+
+				updateAllItem.SetTitle("Done!")
+				time.Sleep(2 * time.Second)
+				go checkForUpdates()
+				return // Stop listening after one Update All cycle.
+			}
+		}()
 	}
 
 	// Initial check.

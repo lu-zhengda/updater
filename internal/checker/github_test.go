@@ -9,6 +9,76 @@ import (
 	"github.com/luzhengda/updater/internal/app"
 )
 
+func TestGitHubChecker_Name(t *testing.T) {
+	c := NewGitHubChecker(nil, "", "")
+	if got := c.Name(); got != "github" {
+		t.Errorf("Name() = %q, want %q", got, "github")
+	}
+}
+
+func TestGitHubChecker_CheckErrorPaths(t *testing.T) {
+	t.Run("empty GitHub repo", func(t *testing.T) {
+		c := NewGitHubChecker(nil, "", "")
+		a := &app.App{Name: "TestApp", Version: "1.0.0"}
+
+		_, err := c.Check(context.Background(), a)
+		if err == nil {
+			t.Fatal("expected error for empty GitHubRepo, got nil")
+		}
+	})
+
+	t.Run("server gone (connection refused)", func(t *testing.T) {
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+		baseURL := ts.URL
+		ts.Close()
+
+		c := NewGitHubChecker(ts.Client(), baseURL, "")
+		a := &app.App{Name: "TestApp", Version: "1.0.0", GitHubRepo: "test/app"}
+
+		_, err := c.Check(context.Background(), a)
+		if err == nil {
+			t.Fatal("expected error when server is gone, got nil")
+		}
+	})
+
+	t.Run("non-200 status code", func(t *testing.T) {
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusForbidden)
+		}))
+		defer ts.Close()
+
+		c := NewGitHubChecker(ts.Client(), ts.URL, "")
+		a := &app.App{Name: "TestApp", Version: "1.0.0", GitHubRepo: "test/app"}
+
+		_, err := c.Check(context.Background(), a)
+		if err == nil {
+			t.Fatal("expected error for non-200 status, got nil")
+		}
+	})
+
+	t.Run("invalid JSON response", func(t *testing.T) {
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte("not json"))
+		}))
+		defer ts.Close()
+
+		c := NewGitHubChecker(ts.Client(), ts.URL, "")
+		a := &app.App{Name: "TestApp", Version: "1.0.0", GitHubRepo: "test/app"}
+
+		_, err := c.Check(context.Background(), a)
+		if err == nil {
+			t.Fatal("expected error for invalid JSON, got nil")
+		}
+	})
+}
+
+func TestHasMacKeyword_OSX(t *testing.T) {
+	if !hasMacKeyword("app-osx-arm64.dmg") {
+		t.Error("expected hasMacKeyword to return true for 'osx' keyword")
+	}
+}
+
 const testReleaseJSON = `{
   "tag_name": "v2.0.0",
   "name": "Release 2.0.0",

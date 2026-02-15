@@ -41,6 +41,7 @@ const plistTemplate = `<?xml version="1.0" encoding="UTF-8"?>
 	<array>
 		<string>{{.Binary}}</string>
 		<string>notify</string>
+		<string>--auto-update</string>
 	</array>
 	<key>StartInterval</key>
 	<integer>{{.IntervalSeconds}}</integer>

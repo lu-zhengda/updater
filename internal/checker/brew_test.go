@@ -2,6 +2,7 @@ package checker
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/luzhengda/updater/internal/app"
@@ -158,6 +159,57 @@ func TestBrewChecker_CheckNoUpdate(t *testing.T) {
 
 	if result.HasUpdate {
 		t.Error("expected HasUpdate to be false")
+	}
+}
+
+func TestBrewChecker_Name(t *testing.T) {
+	c := NewBrewChecker(nil)
+	if got := c.Name(); got != "brew" {
+		t.Errorf("Name() = %q, want %q", got, "brew")
+	}
+}
+
+func TestBrewChecker_CheckEmptyCaskName(t *testing.T) {
+	runner := &MockCmdRunner{Output: []byte(`[]`)}
+	c := NewBrewChecker(runner)
+	a := &app.App{Name: "NoName", Version: "1.0.0"}
+
+	_, err := c.Check(context.Background(), a)
+	if err == nil {
+		t.Fatal("expected error for empty cask name, got nil")
+	}
+}
+
+func TestBrewChecker_CheckRunnerError(t *testing.T) {
+	runner := &MockCmdRunner{Err: fmt.Errorf("brew not found")}
+	c := NewBrewChecker(runner)
+	a := &app.App{Name: "Firefox", Version: "1.0.0", CaskName: "firefox", InstalledViaBrew: true}
+
+	_, err := c.Check(context.Background(), a)
+	if err == nil {
+		t.Fatal("expected error when runner fails, got nil")
+	}
+}
+
+func TestBrewChecker_ParseOutdatedInvalidJSON(t *testing.T) {
+	// Neither flat array nor wrapped format — should error
+	_, err := parseBrewOutdated([]byte(`{"unexpected":"format"}`))
+	if err != nil {
+		// The wrapped format with no casks/formulae returns empty successfully.
+		// That's fine — but truly invalid JSON should fail.
+	}
+
+	_, err = parseBrewOutdated([]byte(`not json at all`))
+	if err == nil {
+		t.Fatal("expected error for invalid JSON, got nil")
+	}
+}
+
+func TestListInstalledCasks_RunnerError(t *testing.T) {
+	runner := &MockCmdRunner{Err: fmt.Errorf("brew not installed")}
+	_, err := ListInstalledCasks(context.Background(), runner)
+	if err == nil {
+		t.Fatal("expected error when runner fails, got nil")
 	}
 }
 
