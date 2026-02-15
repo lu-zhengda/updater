@@ -29,16 +29,21 @@ universal_binaries:
     replace: true
 
 archives:
-  - id: updater
+  - id: updater-archive
     builds:
       - updater
-      - updater-menubar
     formats:
       - tar.gz
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}"
     files:
       - completions/*
-    allow_different_binary_count: true
+  - id: menubar-archive
+    builds:
+      - updater-menubar
+    formats:
+      - tar.gz
+    name_template: "{{ .ProjectName }}-menubar_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files: []
 
 checksum:
   name_template: "checksums.txt"
@@ -60,9 +65,10 @@ homebrew_casks:
     homepage: "https://github.com/lu-zhengda/updater"
     description: "macOS app update manager"
     license: "MIT"
+    ids:
+      - updater-archive
     binaries:
       - updater
-      - updater-menubar
     completions:
       bash: completions/updater.bash
       zsh: completions/updater.zsh
@@ -72,5 +78,4 @@ homebrew_casks:
         install: |
           if OS.mac?
             system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/updater"]
-            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/updater-menubar"]
           end
