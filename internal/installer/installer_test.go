@@ -2,9 +2,11 @@ package installer
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -219,6 +221,245 @@ func TestInstallFormatDetection(t *testing.T) {
 	if !strings.Contains(err.Error(), "unsupported file format") {
 		t.Errorf("unexpected error: %v", err)
 	}
+}
+
+func TestInstallDMG_Success(t *testing.T) {
+	dmgPath := filepath.Join(t.TempDir(), "test.dmg")
+	if err := os.WriteFile(dmgPath, []byte("fake"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	mountPoint := "/Volumes/TestApp"
+	runner := &checker.MultiMockCmdRunner{
+		Responses: map[string]checker.MockResponse{
+			fmt.Sprintf("hdiutil attach -nobrowse -plist %s", dmgPath): {
+				Output: []byte(mountPoint + "\n"),
+			},
+			"ls " + mountPoint: {
+				Output: []byte("TestApp.app\nREADME.txt\n"),
+			},
+			fmt.Sprintf("xattr -rd com.apple.quarantine %s", filepath.Join(mountPoint, "TestApp.app")): {},
+			fmt.Sprintf("cp -a %s %s", filepath.Join(mountPoint, "TestApp.app"), "/Applications/TestApp.app"): {},
+			"hdiutil detach " + mountPoint + " -quiet": {},
+		},
+	}
+
+	inst := New(runner, nil)
+	err := inst.installDMG(context.Background(), dmgPath, "/Applications/TestApp.app", "TestApp")
+	if err != nil {
+		t.Fatalf("installDMG failed: %v", err)
+	}
+}
+
+func TestInstallDMG_MountFails(t *testing.T) {
+	dmgPath := filepath.Join(t.TempDir(), "test.dmg")
+	if err := os.WriteFile(dmgPath, []byte("fake"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	runner := &checker.MultiMockCmdRunner{
+		Responses: map[string]checker.MockResponse{
+			fmt.Sprintf("hdiutil attach -nobrowse -plist %s", dmgPath): {
+				Err: fmt.Errorf("corrupt DMG"),
+			},
+		},
+	}
+
+	inst := New(runner, nil)
+	err := inst.installDMG(context.Background(), dmgPath, "/Applications/Test.app", "Test")
+	if err == nil {
+		t.Fatal("expected error when mount fails")
+	}
+	if !strings.Contains(err.Error(), "failed to mount DMG") {
+		t.Errorf("error = %q, want containing 'failed to mount DMG'", err.Error())
+	}
+}
+
+func TestInstallDMG_NoMountPoint(t *testing.T) {
+	dmgPath := filepath.Join(t.TempDir(), "test.dmg")
+	if err := os.WriteFile(dmgPath, []byte("fake"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	runner := &checker.MultiMockCmdRunner{
+		Responses: map[string]checker.MockResponse{
+			fmt.Sprintf("hdiutil attach -nobrowse -plist %s", dmgPath): {
+				Output: []byte("no volume info here\n"),
+			},
+		},
+	}
+
+	inst := New(runner, nil)
+	err := inst.installDMG(context.Background(), dmgPath, "/Applications/Test.app", "Test")
+	if err == nil {
+		t.Fatal("expected error when no mount point found")
+	}
+	if !strings.Contains(err.Error(), "failed to find mount point") {
+		t.Errorf("error = %q, want containing 'failed to find mount point'", err.Error())
+	}
+}
+
+func TestInstallDMG_NoAppInVolume(t *testing.T) {
+	dmgPath := filepath.Join(t.TempDir(), "test.dmg")
+	if err := os.WriteFile(dmgPath, []byte("fake"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	mountPoint := "/Volumes/TestApp"
+	runner := &checker.MultiMockCmdRunner{
+		Responses: map[string]checker.MockResponse{
+			fmt.Sprintf("hdiutil attach -nobrowse -plist %s", dmgPath): {
+				Output: []byte(mountPoint + "\n"),
+			},
+			"ls " + mountPoint: {
+				Output: []byte("README.txt\nLICENSE\n"),
+			},
+			"hdiutil detach " + mountPoint + " -quiet": {},
+		},
+	}
+
+	inst := New(runner, nil)
+	err := inst.installDMG(context.Background(), dmgPath, "/Applications/Test.app", "Test")
+	if err == nil {
+		t.Fatal("expected error when no .app found in volume")
+	}
+	if !strings.Contains(err.Error(), "no .app bundle found in DMG") {
+		t.Errorf("error = %q, want containing 'no .app bundle found in DMG'", err.Error())
+	}
+}
+
+func TestInstallZIP_Success(t *testing.T) {
+	zipPath := filepath.Join(t.TempDir(), "test.zip")
+	if err := os.WriteFile(zipPath, []byte("fake"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// installZIP creates its own tmpDir internally, so we need a broader mock strategy.
+	// The ditto and ls commands will use the internally-created tmpDir, which we can't predict.
+	// Instead, test via the internal method with a known path by mocking at a higher level.
+	// We'll rely on MultiMockCmdRunner's fallback (nil error) for unknown commands.
+	runner := &installZIPMockRunner{appName: "TestApp"}
+
+	inst := New(runner, nil)
+	err := inst.installZIP(context.Background(), zipPath, "/Applications/TestApp.app", "TestApp")
+	if err != nil {
+		t.Fatalf("installZIP failed: %v", err)
+	}
+}
+
+func TestInstallZIP_DittoFails(t *testing.T) {
+	zipPath := filepath.Join(t.TempDir(), "test.zip")
+	if err := os.WriteFile(zipPath, []byte("fake"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	runner := &dittoFailRunner{}
+	inst := New(runner, nil)
+	err := inst.installZIP(context.Background(), zipPath, "/Applications/Test.app", "Test")
+	if err == nil {
+		t.Fatal("expected error when ditto fails")
+	}
+	if !strings.Contains(err.Error(), "failed to extract ZIP") {
+		t.Errorf("error = %q, want containing 'failed to extract ZIP'", err.Error())
+	}
+}
+
+func TestInstallZIP_NoAppFound(t *testing.T) {
+	zipPath := filepath.Join(t.TempDir(), "test.zip")
+	if err := os.WriteFile(zipPath, []byte("fake"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	runner := &noAppZIPRunner{}
+	inst := New(runner, nil)
+	err := inst.installZIP(context.Background(), zipPath, "/Applications/Test.app", "Test")
+	if err == nil {
+		t.Fatal("expected error when no .app found")
+	}
+	if !strings.Contains(err.Error(), "no .app bundle found in ZIP") {
+		t.Errorf("error = %q, want containing 'no .app bundle found in ZIP'", err.Error())
+	}
+}
+
+func TestInstallPKG_Success(t *testing.T) {
+	pkgPath := filepath.Join(t.TempDir(), "test.pkg")
+	if err := os.WriteFile(pkgPath, []byte("fake"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	runner := &checker.MultiMockCmdRunner{
+		Responses: map[string]checker.MockResponse{
+			fmt.Sprintf("sudo installer -pkg %s -target /", pkgPath): {},
+		},
+	}
+
+	inst := New(runner, nil)
+	err := inst.installPKG(context.Background(), pkgPath)
+	if err != nil {
+		t.Fatalf("installPKG failed: %v", err)
+	}
+}
+
+func TestInstallPKG_Fails(t *testing.T) {
+	pkgPath := filepath.Join(t.TempDir(), "test.pkg")
+	if err := os.WriteFile(pkgPath, []byte("fake"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	runner := &checker.MultiMockCmdRunner{
+		Responses: map[string]checker.MockResponse{
+			fmt.Sprintf("sudo installer -pkg %s -target /", pkgPath): {
+				Err: fmt.Errorf("installer failed"),
+			},
+		},
+	}
+
+	inst := New(runner, nil)
+	err := inst.installPKG(context.Background(), pkgPath)
+	if err == nil {
+		t.Fatal("expected error when PKG install fails")
+	}
+	if !strings.Contains(err.Error(), "failed to install PKG") {
+		t.Errorf("error = %q, want containing 'failed to install PKG'", err.Error())
+	}
+}
+
+// installZIPMockRunner handles the dynamic tmpDir that installZIP creates internally.
+// It responds to ditto (no-op success), ls (returns appName.app), and cp/xattr (no-op).
+type installZIPMockRunner struct {
+	appName string
+}
+
+func (r *installZIPMockRunner) Run(_ context.Context, name string, args ...string) ([]byte, error) {
+	switch name {
+	case "ditto":
+		return nil, nil
+	case "ls":
+		return []byte(r.appName + ".app\n"), nil
+	case "cp", "xattr":
+		return nil, nil
+	}
+	return nil, nil
+}
+
+// dittoFailRunner fails on ditto commands.
+type dittoFailRunner struct{}
+
+func (r *dittoFailRunner) Run(_ context.Context, name string, args ...string) ([]byte, error) {
+	if name == "ditto" {
+		return nil, fmt.Errorf("ditto: extraction failed")
+	}
+	return nil, nil
+}
+
+// noAppZIPRunner succeeds on ditto but returns no .app in ls output.
+type noAppZIPRunner struct{}
+
+func (r *noAppZIPRunner) Run(_ context.Context, name string, args ...string) ([]byte, error) {
+	if name == "ls" {
+		return []byte("README.txt\nLICENSE\n"), nil
+	}
+	return nil, nil
 }
 
 func readFile(path string) ([]byte, error) {

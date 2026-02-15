@@ -24,9 +24,9 @@ var (
 	reMultiNL   = regexp.MustCompile(`\n{3,}`)
 )
 
-// stripHTML converts HTML content to plain text suitable for terminal display.
+// StripHTML converts HTML content to plain text suitable for terminal display.
 // It converts block-level elements to newlines, strips all tags, and decodes entities.
-func stripHTML(s string) string {
+func StripHTML(s string) string {
 	// Convert block-level closing tags to newlines.
 	s = reBlockTags.ReplaceAllString(s, "\n")
 

@@ -5,34 +5,40 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/luzhengda/updater/internal/app"
 	"github.com/luzhengda/updater/internal/checker"
 )
 
 func TestBuildNotificationBody(t *testing.T) {
 	tests := []struct {
-		name  string
-		names []string
-		want  string
+		name    string
+		results []*checker.UpdateResult
+		want    string
 	}{
 		{
-			name:  "single app",
-			names: []string{"Firefox"},
-			want:  "Firefox",
+			name: "single app with versions",
+			results: []*checker.UpdateResult{
+				{App: &app.App{Name: "Firefox"}, CurrentVersion: "120.0", LatestVersion: "121.0"},
+			},
+			want: "Firefox (120.0\u2192121.0)",
 		},
 		{
-			name:  "multiple apps",
-			names: []string{"Firefox", "Chrome", "Safari"},
-			want:  "Firefox, Chrome, Safari",
+			name: "multiple apps with versions",
+			results: []*checker.UpdateResult{
+				{App: &app.App{Name: "Firefox"}, CurrentVersion: "120.0", LatestVersion: "121.0"},
+				{App: &app.App{Name: "Chrome"}, CurrentVersion: "144.0", LatestVersion: "145.0"},
+			},
+			want: "Firefox (120.0\u2192121.0), Chrome (144.0\u2192145.0)",
 		},
 		{
-			name:  "truncation",
-			names: generateLongNames(50),
+			name:    "truncation",
+			results: generateLongResults(50),
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := buildNotificationBody(tt.names)
+			got := buildNotificationBody(tt.results)
 			if tt.name == "truncation" {
 				if len(got) > 200 {
 					t.Errorf("body length %d exceeds 200", len(got))
@@ -47,23 +53,57 @@ func TestBuildNotificationBody(t *testing.T) {
 	}
 }
 
-func TestSendNotification(t *testing.T) {
-	var gotArgs string
-	runner := &checker.MultiMockCmdRunner{
-		Responses: map[string]checker.MockResponse{},
+func TestBuildNotificationSubtitle(t *testing.T) {
+	tests := []struct {
+		name    string
+		results []*checker.UpdateResult
+		want    string
+	}{
+		{
+			name: "no major updates",
+			results: []*checker.UpdateResult{
+				{App: &app.App{Name: "Firefox"}, IsMajorUpdate: false},
+				{App: &app.App{Name: "Chrome"}, IsMajorUpdate: false},
+			},
+			want: "",
+		},
+		{
+			name: "one major update",
+			results: []*checker.UpdateResult{
+				{App: &app.App{Name: "Firefox"}, IsMajorUpdate: true},
+				{App: &app.App{Name: "Chrome"}, IsMajorUpdate: false},
+			},
+			want: "1 major update",
+		},
+		{
+			name: "multiple major updates",
+			results: []*checker.UpdateResult{
+				{App: &app.App{Name: "Firefox"}, IsMajorUpdate: true},
+				{App: &app.App{Name: "Chrome"}, IsMajorUpdate: true},
+				{App: &app.App{Name: "Safari"}, IsMajorUpdate: false},
+			},
+			want: "2 major updates",
+		},
 	}
 
-	// Override to capture the osascript args.
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := buildNotificationSubtitle(tt.results)
+			if got != tt.want {
+				t.Errorf("buildNotificationSubtitle() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestSendNotification(t *testing.T) {
 	captureRunner := &captureNotifyRunner{}
 
-	err := sendNotification(context.Background(), captureRunner, 3, "Firefox, Chrome, Safari")
+	err := sendNotification(context.Background(), captureRunner, 3, "Firefox, Chrome, Safari", "")
 	if err != nil {
 		t.Fatalf("sendNotification failed: %v", err)
 	}
-	_ = gotArgs
-	_ = runner
 
-	// Verify the osascript was called.
 	if captureRunner.name != "osascript" {
 		t.Errorf("expected osascript, got %s", captureRunner.name)
 	}
@@ -76,6 +116,24 @@ func TestSendNotification(t *testing.T) {
 	}
 	if !strings.Contains(script, "3 app update(s) available") {
 		t.Errorf("expected title in script, got: %s", script)
+	}
+	// No subtitle when empty.
+	if strings.Contains(script, "subtitle") {
+		t.Error("expected no subtitle when empty string passed")
+	}
+}
+
+func TestSendNotification_WithSubtitle(t *testing.T) {
+	captureRunner := &captureNotifyRunner{}
+
+	err := sendNotification(context.Background(), captureRunner, 2, "Firefox, Chrome", "1 major update")
+	if err != nil {
+		t.Fatalf("sendNotification failed: %v", err)
+	}
+
+	script := captureRunner.args[1]
+	if !strings.Contains(script, `subtitle "1 major update"`) {
+		t.Errorf("expected subtitle in script, got: %s", script)
 	}
 }
 
@@ -96,12 +154,16 @@ func TestEscapeAppleScript(t *testing.T) {
 	}
 }
 
-func generateLongNames(n int) []string {
-	names := make([]string, n)
-	for i := range names {
-		names[i] = "ApplicationWithALongName"
+func generateLongResults(n int) []*checker.UpdateResult {
+	results := make([]*checker.UpdateResult, n)
+	for i := range results {
+		results[i] = &checker.UpdateResult{
+			App:            &app.App{Name: "ApplicationWithALongName"},
+			CurrentVersion: "1.0",
+			LatestVersion:  "2.0",
+		}
 	}
-	return names
+	return results
 }
 
 type captureNotifyRunner struct {
