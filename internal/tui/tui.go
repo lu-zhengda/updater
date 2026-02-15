@@ -139,6 +139,7 @@ type Model struct {
 	rollbackConfirm  bool   // true when showing y/n confirmation
 	rollbackAppName  string // app being rolled back
 	rollingBack      bool   // true while rollback is in progress
+	showHelp         bool   // true when help overlay is visible
 }
 
 // NewModel creates a new TUI model that launches instantly.
@@ -417,6 +418,11 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleHistoryKey(msg)
 	}
 
+	// Help overlay.
+	if m.showHelp {
+		return m.handleHelpKey(msg)
+	}
+
 	// Rollback confirmation overlay.
 	if m.rollbackConfirm {
 		return m.handleRollbackConfirmKey(msg)
@@ -450,6 +456,9 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case tea.KeyRunes:
 		switch string(msg.Runes) {
+		case "?":
+			m.showHelp = true
+			return m, nil
 		case "q":
 			return m, tea.Quit
 		case "j":
@@ -992,6 +1001,10 @@ func (m Model) View() string {
 		return m.viewHistory()
 	}
 
+	if m.showHelp {
+		return m.viewHelp()
+	}
+
 	if m.showDetail {
 		return m.viewDetail()
 	}
@@ -1265,7 +1278,7 @@ func (m Model) renderStatusBar() string {
 		helpParts = append(helpParts, "h: history")
 	}
 
-	helpParts = append(helpParts, "/: search", "r: refresh", "q: quit")
+	helpParts = append(helpParts, "/: search", "?: help", "r: refresh", "q: quit")
 
 	// Append last-checked timestamp.
 	if m.cfg != nil {
@@ -1332,6 +1345,64 @@ func (m Model) handleHistoryKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 	return m, nil
+}
+
+// handleHelpKey processes keyboard input in the help overlay.
+func (m Model) handleHelpKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.Type {
+	case tea.KeyCtrlC:
+		return m, tea.Quit
+	case tea.KeyEsc:
+		m.showHelp = false
+		return m, nil
+	case tea.KeyRunes:
+		if string(msg.Runes) == "?" || string(msg.Runes) == "q" {
+			m.showHelp = false
+			return m, nil
+		}
+	}
+	return m, nil
+}
+
+// viewHelp renders the help overlay with keybinding reference.
+func (m Model) viewHelp() string {
+	var b strings.Builder
+	b.WriteString(styleHeader.Render("Keybindings"))
+	b.WriteString("\n\n")
+
+	b.WriteString(styleColumnHeader.Render("  Navigation"))
+	b.WriteString("\n")
+	b.WriteString("    j/\u2193         Move down\n")
+	b.WriteString("    k/\u2191         Move up\n")
+	b.WriteString("\n")
+
+	b.WriteString(styleColumnHeader.Render("  Actions"))
+	b.WriteString("\n")
+	b.WriteString("    Enter       Update selected app\n")
+	b.WriteString("    Space       Toggle selection\n")
+	b.WriteString("    a           Update all\n")
+	b.WriteString("    d           Show release notes\n")
+	b.WriteString("    p           Pin/unpin app\n")
+	b.WriteString("    i           Ignore/unignore app\n")
+	b.WriteString("    r           Refresh\n")
+	b.WriteString("\n")
+
+	b.WriteString(styleColumnHeader.Render("  Views"))
+	b.WriteString("\n")
+	b.WriteString("    t           Toggle show all / actionable\n")
+	b.WriteString("    h           Update history\n")
+	b.WriteString("    s           Schedule settings\n")
+	b.WriteString("    /           Search\n")
+	b.WriteString("    ?           This help screen\n")
+	b.WriteString("\n")
+
+	b.WriteString(styleColumnHeader.Render("  General"))
+	b.WriteString("\n")
+	b.WriteString("    q/Esc       Quit\n")
+	b.WriteString("\n")
+
+	b.WriteString(styleStatusBar.Render("?/esc/q: close"))
+	return b.String()
 }
 
 // clampHistoryOffset ensures the offset doesn't exceed the number of entries.
