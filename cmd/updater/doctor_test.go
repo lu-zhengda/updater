@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/lu-zhengda/updater/internal/app"
 	"github.com/lu-zhengda/updater/internal/checker"
@@ -211,5 +213,89 @@ func TestValidateConfigMappings_NoApps(t *testing.T) {
 	checks := validateConfigMappings(cfg, nil)
 	if checks[0].Status != "warning" {
 		t.Errorf("Status = %q, want %q", checks[0].Status, "warning")
+	}
+}
+
+func TestCheckDiskSpace_OK(t *testing.T) {
+	c := checkDiskSpace()
+	if c.Status != "ok" && c.Status != "warning" {
+		t.Errorf("unexpected status: %q", c.Status)
+	}
+	if !strings.Contains(c.Detail, "GB") {
+		t.Errorf("detail should contain 'GB', got %q", c.Detail)
+	}
+}
+
+func TestCheckBrewFreshness_NoBrew(t *testing.T) {
+	runner := &checker.MockCmdRunner{Err: fmt.Errorf("brew not found")}
+	c := checkBrewFreshness(context.Background(), runner)
+	if c.Status != "warning" {
+		t.Errorf("status = %q, want warning", c.Status)
+	}
+	if !strings.Contains(c.Detail, "brew not available") {
+		t.Errorf("detail = %q, want 'brew not available'", c.Detail)
+	}
+}
+
+func TestCheckBrewFreshness_Fresh(t *testing.T) {
+	tmpDir := t.TempDir()
+	runner := &checker.MockCmdRunner{Output: []byte(tmpDir + "\n")}
+	c := checkBrewFreshness(context.Background(), runner)
+	if c.Status != "ok" {
+		t.Errorf("status = %q, want ok", c.Status)
+	}
+	if !strings.Contains(c.Detail, "fresh") {
+		t.Errorf("detail = %q, want 'fresh'", c.Detail)
+	}
+}
+
+func TestCheckBrewFreshness_Stale(t *testing.T) {
+	tmpDir := t.TempDir()
+	past := time.Now().Add(-10 * 24 * time.Hour)
+	os.Chtimes(tmpDir, past, past)
+	runner := &checker.MockCmdRunner{Output: []byte(tmpDir + "\n")}
+	c := checkBrewFreshness(context.Background(), runner)
+	if c.Status != "warning" {
+		t.Errorf("status = %q, want warning", c.Status)
+	}
+	if !strings.Contains(c.Detail, "stale") {
+		t.Errorf("detail = %q, want to contain 'stale'", c.Detail)
+	}
+}
+
+func TestValidateConfigMappings_Fix(t *testing.T) {
+	cfg := &config.Config{
+		GitHubMappings: map[string]string{"com.stale.app": "owner/repo"},
+		PinnedApps:     []string{"com.stale.pinned"},
+	}
+	apps := []*app.App{
+		{BundleID: "com.valid.app"},
+	}
+	checks := validateConfigMappings(cfg, apps)
+	if len(checks) != 1 {
+		t.Fatalf("got %d checks, want 1", len(checks))
+	}
+	if checks[0].Status != "warning" {
+		t.Fatalf("status = %q, want warning", checks[0].Status)
+	}
+	if checks[0].fixFn == nil {
+		t.Fatal("fixFn should not be nil")
+	}
+	if !strings.Contains(checks[0].Detail, "com.stale.app") {
+		t.Errorf("detail should mention stale app, got %q", checks[0].Detail)
+	}
+	if !strings.Contains(checks[0].Detail, "com.stale.pinned") {
+		t.Errorf("detail should mention stale pinned, got %q", checks[0].Detail)
+	}
+}
+
+func TestCheckBrewFreshness_FixFn(t *testing.T) {
+	tmpDir := t.TempDir()
+	past := time.Now().Add(-10 * 24 * time.Hour)
+	os.Chtimes(tmpDir, past, past)
+	runner := &checker.MockCmdRunner{Output: []byte(tmpDir + "\n")}
+	c := checkBrewFreshness(context.Background(), runner)
+	if c.fixFn == nil {
+		t.Error("stale brew index should have a fixFn")
 	}
 }

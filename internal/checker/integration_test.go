@@ -240,3 +240,93 @@ func TestSparkle_MultipleItems_OSFiltering(t *testing.T) {
 		t.Error("expected HasUpdate=true")
 	}
 }
+
+func TestSparkle_StaleSource(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/xml")
+		xml := `<?xml version="1.0"?>
+<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
+  <channel><item>
+    <enclosure url="https://example.com/v3.dmg" sparkle:shortVersionString="3.0.0" sparkle:version="300" />
+  </item></channel>
+</rss>`
+		w.Write([]byte(xml))
+	}))
+	defer ts.Close()
+
+	sc := NewSparkleChecker(ts.Client())
+	a := &app.App{Name: "StaleApp", Version: "5.0.0", FeedURL: ts.URL}
+	result, err := sc.Check(context.Background(), a)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !result.StaleSource {
+		t.Error("expected StaleSource=true")
+	}
+	if result.HasUpdate {
+		t.Error("expected HasUpdate=false")
+	}
+}
+
+func TestGitHub_NoMacAsset(t *testing.T) {
+	release := GitHubRelease{
+		TagName: "v2.0.0",
+		Assets: []GitHubAsset{
+			{Name: "app-linux-amd64.tar.gz", DownloadURL: "https://example.com/linux.tar.gz"},
+		},
+	}
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(release)
+	}))
+	defer ts.Close()
+
+	gc := NewGitHubChecker(ts.Client(), ts.URL, "")
+	a := &app.App{Name: "LinuxApp", Version: "1.0.0", GitHubRepo: "owner/repo"}
+	result, err := gc.Check(context.Background(), a)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.DownloadURL != "" {
+		t.Errorf("DownloadURL = %q, want empty", result.DownloadURL)
+	}
+	if !result.HasUpdate {
+		t.Error("expected HasUpdate=true (version is newer)")
+	}
+}
+
+func TestGitHub_404(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.NotFound(w, r)
+	}))
+	defer ts.Close()
+
+	gc := NewGitHubChecker(ts.Client(), ts.URL, "")
+	a := &app.App{Name: "MissingApp", Version: "1.0.0", GitHubRepo: "owner/missing"}
+	_, err := gc.Check(context.Background(), a)
+	if err == nil {
+		t.Fatal("expected error for 404 response")
+	}
+}
+
+func TestGitHub_AuthToken(t *testing.T) {
+	var gotAuth string
+	release := GitHubRelease{TagName: "v1.0.0"}
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(release)
+	}))
+	defer ts.Close()
+
+	gc := NewGitHubChecker(ts.Client(), ts.URL, "test-token-123")
+	a := &app.App{Name: "AuthApp", Version: "1.0.0", GitHubRepo: "owner/repo"}
+	_, err := gc.Check(context.Background(), a)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := "Bearer test-token-123"
+	if gotAuth != want {
+		t.Errorf("Authorization = %q, want %q", gotAuth, want)
+	}
+}

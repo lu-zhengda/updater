@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -17,6 +18,7 @@ import (
 )
 
 var flagVerbose bool
+var flagCheckJSON bool
 
 var checkCmd = &cobra.Command{
 	Use:   "check",
@@ -26,6 +28,7 @@ var checkCmd = &cobra.Command{
 
 func init() {
 	checkCmd.Flags().BoolVarP(&flagVerbose, "verbose", "v", false, "show release notes for available updates")
+	checkCmd.Flags().BoolVar(&flagCheckJSON, "json", false, "output results as JSON")
 	rootCmd.AddCommand(checkCmd)
 }
 
@@ -60,6 +63,25 @@ func runCheck(cmd *cobra.Command, args []string) error {
 
 	checkers := buildCheckers(runner, cfg.ResolveGitHubToken())
 	results := checkAll(ctx, apps, checkers, cfg.MaxConcurrentOrDefault())
+
+	if flagCheckJSON {
+		entries := toCheckEntries(results, cfg)
+		enc := json.NewEncoder(cmd.OutOrStdout())
+		enc.SetIndent("", "  ")
+		if err := enc.Encode(entries); err != nil {
+			return fmt.Errorf("failed to encode JSON: %w", err)
+		}
+		updateCount := 0
+		for _, e := range entries {
+			if e.Status == "update_available" || e.Status == "major_update" {
+				updateCount++
+			}
+		}
+		fmt.Fprintf(os.Stderr, "%d apps checked, %d updates available\n", len(entries), updateCount)
+		cfg.LastChecked = time.Now()
+		_ = cfg.Save(config.DefaultPath())
+		return nil
+	}
 
 	printCheckResults(cmd, results, cfg)
 
@@ -158,4 +180,51 @@ func cliSourceName(source string) string {
 	default:
 		return source
 	}
+}
+
+// checkEntry is the JSON representation of a check result.
+type checkEntry struct {
+	Name           string `json:"name"`
+	BundleID       string `json:"bundle_id"`
+	CurrentVersion string `json:"current_version"`
+	LatestVersion  string `json:"latest_version"`
+	Source         string `json:"source"`
+	Status         string `json:"status"`
+	DownloadURL    string `json:"download_url,omitempty"`
+	ReleaseNotes   string `json:"release_notes,omitempty"`
+	Error          string `json:"error,omitempty"`
+}
+
+// toCheckEntries converts check results to JSON-serializable entries.
+func toCheckEntries(results []*checker.UpdateResult, cfg *config.Config) []checkEntry {
+	var entries []checkEntry
+	for _, r := range results {
+		e := checkEntry{
+			Name:           r.App.Name,
+			BundleID:       r.App.BundleID,
+			CurrentVersion: r.CurrentVersion,
+			LatestVersion:  r.LatestVersion,
+			Source:         r.Source,
+			DownloadURL:    r.DownloadURL,
+			ReleaseNotes:   r.ReleaseNotes,
+		}
+		switch {
+		case r.Error != nil:
+			e.Status = "error"
+			e.Error = r.Error.Error()
+		case r.HasUpdate && cfg.IsPinned(r.App.BundleID):
+			e.Status = "pinned"
+		case r.HasUpdate && r.IsMajorUpdate:
+			e.Status = "major_update"
+		case r.HasUpdate:
+			e.Status = "update_available"
+		default:
+			e.Status = "ok"
+		}
+		entries = append(entries, e)
+	}
+	if entries == nil {
+		entries = []checkEntry{}
+	}
+	return entries
 }
