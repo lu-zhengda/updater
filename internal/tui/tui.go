@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 	"github.com/luzhengda/updater/internal/app"
 	"github.com/luzhengda/updater/internal/checker"
 	"github.com/luzhengda/updater/internal/config"
+	"github.com/luzhengda/updater/internal/history"
 )
 
 // CheckFunc checks all apps for updates and returns results.
@@ -45,6 +47,9 @@ type ScheduleFuncs struct {
 	Remove  func(ctx context.Context) error
 }
 
+// HistoryFunc loads update history entries.
+type HistoryFunc func() ([]history.Entry, error)
+
 // row represents a single row in the TUI table.
 type row struct {
 	app      *app.App
@@ -66,6 +71,11 @@ type checkDoneMsg struct {
 type updateDoneMsg struct {
 	index int
 	err   error
+}
+
+type historyLoadedMsg struct {
+	entries []history.Entry
+	err     error
 }
 
 type scheduleCheckMsg struct{ status ScheduleStatus }
@@ -109,6 +119,10 @@ type Model struct {
 	searchMode     bool
 	searchInput    textinput.Model
 	searchQuery    string
+	historyFn      HistoryFunc
+	showHistory    bool
+	historyEntries []history.Entry
+	historyOffset  int
 }
 
 // NewModel creates a new TUI model that launches instantly.
@@ -116,7 +130,7 @@ type Model struct {
 // checkFn runs after loading to check for updates.
 // updateFn executes updates for individual apps.
 // scheduleFns, cfg, and cfgPath are optional — pass nil/empty to disable scheduler UI.
-func NewModel(loadFn LoadFunc, checkFn CheckFunc, updateFn UpdateFunc, scheduleFns *ScheduleFuncs, cfg *config.Config, cfgPath string) Model {
+func NewModel(loadFn LoadFunc, checkFn CheckFunc, updateFn UpdateFunc, scheduleFns *ScheduleFuncs, cfg *config.Config, cfgPath string, historyFn ...HistoryFunc) Model {
 	s := spinner.New()
 	s.Spinner = spinner.Dot
 	s.Style = lipgloss.NewStyle().Foreground(colorCyan)
@@ -125,6 +139,11 @@ func NewModel(loadFn LoadFunc, checkFn CheckFunc, updateFn UpdateFunc, scheduleF
 	ti.Placeholder = "search..."
 	ti.Prompt = "/ "
 	ti.CharLimit = 64
+
+	var hFn HistoryFunc
+	if len(historyFn) > 0 {
+		hFn = historyFn[0]
+	}
 
 	return Model{
 		loading:     true,
@@ -141,6 +160,7 @@ func NewModel(loadFn LoadFunc, checkFn CheckFunc, updateFn UpdateFunc, scheduleF
 		cfg:         cfg,
 		cfgPath:     cfgPath,
 		searchInput: ti,
+		historyFn:   hFn,
 	}
 }
 
@@ -292,6 +312,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.saveLastChecked()
 		return m, nil
 
+	case historyLoadedMsg:
+		if msg.err != nil {
+			m.statusMsg = fmt.Sprintf("Error loading history: %v", msg.err)
+			m.showHistory = false
+		} else {
+			m.historyEntries = msg.entries
+		}
+		return m, nil
+
 	case scheduleCheckMsg:
 		m.scheduleStatus = msg.status
 		if !msg.status.Enabled && m.cfg != nil && !m.cfg.ScheduleOffered {
@@ -356,6 +385,11 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleScheduleKey(msg)
 	}
 
+	// History overlay.
+	if m.showHistory {
+		return m.handleHistoryKey(msg)
+	}
+
 	// In detail view, handle viewport scrolling and escape.
 	if m.showDetail {
 		return m.handleDetailKey(msg)
@@ -412,6 +446,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case " ":
 			m.toggleSelection()
 			return m, nil
+		case "h":
+			return m.openHistory()
 		case "/":
 			m.searchMode = true
 			m.searchInput.Focus()
@@ -876,6 +912,10 @@ func (m Model) View() string {
 		return m.viewSchedule()
 	}
 
+	if m.showHistory {
+		return m.viewHistory()
+	}
+
 	if m.showDetail {
 		return m.viewDetail()
 	}
@@ -1127,6 +1167,10 @@ func (m Model) renderStatusBar() string {
 		helpParts = append(helpParts, "s: schedule")
 	}
 
+	if m.historyFn != nil {
+		helpParts = append(helpParts, "h: history")
+	}
+
 	helpParts = append(helpParts, "/: search", "r: refresh", "q: quit")
 
 	// Append last-checked timestamp.
@@ -1142,6 +1186,145 @@ func (m Model) renderStatusBar() string {
 	}
 
 	return help + msg
+}
+
+// openHistory opens the history overlay and fires async load.
+func (m Model) openHistory() (tea.Model, tea.Cmd) {
+	if m.historyFn == nil {
+		m.statusMsg = "History not available"
+		return m, nil
+	}
+	m.showHistory = true
+	m.historyEntries = nil
+	m.historyOffset = 0
+	fn := m.historyFn
+	return m, func() tea.Msg {
+		entries, err := fn()
+		return historyLoadedMsg{entries: entries, err: err}
+	}
+}
+
+// handleHistoryKey processes keyboard input in the history overlay.
+func (m Model) handleHistoryKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.Type {
+	case tea.KeyCtrlC:
+		return m, tea.Quit
+	case tea.KeyEsc:
+		m.showHistory = false
+		return m, nil
+	case tea.KeyDown:
+		m.historyOffset++
+		m.clampHistoryOffset()
+		return m, nil
+	case tea.KeyUp:
+		if m.historyOffset > 0 {
+			m.historyOffset--
+		}
+		return m, nil
+	case tea.KeyRunes:
+		switch string(msg.Runes) {
+		case "q", "h":
+			m.showHistory = false
+			return m, nil
+		case "j":
+			m.historyOffset++
+			m.clampHistoryOffset()
+			return m, nil
+		case "k":
+			if m.historyOffset > 0 {
+				m.historyOffset--
+			}
+			return m, nil
+		}
+	}
+	return m, nil
+}
+
+// clampHistoryOffset ensures the offset doesn't exceed the number of entries.
+func (m *Model) clampHistoryOffset() {
+	maxOffset := len(m.historyEntries) - m.historyVisibleRows()
+	if maxOffset < 0 {
+		maxOffset = 0
+	}
+	if m.historyOffset > maxOffset {
+		m.historyOffset = maxOffset
+	}
+}
+
+// historyVisibleRows returns how many history rows fit in the viewport.
+func (m Model) historyVisibleRows() int {
+	// Reserve: header (2) + column headers (1) + status bar (1) + padding (1) = 5
+	rows := m.height - 5
+	if rows < 1 {
+		rows = 1
+	}
+	return rows
+}
+
+// viewHistory renders the history overlay.
+func (m Model) viewHistory() string {
+	var b strings.Builder
+
+	b.WriteString(styleHeader.Render("Update History"))
+	b.WriteString("\n")
+
+	if m.historyEntries == nil {
+		b.WriteString(m.spinner.View())
+		b.WriteString(" Loading history...\n")
+		return b.String()
+	}
+
+	if len(m.historyEntries) == 0 {
+		b.WriteString(lipgloss.NewStyle().Foreground(colorGray).Render("  No update history yet."))
+		b.WriteString("\n")
+		b.WriteString(styleStatusBar.Render("h/esc/q: back"))
+		return b.String()
+	}
+
+	// Sort newest first.
+	entries := make([]history.Entry, len(m.historyEntries))
+	copy(entries, m.historyEntries)
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].Timestamp.After(entries[j].Timestamp)
+	})
+
+	// Column headers.
+	b.WriteString(styleColumnHeader.Render(fmt.Sprintf("  %-12s  %-20s  %-22s  %s",
+		"DATE", "APP", "VERSION", "STATUS")))
+	b.WriteString("\n")
+
+	// Render visible rows.
+	visRows := m.historyVisibleRows()
+	end := m.historyOffset + visRows
+	if end > len(entries) {
+		end = len(entries)
+	}
+
+	for i := m.historyOffset; i < end; i++ {
+		e := entries[i]
+		status := styleUpToDate.Render("ok")
+		if !e.Success {
+			status = styleError.Render("FAILED")
+		}
+		b.WriteString(fmt.Sprintf("  %-12s  %-20s  %-10s → %-10s %s\n",
+			e.Timestamp.Format("2006-01-02"),
+			truncate(e.AppName, 20),
+			truncate(e.FromVersion, 10),
+			truncate(e.ToVersion, 10),
+			status,
+		))
+	}
+
+	// Scroll indicator.
+	if len(entries) > visRows {
+		b.WriteString(lipgloss.NewStyle().Foreground(colorGray).Render(
+			fmt.Sprintf("  showing %d-%d of %d", m.historyOffset+1, end, len(entries))))
+		b.WriteString("\n")
+	}
+
+	b.WriteString(styleStatusBar.Render("j/k: scroll | h/esc/q: back"))
+
+	return b.String()
 }
 
 // formatRelativeTime returns a human-readable relative time string.

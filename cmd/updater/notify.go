@@ -11,6 +11,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
+var flagInteractive bool
+
 var notifyCmd = &cobra.Command{
 	Use:    "notify",
 	Short:  "Check for updates and send a macOS notification",
@@ -19,6 +21,7 @@ var notifyCmd = &cobra.Command{
 }
 
 func init() {
+	notifyCmd.Flags().BoolVar(&flagInteractive, "interactive", false, "show dialog with action buttons")
 	rootCmd.AddCommand(notifyCmd)
 }
 
@@ -54,7 +57,7 @@ func runNotify(cmd *cobra.Command, _ []string) error {
 	checkers := buildCheckers(runner, cfg.ResolveGitHubToken())
 	results := checkAll(ctx, apps, checkers, cfg.MaxConcurrentOrDefault())
 
-	// Collect updatable apps.
+	// Collect updatable apps (including notify-only policy apps).
 	var updatable []*checker.UpdateResult
 	for _, r := range results {
 		if r.HasUpdate && r.Error == nil && !cfg.IsPinned(r.App.BundleID) {
@@ -68,6 +71,10 @@ func runNotify(cmd *cobra.Command, _ []string) error {
 
 	body := buildNotificationBody(updatable)
 	subtitle := buildNotificationSubtitle(updatable)
+
+	if flagInteractive {
+		return sendInteractiveNotification(ctx, runner, len(updatable), body)
+	}
 	return sendNotification(ctx, runner, len(updatable), body, subtitle)
 }
 
@@ -118,6 +125,32 @@ func sendNotification(ctx context.Context, runner checker.CmdRunner, count int, 
 	_, err := runner.Run(ctx, "osascript", "-e", script)
 	if err != nil {
 		return fmt.Errorf("failed to send notification: %w", err)
+	}
+	return nil
+}
+
+// sendInteractiveNotification shows a dialog with action buttons via osascript.
+func sendInteractiveNotification(ctx context.Context, runner checker.CmdRunner, count int, body string) error {
+	title := fmt.Sprintf("%d update(s) available", count)
+
+	binaryPath, err := os.Executable()
+	if err != nil {
+		binaryPath = "updater"
+	}
+
+	script := fmt.Sprintf(
+		`set answer to display dialog "%s" with title "%s" buttons {"Dismiss", "Open Updater"} default button "Dismiss" giving up after 30
+if button returned of answer is "Open Updater" then
+    do shell script "%s ui &>/dev/null &"
+end if`,
+		escapeAppleScript(body),
+		escapeAppleScript(title),
+		escapeAppleScript(binaryPath),
+	)
+
+	_, err = runner.Run(ctx, "osascript", "-e", script)
+	if err != nil {
+		return fmt.Errorf("failed to show interactive notification: %w", err)
 	}
 	return nil
 }

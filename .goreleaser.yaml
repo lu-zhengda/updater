@@ -1,7 +1,8 @@
 version: 2
 
 builds:
-  - main: ./cmd/updater
+  - id: updater
+    main: ./cmd/updater
     binary: updater
     goos:
       - darwin
@@ -11,11 +12,27 @@ builds:
     ldflags:
       - -s -w
       - -X main.version={{.Version}}
+  - id: updater-menubar
+    main: ./cmd/updater-menubar
+    binary: updater-menubar
+    goos:
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+
+universal_binaries:
+  - id: updater
+    replace: true
+  - id: updater-menubar
+    replace: true
 
 archives:
   - formats:
       - tar.gz
-    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}"
     files:
       - completions/*
 
@@ -41,6 +58,7 @@ homebrew_casks:
     license: "MIT"
     binaries:
       - updater
+      - updater-menubar
     completions:
       bash: completions/updater.bash
       zsh: completions/updater.zsh
@@ -50,4 +68,5 @@ homebrew_casks:
         install: |
           if OS.mac?
             system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/updater"]
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/updater-menubar"]
           end
