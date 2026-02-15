@@ -15,7 +15,7 @@ var rootCmd = &cobra.Command{
 	Short:             "macOS app update manager",
 	Long:              "Discover installed macOS apps, check for updates, and update them from multiple sources.",
 	Version:           version,
-	CompletionOptions: cobra.CompletionOptions{HiddenDefaultCmd: true},
+	CompletionOptions: cobra.CompletionOptions{},
 	// Launch TUI when invoked with no subcommand.
 	RunE: runUI,
 }

@@ -64,6 +64,8 @@ jobs:
             def install
               ldflags = "-s -w -X main.version=#{version}"
               system "go", "build", *std_go_args(ldflags:), "./cmd/updater"
+
+              generate_completions_from_executable(bin/"updater", "completion")
             end
 
             test do
