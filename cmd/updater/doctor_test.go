@@ -9,7 +9,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/luzhengda/updater/internal/app"
 	"github.com/luzhengda/updater/internal/checker"
+	"github.com/luzhengda/updater/internal/config"
 	"github.com/luzhengda/updater/internal/history"
 )
 
@@ -118,5 +120,96 @@ func TestDoctor_AllToolsPresent(t *testing.T) {
 		if c.Status != "ok" {
 			t.Errorf("checkTool(%q) Status = %q, want %q", tool, c.Status, "ok")
 		}
+	}
+}
+
+func TestValidateConfigMappings_AllValid(t *testing.T) {
+	cfg := &config.Config{
+		GitHubMappings: map[string]string{"com.example.app": "owner/repo"},
+		CaskMappings:   map[string]string{"com.example.app": "my-cask"},
+	}
+	apps := []*app.App{
+		{BundleID: "com.example.app"},
+	}
+	checks := validateConfigMappings(cfg, apps)
+	if len(checks) != 1 {
+		t.Fatalf("expected 1 check, got %d", len(checks))
+	}
+	if checks[0].Status != "ok" {
+		t.Errorf("Status = %q, want %q", checks[0].Status, "ok")
+	}
+	if checks[0].Detail != "all mappings valid" {
+		t.Errorf("Detail = %q, want %q", checks[0].Detail, "all mappings valid")
+	}
+}
+
+func TestValidateConfigMappings_StaleGitHub(t *testing.T) {
+	cfg := &config.Config{
+		GitHubMappings: map[string]string{"com.stale.app": "owner/repo"},
+	}
+	apps := []*app.App{
+		{BundleID: "com.other.app"},
+	}
+	checks := validateConfigMappings(cfg, apps)
+	if len(checks) != 1 {
+		t.Fatalf("expected 1 check, got %d", len(checks))
+	}
+	if checks[0].Status != "warning" {
+		t.Errorf("Status = %q, want %q", checks[0].Status, "warning")
+	}
+	if !strings.Contains(checks[0].Detail, "github_mappings: com.stale.app") {
+		t.Errorf("Detail should mention stale github_mappings, got: %s", checks[0].Detail)
+	}
+}
+
+func TestValidateConfigMappings_StalePinned(t *testing.T) {
+	cfg := &config.Config{
+		PinnedApps: []string{"com.stale.pinned"},
+	}
+	apps := []*app.App{
+		{BundleID: "com.other.app"},
+	}
+	checks := validateConfigMappings(cfg, apps)
+	if checks[0].Status != "warning" {
+		t.Errorf("Status = %q, want %q", checks[0].Status, "warning")
+	}
+	if !strings.Contains(checks[0].Detail, "pinned_apps: com.stale.pinned") {
+		t.Errorf("Detail should mention stale pinned_apps, got: %s", checks[0].Detail)
+	}
+}
+
+func TestValidateConfigMappings_MultipleStale(t *testing.T) {
+	cfg := &config.Config{
+		GitHubMappings: map[string]string{"com.stale.gh": "owner/repo"},
+		Policies:       map[string]string{"com.stale.policy": config.PolicyManual},
+	}
+	apps := []*app.App{
+		{BundleID: "com.valid.app"},
+	}
+	checks := validateConfigMappings(cfg, apps)
+	if checks[0].Status != "warning" {
+		t.Errorf("Status = %q, want %q", checks[0].Status, "warning")
+	}
+	if !strings.Contains(checks[0].Detail, "2 stale") {
+		t.Errorf("Detail should say '2 stale', got: %s", checks[0].Detail)
+	}
+}
+
+func TestValidateConfigMappings_EmptyConfig(t *testing.T) {
+	cfg := &config.Config{}
+	apps := []*app.App{{BundleID: "com.example.app"}}
+	checks := validateConfigMappings(cfg, apps)
+	if checks[0].Status != "ok" {
+		t.Errorf("Status = %q, want %q", checks[0].Status, "ok")
+	}
+}
+
+func TestValidateConfigMappings_NoApps(t *testing.T) {
+	cfg := &config.Config{
+		GitHubMappings: map[string]string{"com.stale.app": "owner/repo"},
+	}
+	checks := validateConfigMappings(cfg, nil)
+	if checks[0].Status != "warning" {
+		t.Errorf("Status = %q, want %q", checks[0].Status, "warning")
 	}
 }

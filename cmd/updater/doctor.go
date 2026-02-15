@@ -7,9 +7,11 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
+	"github.com/luzhengda/updater/internal/app"
 	"github.com/luzhengda/updater/internal/backup"
 	"github.com/luzhengda/updater/internal/checker"
 	"github.com/luzhengda/updater/internal/config"
@@ -121,18 +123,21 @@ func checkConfig() doctorCheck {
 	return doctorCheck{Name: "Config", Status: "ok", Detail: cfgPath}
 }
 
+// checkConfigValidation discovers apps and cross-references config entries.
 func checkConfigValidation() []doctorCheck {
 	cfg, err := config.Load(config.DefaultPath())
 	if err != nil {
 		return []doctorCheck{{Name: "Config validation", Status: "warning", Detail: fmt.Sprintf("cannot load config: %v", err)}}
 	}
-
-	// Discover apps for cross-reference.
 	apps, err := discoverApps()
 	if err != nil {
 		return []doctorCheck{{Name: "Config validation", Status: "warning", Detail: fmt.Sprintf("cannot discover apps: %v", err)}}
 	}
+	return validateConfigMappings(cfg, apps)
+}
 
+// validateConfigMappings checks config entries against discovered app bundle IDs.
+func validateConfigMappings(cfg *config.Config, apps []*app.App) []doctorCheck {
 	bundleIDs := make(map[string]bool, len(apps))
 	for _, a := range apps {
 		bundleIDs[a.BundleID] = true
@@ -165,6 +170,7 @@ func checkConfigValidation() []doctorCheck {
 		return []doctorCheck{{Name: "Config validation", Status: "ok", Detail: "all mappings valid"}}
 	}
 
+	sort.Strings(stale) // deterministic output for tests
 	detail := fmt.Sprintf("%d stale: %s", len(stale), strings.Join(stale, ", "))
 	return []doctorCheck{{Name: "Config validation", Status: "warning", Detail: detail}}
 }
