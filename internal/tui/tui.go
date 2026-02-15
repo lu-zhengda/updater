@@ -289,7 +289,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case spinner.TickMsg:
-		if m.loading || m.checking || len(m.updating) > 0 {
+		if m.loading || m.checking || len(m.updating) > 0 || m.rollingBack {
 			var cmd tea.Cmd
 			m.spinner, cmd = m.spinner.Update(msg)
 			return m, cmd
@@ -386,6 +386,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.spinner.Tick
 		}
 		return m, nil
+
+	case rollbackDoneMsg:
+		m.rollingBack = false
+		if msg.err != nil {
+			m.statusMsg = fmt.Sprintf("Rollback failed for %s: %v", msg.appName, msg.err)
+		} else {
+			m.statusMsg = fmt.Sprintf("Rolled back %s to previous version", msg.appName)
+		}
+		return m, nil
 	}
 
 	return m, nil
@@ -406,6 +415,11 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// History overlay.
 	if m.showHistory {
 		return m.handleHistoryKey(msg)
+	}
+
+	// Rollback confirmation overlay.
+	if m.rollbackConfirm {
+		return m.handleRollbackConfirmKey(msg)
 	}
 
 	// In detail view, handle viewport scrolling and escape.
@@ -519,6 +533,23 @@ func (m Model) handleDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "k":
 			m.detailViewport.LineUp(1)
 			return m, nil
+		case "r":
+			if m.hasBackupFn == nil || m.rollbackFn == nil {
+				return m, nil
+			}
+			idx := m.detailIdx
+			if idx >= len(m.rows) {
+				return m, nil
+			}
+			appName := m.rows[idx].app.Name
+			if !m.hasBackupFn(appName) {
+				m.statusMsg = fmt.Sprintf("No backup available for %s", appName)
+				m.showDetail = false
+				return m, nil
+			}
+			m.rollbackConfirm = true
+			m.rollbackAppName = appName
+			return m, nil
 		}
 	case tea.KeyDown:
 		m.detailViewport.LineDown(1)
@@ -526,6 +557,33 @@ func (m Model) handleDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case tea.KeyUp:
 		m.detailViewport.LineUp(1)
 		return m, nil
+	}
+	return m, nil
+}
+
+// handleRollbackConfirmKey processes keyboard input during the rollback confirmation overlay.
+func (m Model) handleRollbackConfirmKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.Type {
+	case tea.KeyCtrlC:
+		return m, tea.Quit
+	case tea.KeyEsc:
+		m.rollbackConfirm = false
+		return m, nil
+	case tea.KeyRunes:
+		switch string(msg.Runes) {
+		case "y":
+			m.rollbackConfirm = false
+			m.rollingBack = true
+			m.showDetail = false
+			appName := m.rollbackAppName
+			return m, func() tea.Msg {
+				err := m.rollbackFn(context.Background(), appName)
+				return rollbackDoneMsg{appName: appName, err: err}
+			}
+		case "n":
+			m.rollbackConfirm = false
+			return m, nil
+		}
 	}
 	return m, nil
 }
@@ -938,6 +996,15 @@ func (m Model) View() string {
 		return m.viewDetail()
 	}
 
+	if m.rollingBack {
+		var b strings.Builder
+		b.WriteString(styleHeader.Render("macOS App Updater"))
+		b.WriteString("\n")
+		b.WriteString(m.spinner.View())
+		b.WriteString(fmt.Sprintf(" Rolling back %s...\n", m.rollbackAppName))
+		return b.String()
+	}
+
 	var b strings.Builder
 
 	// Header.
@@ -1023,7 +1090,16 @@ func (m Model) viewDetail() string {
 	b.WriteString("\n")
 	b.WriteString(m.detailViewport.View())
 	b.WriteString("\n")
-	b.WriteString(styleStatusBar.Render("j/k: scroll | d/esc/q: back"))
+	helpText := "j/k: scroll | d/esc/q: back"
+	if m.hasBackupFn != nil && m.detailIdx < len(m.rows) {
+		if m.hasBackupFn(m.rows[m.detailIdx].app.Name) {
+			helpText = "j/k: scroll | r: rollback | d/esc/q: back"
+		}
+	}
+	if m.rollbackConfirm {
+		helpText = fmt.Sprintf("Rollback %s to previous version? (y/n)", m.rollbackAppName)
+	}
+	b.WriteString(styleStatusBar.Render(helpText))
 
 	return b.String()
 }
