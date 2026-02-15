@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"text/tabwriter"
 	"time"
 
@@ -159,6 +160,15 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 		return printDryRun(cmd, updatable, isExplicit, cfg)
 	}
 
+	// Split updates into sequential and parallel groups.
+	sequentialSources := map[string]bool{
+		"brew": true, "brew-info": true, "mas": true, "formula": true,
+	}
+	instantSources := map[string]bool{
+		"system": true, "setapp": true, "toolbox": true, "adobe": true,
+	}
+
+	var sequential, parallel, instant []*checker.UpdateResult
 	for _, r := range updatable {
 		if !isExplicit && cfg.IsPinned(r.App.BundleID) {
 			fmt.Fprintf(cmd.OutOrStdout(), "Skipping %s (pinned)\n", r.App.Name)
@@ -168,27 +178,40 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 			fmt.Fprintf(cmd.OutOrStdout(), "Skipping %s (notify-only)\n", r.App.Name)
 			continue
 		}
-		fmt.Fprintf(cmd.OutOrStdout(), "Updating %s (%s -> %s) via %s...\n",
-			r.App.Name, r.CurrentVersion, r.LatestVersion, r.Source)
-
-		updateErr, rolledBack := executeUpdate(ctx, r, runner, bm, inst)
-		if errors.Is(updateErr, checker.ErrOpenedExternally) {
-			// Not an error — just opened externally for the user to handle.
-		} else if updateErr != nil {
-			fmt.Fprintf(os.Stderr, "  error: %v\n", updateErr)
+		switch {
+		case sequentialSources[r.Source]:
+			sequential = append(sequential, r)
+		case instantSources[r.Source]:
+			instant = append(instant, r)
+		default:
+			parallel = append(parallel, r)
 		}
+	}
 
-		// Record in update history (non-fatal on error).
-		_ = history.Append(history.DefaultPath(), history.Entry{
-			AppName:     r.App.Name,
-			BundleID:    r.App.BundleID,
-			FromVersion: r.CurrentVersion,
-			ToVersion:   r.LatestVersion,
-			Source:      r.Source,
-			Timestamp:   time.Now(),
-			Success:     updateErr == nil || errors.Is(updateErr, checker.ErrOpenedExternally),
-			RolledBack:  rolledBack,
-		})
+	// Phase 1: Sequential updates (brew, mas, formula — shared locks).
+	for _, r := range sequential {
+		performUpdate(cmd, ctx, r, runner, bm, inst)
+	}
+
+	// Phase 2: Parallel updates (sparkle, github, electron — independent).
+	if len(parallel) > 0 {
+		var wg sync.WaitGroup
+		sem := make(chan struct{}, 3) // limit concurrent installs
+		for _, r := range parallel {
+			wg.Add(1)
+			sem <- struct{}{}
+			go func(r *checker.UpdateResult) {
+				defer wg.Done()
+				defer func() { <-sem }()
+				performUpdate(cmd, ctx, r, runner, bm, inst)
+			}(r)
+		}
+		wg.Wait()
+	}
+
+	// Phase 3: Instant actions (system, setapp, toolbox, adobe — just open).
+	for _, r := range instant {
+		performUpdate(cmd, ctx, r, runner, bm, inst)
 	}
 
 	return nil
@@ -327,6 +350,30 @@ func executeUpdate(ctx context.Context, r *checker.UpdateResult, runner checker.
 	default:
 		return fmt.Errorf("unsupported update source: %s", r.Source), false
 	}
+}
+
+// performUpdate prints the update status, executes the update, and records the result in history.
+func performUpdate(cmd *cobra.Command, ctx context.Context, r *checker.UpdateResult, runner checker.CmdRunner, bm *backup.Manager, inst *installer.Installer) {
+	fmt.Fprintf(cmd.OutOrStdout(), "Updating %s (%s -> %s) via %s...\n",
+		r.App.Name, r.CurrentVersion, r.LatestVersion, r.Source)
+
+	updateErr, rolledBack := executeUpdate(ctx, r, runner, bm, inst)
+	if errors.Is(updateErr, checker.ErrOpenedExternally) {
+		// Not an error.
+	} else if updateErr != nil {
+		fmt.Fprintf(os.Stderr, "  error: %v\n", updateErr)
+	}
+
+	_ = history.Append(history.DefaultPath(), history.Entry{
+		AppName:     r.App.Name,
+		BundleID:    r.App.BundleID,
+		FromVersion: r.CurrentVersion,
+		ToVersion:   r.LatestVersion,
+		Source:      r.Source,
+		Timestamp:   time.Now(),
+		Success:     updateErr == nil || errors.Is(updateErr, checker.ErrOpenedExternally),
+		RolledBack:  rolledBack,
+	})
 }
 
 // rollbackAfterFailedInstall attempts to restore an app from backup after a failed install.
