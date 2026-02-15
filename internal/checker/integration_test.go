@@ -3,12 +3,96 @@ package checker
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/luzhengda/updater/internal/app"
 )
+
+func TestRealCmdRunner_Run(t *testing.T) {
+	r := &RealCmdRunner{}
+	output, err := r.Run(context.Background(), "echo", "hello")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	got := strings.TrimSpace(string(output))
+	if got != "hello" {
+		t.Errorf("output = %q, want %q", got, "hello")
+	}
+}
+
+func TestRealCmdRunner_RunError(t *testing.T) {
+	r := &RealCmdRunner{}
+	_, err := r.Run(context.Background(), "nonexistent-command-12345")
+	if err == nil {
+		t.Fatal("expected error for nonexistent command, got nil")
+	}
+}
+
+func TestMultiMockCmdRunner_Run(t *testing.T) {
+	runner := &MultiMockCmdRunner{
+		Responses: map[string]MockResponse{
+			"brew outdated --cask --greedy --json": {
+				Output: []byte(`[{"name":"firefox","current_version":"2.0"}]`),
+			},
+			"mas outdated": {
+				Output: []byte("441258766 Magnet (3.0.6 -> 3.0.7)\n"),
+			},
+			"failing-cmd": {
+				Err: fmt.Errorf("command failed"),
+			},
+		},
+	}
+
+	t.Run("matching key with args", func(t *testing.T) {
+		output, err := runner.Run(context.Background(), "brew", "outdated", "--cask", "--greedy", "--json")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !strings.Contains(string(output), "firefox") {
+			t.Errorf("expected output to contain 'firefox', got %q", string(output))
+		}
+	})
+
+	t.Run("matching key without extra args", func(t *testing.T) {
+		output, err := runner.Run(context.Background(), "mas", "outdated")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !strings.Contains(string(output), "Magnet") {
+			t.Errorf("expected output to contain 'Magnet', got %q", string(output))
+		}
+	})
+
+	t.Run("matching key with error", func(t *testing.T) {
+		_, err := runner.Run(context.Background(), "failing-cmd")
+		if err == nil {
+			t.Fatal("expected error for failing command, got nil")
+		}
+	})
+
+	t.Run("no match falls back to nil", func(t *testing.T) {
+		output, err := runner.Run(context.Background(), "unknown-command", "arg1")
+		if err != nil {
+			t.Fatalf("expected nil error for unmatched key, got %v", err)
+		}
+		if output != nil {
+			t.Errorf("expected nil output for unmatched key, got %q", string(output))
+		}
+	})
+
+	t.Run("command with no args", func(t *testing.T) {
+		// Test that a key with just the name (no args) works.
+		output, err := runner.Run(context.Background(), "failing-cmd")
+		if err == nil {
+			t.Fatal("expected error")
+		}
+		_ = output
+	})
+}
 
 func TestSparkle_EndToEnd(t *testing.T) {
 	var serverURL string

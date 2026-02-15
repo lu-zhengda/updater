@@ -9,6 +9,166 @@ import (
 	"github.com/luzhengda/updater/internal/app"
 )
 
+func TestSparkleChecker_Name(t *testing.T) {
+	c := NewSparkleChecker(nil)
+	if got := c.Name(); got != "sparkle" {
+		t.Errorf("Name() = %q, want %q", got, "sparkle")
+	}
+}
+
+func TestSparkleChecker_CheckErrorPaths(t *testing.T) {
+	t.Run("empty feed URL", func(t *testing.T) {
+		c := NewSparkleChecker(nil)
+		a := &app.App{Name: "TestApp", Version: "1.0.0"}
+
+		_, err := c.Check(context.Background(), a)
+		if err == nil {
+			t.Fatal("expected error for empty feed URL, got nil")
+		}
+	})
+
+	t.Run("invalid feed URL", func(t *testing.T) {
+		c := NewSparkleChecker(nil)
+		a := &app.App{Name: "TestApp", Version: "1.0.0", FeedURL: "://bad-url"}
+
+		_, err := c.Check(context.Background(), a)
+		if err == nil {
+			t.Fatal("expected error for invalid feed URL, got nil")
+		}
+	})
+
+	t.Run("server gone (connection refused)", func(t *testing.T) {
+		// Create a server, get its URL, then close it immediately.
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+		feedURL := ts.URL
+		ts.Close()
+
+		c := NewSparkleChecker(ts.Client())
+		a := &app.App{Name: "TestApp", Version: "1.0.0", FeedURL: feedURL}
+
+		_, err := c.Check(context.Background(), a)
+		if err == nil {
+			t.Fatal("expected error when server is gone, got nil")
+		}
+	})
+
+	t.Run("non-200 status code", func(t *testing.T) {
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusNotFound)
+		}))
+		defer ts.Close()
+
+		c := NewSparkleChecker(ts.Client())
+		a := &app.App{Name: "TestApp", Version: "1.0.0", FeedURL: ts.URL}
+
+		_, err := c.Check(context.Background(), a)
+		if err == nil {
+			t.Fatal("expected error for non-200 status, got nil")
+		}
+	})
+
+	t.Run("invalid XML body", func(t *testing.T) {
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Write([]byte("this is not XML"))
+		}))
+		defer ts.Close()
+
+		c := NewSparkleChecker(ts.Client())
+		a := &app.App{Name: "TestApp", Version: "1.0.0", FeedURL: ts.URL}
+
+		_, err := c.Check(context.Background(), a)
+		if err == nil {
+			t.Fatal("expected error for invalid XML, got nil")
+		}
+	})
+
+	t.Run("empty items in feed", func(t *testing.T) {
+		emptyXML := `<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
+  <channel>
+    <title>Empty Feed</title>
+  </channel>
+</rss>`
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Write([]byte(emptyXML))
+		}))
+		defer ts.Close()
+
+		c := NewSparkleChecker(ts.Client())
+		a := &app.App{Name: "TestApp", Version: "1.0.0", FeedURL: ts.URL}
+
+		_, err := c.Check(context.Background(), a)
+		if err == nil {
+			t.Fatal("expected error for empty feed items, got nil")
+		}
+	})
+}
+
+func TestFindBestItem_AllFilteredOut(t *testing.T) {
+	// All items are filtered out by OS version, should return items[0] as fallback.
+	orig := getMacOSVersionFn
+	getMacOSVersionFn = func() string { return "13.0" }
+	defer func() { getMacOSVersionFn = orig }()
+
+	items := []sparkleItem{
+		{
+			Title:            "Version 4.0",
+			MinSystemVersion: "16.0",
+			Enclosure: sparkleEnclosure{
+				ShortVersionString: "4.0.0",
+				URL:                "https://example.com/v4.dmg",
+			},
+		},
+		{
+			Title:            "Version 3.0",
+			MinSystemVersion: "15.0",
+			Enclosure: sparkleEnclosure{
+				ShortVersionString: "3.0.0",
+				URL:                "https://example.com/v3.dmg",
+			},
+		},
+	}
+
+	result := findBestItem(items, getMacOSVersionFn())
+	// Both items require macOS 15+ or 16+, but we're on 13.0 — all filtered out.
+	// Should fallback to items[0].
+	if result.Enclosure.ShortVersionString != "4.0.0" {
+		t.Errorf("expected fallback to items[0] (4.0.0), got %q", result.Enclosure.ShortVersionString)
+	}
+}
+
+func TestFindBestItem_MaxSystemVersionFilters(t *testing.T) {
+	// Item with maxSystemVersion lower than current OS should be filtered out.
+	orig := getMacOSVersionFn
+	getMacOSVersionFn = func() string { return "16.0" }
+	defer func() { getMacOSVersionFn = orig }()
+
+	items := []sparkleItem{
+		{
+			Title:            "Version 2.0 (old macOS only)",
+			MaxSystemVersion: "14.99",
+			Enclosure: sparkleEnclosure{
+				ShortVersionString: "2.0.0",
+				URL:                "https://example.com/v2.dmg",
+			},
+		},
+		{
+			Title: "Version 3.0 (universal)",
+			Enclosure: sparkleEnclosure{
+				ShortVersionString: "3.0.0",
+				URL:                "https://example.com/v3.dmg",
+			},
+		},
+	}
+
+	result := findBestItem(items, getMacOSVersionFn())
+	// Item 1 (v2.0) has maxSystemVersion=14.99, we're on 16.0, so it should be skipped.
+	// Item 2 (v3.0) has no restrictions, should be selected.
+	if result.Enclosure.ShortVersionString != "3.0.0" {
+		t.Errorf("expected v3.0.0 (maxSystemVersion filtered v2.0.0), got %q", result.Enclosure.ShortVersionString)
+	}
+}
+
 const testAppcastXML = `<?xml version="1.0" encoding="utf-8"?>
 <rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
   <channel>

@@ -8,6 +8,30 @@ import (
 	"github.com/luzhengda/updater/internal/app"
 )
 
+func TestBrewFormulaChecker_Name(t *testing.T) {
+	c := NewBrewFormulaChecker(nil)
+	if got := c.Name(); got != "formula" {
+		t.Errorf("Name() = %q, want %q", got, "formula")
+	}
+}
+
+func TestBrewFormulaChecker_LoadOutdatedJSONParseError(t *testing.T) {
+	runner := &MockCmdRunner{Output: []byte(`not json`)}
+	c := NewBrewFormulaChecker(runner)
+
+	a := &app.App{
+		Name:        "node",
+		Version:     "20.0.0",
+		Source:      app.SourceBrewFormula,
+		FormulaName: "node",
+	}
+
+	_, err := c.Check(context.Background(), a)
+	if err == nil {
+		t.Fatal("expected error for invalid JSON from loadOutdated, got nil")
+	}
+}
+
 func TestBrewFormulaChecker_CanCheck(t *testing.T) {
 	c := NewBrewFormulaChecker(nil)
 

@@ -200,3 +200,14 @@ func TestBrewInfoChecker_Name(t *testing.T) {
 		t.Errorf("Name() = %q, want %q", got, "brew-info")
 	}
 }
+
+func TestBrewInfoChecker_CheckEmptyCaskName(t *testing.T) {
+	runner := &MockCmdRunner{Output: []byte(`{}`)}
+	checker := NewBrewInfoChecker(runner)
+	a := &app.App{Name: "NoName", Version: "1.0.0"}
+
+	_, err := checker.Check(context.Background(), a)
+	if err == nil {
+		t.Fatal("expected error for empty cask name, got nil")
+	}
+}

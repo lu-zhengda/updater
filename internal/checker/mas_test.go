@@ -2,10 +2,29 @@ package checker
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/luzhengda/updater/internal/app"
 )
+
+func TestMASChecker_Name(t *testing.T) {
+	c := NewMASChecker(nil)
+	if got := c.Name(); got != "mas" {
+		t.Errorf("Name() = %q, want %q", got, "mas")
+	}
+}
+
+func TestMASChecker_CheckRunnerError(t *testing.T) {
+	runner := &MockCmdRunner{Err: fmt.Errorf("mas not found")}
+	c := NewMASChecker(runner)
+	a := &app.App{Name: "Magnet", Version: "3.0.6", Source: app.SourceMAS, MASID: "441258766"}
+
+	_, err := c.Check(context.Background(), a)
+	if err == nil {
+		t.Fatal("expected error when runner fails, got nil")
+	}
+}
 
 func TestMASChecker_ParseOutdated(t *testing.T) {
 	output := "441258766 Magnet (3.0.6 -> 3.0.7)\n1176895641 Spark (3.27.8 -> 3.27.9)\n"

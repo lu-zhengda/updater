@@ -2,10 +2,29 @@ package checker
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/luzhengda/updater/internal/app"
 )
+
+func TestSystemChecker_Name(t *testing.T) {
+	c := NewSystemChecker(nil)
+	if got := c.Name(); got != "system" {
+		t.Errorf("Name() = %q, want %q", got, "system")
+	}
+}
+
+func TestSystemChecker_CheckRunnerError(t *testing.T) {
+	runner := &MockCmdRunner{Err: fmt.Errorf("softwareupdate not found")}
+	c := NewSystemChecker(runner)
+	a := &app.App{Name: "macOS", BundleID: "com.apple.macOS", Version: "15.2"}
+
+	_, err := c.Check(context.Background(), a)
+	if err == nil {
+		t.Fatal("expected error when runner fails, got nil")
+	}
+}
 
 func TestSystemChecker_CanCheck(t *testing.T) {
 	c := NewSystemChecker(nil)
