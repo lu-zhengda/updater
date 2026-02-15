@@ -21,6 +21,7 @@ import (
 )
 
 var flagDoctorJSON bool
+var flagDoctorFix bool
 
 var doctorCmd = &cobra.Command{
 	Use:   "doctor",
@@ -30,13 +31,15 @@ var doctorCmd = &cobra.Command{
 
 func init() {
 	doctorCmd.Flags().BoolVar(&flagDoctorJSON, "json", false, "output as JSON")
+	doctorCmd.Flags().BoolVar(&flagDoctorFix, "fix", false, "auto-fix issues where possible")
 	rootCmd.AddCommand(doctorCmd)
 }
 
 type doctorCheck struct {
-	Name    string `json:"name"`
-	Status  string `json:"status"` // "ok", "warning", "not_installed"
-	Detail  string `json:"detail"`
+	Name    string        `json:"name"`
+	Status  string        `json:"status"` // "ok", "warning", "not_installed"
+	Detail  string        `json:"detail"`
+	fixFn   func() string `json:"-"` // returns description of what was fixed; nil if no fix available
 }
 
 func runDoctor(cmd *cobra.Command, _ []string) error {
@@ -106,6 +109,16 @@ func runDoctor(cmd *cobra.Command, _ []string) error {
 		}
 		fmt.Fprintf(cmd.OutOrStdout(), "%s %s (%s)\n", prefix, c.Name, c.Detail)
 	}
+
+	if flagDoctorFix {
+		for _, c := range checks {
+			if c.Status == "warning" && c.fixFn != nil {
+				desc := c.fixFn()
+				fmt.Fprintf(cmd.OutOrStdout(), "[fix] %s: %s\n", c.Name, desc)
+			}
+		}
+	}
+
 	return nil
 }
 
@@ -153,36 +166,84 @@ func validateConfigMappings(cfg *config.Config, apps []*app.App) []doctorCheck {
 		bundleIDs[a.BundleID] = true
 	}
 
-	var stale []string
+	type staleEntry struct {
+		label    string // e.g., "github_mappings: com.example.app"
+		bundleID string
+		kind     string // "github", "cask", "policy", "pinned"
+	}
+	var staleEntries []staleEntry
 
 	for id := range cfg.GitHubMappings {
 		if !bundleIDs[id] {
-			stale = append(stale, fmt.Sprintf("github_mappings: %s", id))
+			staleEntries = append(staleEntries, staleEntry{
+				label: fmt.Sprintf("github_mappings: %s", id), bundleID: id, kind: "github",
+			})
 		}
 	}
 	for id := range cfg.CaskMappings {
 		if !bundleIDs[id] {
-			stale = append(stale, fmt.Sprintf("cask_mappings: %s", id))
+			staleEntries = append(staleEntries, staleEntry{
+				label: fmt.Sprintf("cask_mappings: %s", id), bundleID: id, kind: "cask",
+			})
 		}
 	}
 	for id := range cfg.Policies {
 		if !bundleIDs[id] {
-			stale = append(stale, fmt.Sprintf("policies: %s", id))
+			staleEntries = append(staleEntries, staleEntry{
+				label: fmt.Sprintf("policies: %s", id), bundleID: id, kind: "policy",
+			})
 		}
 	}
 	for _, id := range cfg.PinnedApps {
 		if !bundleIDs[id] {
-			stale = append(stale, fmt.Sprintf("pinned_apps: %s", id))
+			staleEntries = append(staleEntries, staleEntry{
+				label: fmt.Sprintf("pinned_apps: %s", id), bundleID: id, kind: "pinned",
+			})
 		}
 	}
 
-	if len(stale) == 0 {
+	if len(staleEntries) == 0 {
 		return []doctorCheck{{Name: "Config validation", Status: "ok", Detail: "all mappings valid"}}
 	}
 
-	sort.Strings(stale) // deterministic output for tests
-	detail := fmt.Sprintf("%d stale: %s", len(stale), strings.Join(stale, ", "))
-	return []doctorCheck{{Name: "Config validation", Status: "warning", Detail: detail}}
+	labels := make([]string, len(staleEntries))
+	for i, e := range staleEntries {
+		labels[i] = e.label
+	}
+	sort.Strings(labels) // deterministic output for tests
+
+	detail := fmt.Sprintf("%d stale: %s", len(staleEntries), strings.Join(labels, ", "))
+	check := doctorCheck{Name: "Config validation", Status: "warning", Detail: detail}
+
+	check.fixFn = func() string {
+		fixCfg, err := config.Load(config.DefaultPath())
+		if err != nil {
+			return fmt.Sprintf("failed to load config: %v", err)
+		}
+		removed := 0
+		for _, e := range staleEntries {
+			switch e.kind {
+			case "github":
+				fixCfg.RemoveGitHubMapping(e.bundleID)
+				removed++
+			case "cask":
+				fixCfg.RemoveCaskMapping(e.bundleID)
+				removed++
+			case "policy":
+				fixCfg.RemovePolicy(e.bundleID)
+				removed++
+			case "pinned":
+				fixCfg.Unpin(e.bundleID)
+				removed++
+			}
+		}
+		if err := fixCfg.Save(config.DefaultPath()); err != nil {
+			return fmt.Sprintf("removed %d entries but failed to save: %v", removed, err)
+		}
+		return fmt.Sprintf("removed %d stale entries", removed)
+	}
+
+	return []doctorCheck{check}
 }
 
 func checkBackups() doctorCheck {
@@ -329,7 +390,19 @@ func checkBrewFreshness(ctx context.Context, runner checker.CmdRunner) doctorChe
 	age := time.Since(info.ModTime())
 	days := int(age.Hours() / 24)
 	if days > 7 {
-		return doctorCheck{Name: "Brew index", Status: "warning", Detail: fmt.Sprintf("stale (%d days since last update)", days)}
+		check := doctorCheck{
+			Name: "Brew index", Status: "warning",
+			Detail: fmt.Sprintf("stale (%d days since last update)", days),
+		}
+		check.fixFn = func() string {
+			r := &checker.RealCmdRunner{}
+			_, err := r.Run(context.Background(), "brew", "update")
+			if err != nil {
+				return fmt.Sprintf("brew update failed: %v", err)
+			}
+			return "ran brew update"
+		}
+		return check
 	}
 	return doctorCheck{Name: "Brew index", Status: "ok", Detail: fmt.Sprintf("fresh (%d days)", days)}
 }

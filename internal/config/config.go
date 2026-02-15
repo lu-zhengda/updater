@@ -198,6 +198,16 @@ func (c *Config) RemovePolicy(bundleID string) {
 	delete(c.Policies, bundleID)
 }
 
+// RemoveGitHubMapping removes the GitHub mapping for the given bundle ID.
+func (c *Config) RemoveGitHubMapping(bundleID string) {
+	delete(c.GitHubMappings, bundleID)
+}
+
+// RemoveCaskMapping removes the cask mapping for the given bundle ID.
+func (c *Config) RemoveCaskMapping(bundleID string) {
+	delete(c.CaskMappings, bundleID)
+}
+
 // Merge merges an imported config into the current one and returns the result.
 // Lists are unioned (deduplicated), maps are merged (imported overrides current),
 // and non-zero scalars from imported override current values.
