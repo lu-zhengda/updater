@@ -310,13 +310,23 @@ func TestEnrichApps_Phase3_ElectronWithUpdateURL_NoFallback(t *testing.T) {
 
 func TestEnrichApps_Phase4_CaskProbe_NotFound(t *testing.T) {
 	cfg := &config.Config{}
+	// Path set so CaskCandidates produces a predictable, controlled set:
+	// basename "Unknown App" → "unknown-app", display "Unknown App" → "unknown-app" (dedup),
+	// bundle last "app" → "app", bundle second-to-last "unknown" → "unknown".
 	apps := []*app.App{
-		{Name: "Unknown App", BundleID: "com.unknown.app", Source: app.SourceUnknown},
+		{
+			Name:     "Unknown App",
+			BundleID: "com.unknown.app",
+			Source:   app.SourceUnknown,
+			Path:     "/Applications/Unknown App.app",
+		},
 	}
 	runner := &checker.MultiMockCmdRunner{
 		Responses: map[string]checker.MockResponse{
-			"brew list --cask": {Output: []byte("")}, // not in installed casks
+			"brew list --cask":                        {Output: []byte("")},
 			"brew info --cask --json=v2 unknown-app": {Err: fmt.Errorf("exit 1")},
+			"brew info --cask --json=v2 app":         {Err: fmt.Errorf("exit 1")},
+			"brew info --cask --json=v2 unknown":     {Err: fmt.Errorf("exit 1")},
 		},
 	}
 
@@ -325,9 +335,9 @@ func TestEnrichApps_Phase4_CaskProbe_NotFound(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// CaskExists returns false → CaskName should be cleared.
+	// All candidates failed → CaskName should remain empty.
 	if result[0].CaskName != "" {
-		t.Errorf("CaskName = %q, want empty (cask probe failed)", result[0].CaskName)
+		t.Errorf("CaskName = %q, want empty (all cask probes failed)", result[0].CaskName)
 	}
 }
 
@@ -408,18 +418,26 @@ func TestEnrichApps_BrewListError(t *testing.T) {
 
 func TestEnrichApps_Phase4_ElectronProbe(t *testing.T) {
 	cfg := &config.Config{}
+	// CaskCandidates for this app (Path set for predictability):
+	// basename "Electron No Meta" → "electron-no-meta",
+	// display same → dedup,
+	// bundle last "nometa" → "nometa",
+	// bundle second-to-last "electron" → "electron".
 	apps := []*app.App{
 		{
 			Name:     "Electron No Meta",
 			BundleID: "com.electron.nometa",
 			Source:   app.SourceElectron,
+			Path:     "/Applications/Electron No Meta.app",
 			// No ElectronUpdateURL, no GitHubRepo
 		},
 	}
 	runner := &checker.MultiMockCmdRunner{
 		Responses: map[string]checker.MockResponse{
-			"brew list --cask": {Output: []byte("")}, // not installed
+			"brew list --cask":                             {Output: []byte("")},
 			"brew info --cask --json=v2 electron-no-meta": {Err: fmt.Errorf("not found")},
+			"brew info --cask --json=v2 nometa":           {Err: fmt.Errorf("not found")},
+			"brew info --cask --json=v2 electron":         {Err: fmt.Errorf("not found")},
 		},
 	}
 
@@ -428,9 +446,141 @@ func TestEnrichApps_Phase4_ElectronProbe(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// Electron app without meta that fails probe → CaskName cleared.
+	// All candidates failed → CaskName remains empty.
 	if result[0].CaskName != "" {
-		t.Errorf("CaskName = %q, want empty (probe failed)", result[0].CaskName)
+		t.Errorf("CaskName = %q, want empty (all probes failed)", result[0].CaskName)
+	}
+}
+
+// --- EnrichApps: multi-signal cask resolution ---
+
+// TestEnrichApps_VSCode_GetsCaskViaBasename verifies that an app whose display
+// name ("Code") does not match its cask token ("visual-studio-code") is still
+// resolved correctly because the .app bundle basename ("Visual Studio Code")
+// produces the right token via ToCaskName.
+func TestEnrichApps_VSCode_GetsCaskViaBasename(t *testing.T) {
+	cfg := &config.Config{}
+	apps := []*app.App{
+		{
+			// Mirrors real VSCode: display name "Code", but .app file is
+			// "Visual Studio Code.app" → basename candidate resolves correctly.
+			Name:     "Code",
+			BundleID: "com.microsoft.VSCode",
+			Source:   app.SourceElectron,
+			Path:     "/Applications/Visual Studio Code.app",
+			// No ElectronUpdateURL, no GitHubRepo (generic provider in app-update.yml)
+		},
+	}
+	// Candidates: "visual-studio-code" (basename), "code" (display),
+	//             "vscode" (last segment), "microsoft" (second-to-last).
+	runner := &checker.MultiMockCmdRunner{
+		Responses: map[string]checker.MockResponse{
+			"brew list --cask": {Output: []byte("")}, // not installed via brew
+			// "visual-studio-code" probe succeeds → should be selected.
+			"brew info --cask --json=v2 visual-studio-code": {
+				Output: []byte(`{"casks":[{"token":"visual-studio-code","version":"1.87.0"}]}`),
+			},
+		},
+	}
+
+	result, err := EnrichApps(context.Background(), apps, cfg, runner)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result[0].CaskName != "visual-studio-code" {
+		t.Errorf("CaskName = %q, want %q", result[0].CaskName, "visual-studio-code")
+	}
+	// BrewInfoChecker should now be able to handle this app.
+	brewInfoChecker := BuildCheckers(&checker.MockCmdRunner{}, "")[8] // last checker
+	if !brewInfoChecker.CanCheck(result[0]) {
+		t.Error("BrewInfoChecker.CanCheck = false, want true (app has CaskName)")
+	}
+}
+
+// TestEnrichApps_GitHubDesktop_GetsCaskViaBundleIDSegment verifies that GitHub
+// Desktop — whose display name ("GitHub Desktop") and bundle basename both
+// produce "github-desktop" while the actual cask token is "github" — is
+// resolved via the bundle ID second-to-last segment ("com.github.GitHubClient"
+// → "github").
+func TestEnrichApps_GitHubDesktop_GetsCaskViaBundleIDSegment(t *testing.T) {
+	cfg := &config.Config{}
+	apps := []*app.App{
+		{
+			Name:     "GitHub Desktop",
+			BundleID: "com.github.GitHubClient",
+			Source:   app.SourceElectron,
+			Path:     "/Applications/GitHub Desktop.app",
+		},
+	}
+	// Candidates: "github-desktop" (basename), "github-desktop" (display, dedup),
+	//             "githubclient" (last segment), "github" (second-to-last).
+	runner := &checker.MultiMockCmdRunner{
+		Responses: map[string]checker.MockResponse{
+			"brew list --cask": {Output: []byte("")},
+			// "github-desktop" and "githubclient" don't exist as casks.
+			"brew info --cask --json=v2 github-desktop": {Err: fmt.Errorf("exit 1")},
+			"brew info --cask --json=v2 githubclient":   {Err: fmt.Errorf("exit 1")},
+			// "github" is the real cask token.
+			"brew info --cask --json=v2 github": {
+				Output: []byte(`{"casks":[{"token":"github","version":"3.4.5"}]}`),
+			},
+		},
+	}
+
+	result, err := EnrichApps(context.Background(), apps, cfg, runner)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result[0].CaskName != "github" {
+		t.Errorf("CaskName = %q, want %q", result[0].CaskName, "github")
+	}
+	brewInfoChecker := BuildCheckers(&checker.MockCmdRunner{}, "")[8]
+	if !brewInfoChecker.CanCheck(result[0]) {
+		t.Error("BrewInfoChecker.CanCheck = false, want true (app has CaskName)")
+	}
+}
+
+// TestEnrichApps_GenericElectron_GetsCaskViaDisplayName verifies that a
+// generic Electron app whose display name happens to match its cask token
+// directly is resolved on the second candidate (display name), proving the
+// mechanism is not special-cased to specific apps.
+func TestEnrichApps_GenericElectron_GetsCaskViaDisplayName(t *testing.T) {
+	cfg := &config.Config{}
+	apps := []*app.App{
+		{
+			// App whose .app filename differs from display name in a way that
+			// doesn't match the cask, but the display name does.
+			// e.g. the bundle is stored as "Acme Helper.app" but the cask is "acme".
+			Name:     "Acme",
+			BundleID: "com.acme.acmeapp",
+			Source:   app.SourceElectron,
+			Path:     "/Applications/Acme Helper.app",
+		},
+	}
+	// Candidates: "acme-helper" (basename), "acme" (display), "acmeapp" (last),
+	//             "acme" (second-to-last, dedup with display).
+	runner := &checker.MultiMockCmdRunner{
+		Responses: map[string]checker.MockResponse{
+			"brew list --cask": {Output: []byte("")},
+			// basename "acme-helper" does not exist as a cask.
+			"brew info --cask --json=v2 acme-helper": {Err: fmt.Errorf("exit 1")},
+			// display-name candidate "acme" is the correct cask.
+			"brew info --cask --json=v2 acme": {
+				Output: []byte(`{"casks":[{"token":"acme","version":"2.1.0"}]}`),
+			},
+		},
+	}
+
+	result, err := EnrichApps(context.Background(), apps, cfg, runner)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result[0].CaskName != "acme" {
+		t.Errorf("CaskName = %q, want %q", result[0].CaskName, "acme")
+	}
+	brewInfoChecker := BuildCheckers(&checker.MockCmdRunner{}, "")[8]
+	if !brewInfoChecker.CanCheck(result[0]) {
+		t.Error("BrewInfoChecker.CanCheck = false, want true (app has CaskName)")
 	}
 }
 

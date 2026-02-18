@@ -463,6 +463,109 @@ func TestClassifySource_SetappInDiscover(t *testing.T) {
 	}
 }
 
+func TestCaskCandidates(t *testing.T) {
+	tests := []struct {
+		name     string
+		app      *App
+		wantHead string   // first candidate (highest confidence)
+		wantAll  []string // full ordered, deduplicated list
+	}{
+		{
+			// VSCode: display name "Code" would produce "code" via the old single-
+			// heuristic, which is wrong.  The .app bundle basename "Visual Studio
+			// Code" → "visual-studio-code" is the correct cask token and must come
+			// first.
+			name: "VSCode – basename takes priority over display name",
+			app: &App{
+				Name:     "Code",
+				BundleID: "com.microsoft.VSCode",
+				Path:     "/Applications/Visual Studio Code.app",
+			},
+			wantHead: "visual-studio-code",
+			wantAll:  []string{"visual-studio-code", "code", "vscode", "microsoft"},
+		},
+		{
+			// GitHub Desktop: both display name and bundle basename produce
+			// "github-desktop", which is not the real cask.  The correct token
+			// "github" must appear via the bundle ID second-to-last segment.
+			name: "GitHub Desktop – org segment produces correct token",
+			app: &App{
+				Name:     "GitHub Desktop",
+				BundleID: "com.github.GitHubClient",
+				Path:     "/Applications/GitHub Desktop.app",
+			},
+			wantHead: "github-desktop",
+			wantAll:  []string{"github-desktop", "githubclient", "github"},
+		},
+		{
+			// Simple app where display name == basename → single deduplicated entry
+			// for those two, plus bundle ID contributions.
+			name: "Firefox – display name matches basename, deduplication works",
+			app: &App{
+				Name:     "Firefox",
+				BundleID: "org.mozilla.firefox",
+				Path:     "/Applications/Firefox.app",
+			},
+			wantHead: "firefox",
+			wantAll:  []string{"firefox", "mozilla"},
+		},
+		{
+			// No Path set → basename candidate absent; display name is first.
+			name: "no Path – falls back to display name as first candidate",
+			app: &App{
+				Name:     "My App",
+				BundleID: "com.example.myapp",
+			},
+			wantHead: "my-app",
+			wantAll:  []string{"my-app", "myapp", "example"},
+		},
+		{
+			// Empty app → no candidates.
+			name:    "empty app – no candidates",
+			app:     &App{},
+			wantAll: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := CaskCandidates(tt.app)
+
+			if tt.wantAll == nil {
+				if len(got) != 0 {
+					t.Errorf("CaskCandidates() = %v, want empty", got)
+				}
+				return
+			}
+
+			if len(got) == 0 {
+				t.Fatalf("CaskCandidates() returned empty, want %v", tt.wantAll)
+			}
+			if got[0] != tt.wantHead {
+				t.Errorf("CaskCandidates()[0] = %q, want %q (highest-confidence candidate)", got[0], tt.wantHead)
+			}
+			if len(got) != len(tt.wantAll) {
+				t.Errorf("CaskCandidates() len = %d, want %d: got %v, want %v",
+					len(got), len(tt.wantAll), got, tt.wantAll)
+				return
+			}
+			for i, want := range tt.wantAll {
+				if got[i] != want {
+					t.Errorf("CaskCandidates()[%d] = %q, want %q", i, got[i], want)
+				}
+			}
+			// Verify no duplicates.
+			seen := map[string]bool{}
+			for _, c := range got {
+				if seen[c] {
+					t.Errorf("CaskCandidates() returned duplicate %q in %v", c, got)
+				}
+				seen[c] = true
+			}
+		})
+	}
+}
+
 func TestToCaskName(t *testing.T) {
 	tests := []struct {
 		input string

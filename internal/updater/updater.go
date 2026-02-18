@@ -118,13 +118,31 @@ func EnrichApps(ctx context.Context, apps []*app.App, cfg *config.Config, runner
 		return apps, nil
 	}
 
+	// appCandidates holds the ordered cask-token candidate lists for apps that
+	// need Phase 4 probing (i.e. not resolved via the installed-cask list).
+	appCandidates := map[*app.App][]string{}
+
 	for _, a := range apps {
-		// Try heuristic cask name for apps that have no checker-matchable metadata:
-		// SourceUnknown and SourceElectron without an update URL or GitHub repo.
+		// Compute candidates for apps that have no checker-matchable metadata:
+		// SourceUnknown and SourceElectron without a native update URL or GitHub repo.
 		needsCaskFallback := a.Source == app.SourceUnknown ||
 			(a.Source == app.SourceElectron && a.ElectronUpdateURL == "" && a.GitHubRepo == "")
 		if a.CaskName == "" && needsCaskFallback {
-			a.CaskName = app.ToCaskName(a.Name)
+			candidates := app.CaskCandidates(a)
+			// Try each candidate against the installed cask list.  The multi-signal
+			// strategy handles apps whose display name diverges from their cask token
+			// (e.g. VSCode: "Code" vs "visual-studio-code"; GitHub Desktop:
+			// "GitHub Desktop" vs "github") without requiring a hardcoded map.
+			for _, cand := range candidates {
+				if casks[cand] {
+					a.CaskName = cand
+					break
+				}
+			}
+			// Queue remaining candidates for Phase 4 probing if still unresolved.
+			if a.CaskName == "" && len(candidates) > 0 {
+				appCandidates[a] = candidates
+			}
 		}
 
 		if a.CaskName != "" && casks[a.CaskName] {
@@ -135,43 +153,48 @@ func EnrichApps(ctx context.Context, apps []*app.App, cfg *config.Config, runner
 		}
 	}
 
-	// Phase 4: For apps still unknown, probe brew info to discover available casks.
-	// Skip apps whose cask name came from config (user's explicit mapping).
-	// Probes run concurrently to avoid sequential ~0.8s per app delays.
-	type probeResult struct {
-		app   *app.App
-		found bool
+	// Phase 4: For apps still without a CaskName, probe brew info for each
+	// candidate in priority order, stopping at the first confirmed cask.
+	// Apps are probed concurrently; candidates within each app are tried
+	// sequentially to preserve priority ordering.
+	// Skip apps whose CaskName was set by a config mapping (user's explicit choice).
+	type probeItem struct {
+		app        *app.App
+		candidates []string
 	}
-	var toProbe []*app.App
-	for _, a := range apps {
-		// Probe apps that still need a checker: unknown-source apps and
-		// electron apps without native update metadata.
-		needsProbe := a.Source == app.SourceUnknown ||
-			(a.Source == app.SourceElectron && a.ElectronUpdateURL == "" && a.GitHubRepo == "" && !a.InstalledViaBrew)
-		if !needsProbe || a.CaskName == "" {
-			continue
-		}
+	type probeResult struct {
+		app      *app.App
+		caskName string // empty if no candidate was found
+	}
+
+	var toProbe []probeItem
+	for a, candidates := range appCandidates {
 		if cfg.CaskToken(a.BundleID) != "" {
-			continue // preserve user-configured cask mapping
+			continue // preserve user-configured cask mapping, no probe needed
 		}
-		toProbe = append(toProbe, a)
+		toProbe = append(toProbe, probeItem{app: a, candidates: candidates})
 	}
 
 	if len(toProbe) > 0 {
 		results := make(chan probeResult, len(toProbe))
 		sem := make(chan struct{}, 8) // limit concurrent brew info calls
-		for _, a := range toProbe {
+		for _, item := range toProbe {
 			sem <- struct{}{}
-			go func(a *app.App) {
+			go func(item probeItem) {
 				defer func() { <-sem }()
-				results <- probeResult{app: a, found: checker.CaskExists(ctx, runner, a.CaskName)}
-			}(a)
+				found := ""
+				for _, cand := range item.candidates {
+					if checker.CaskExists(ctx, runner, cand) {
+						found = cand
+						break
+					}
+				}
+				results <- probeResult{app: item.app, caskName: found}
+			}(item)
 		}
 		for range toProbe {
 			r := <-results
-			if !r.found {
-				r.app.CaskName = ""
-			}
+			r.app.CaskName = r.caskName
 		}
 	}
 
