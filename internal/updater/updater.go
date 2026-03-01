@@ -123,9 +123,14 @@ func EnrichApps(ctx context.Context, apps []*app.App, cfg *config.Config, runner
 	appCandidates := map[*app.App][]string{}
 
 	for _, a := range apps {
-		// Compute candidates for apps that have no checker-matchable metadata:
-		// SourceUnknown and SourceElectron without a native update URL or GitHub repo.
+		// Compute cask-token candidates for apps that may need brew-info fallback:
+		// - SourceUnknown apps
+		// - SourceSparkle apps (Sparkle feeds can become stale)
+		// - SourceElectron apps without a native update URL or GitHub repo
+		//
+		// This keeps behavior explicit and avoids probing managed/system-only sources.
 		needsCaskFallback := a.Source == app.SourceUnknown ||
+			a.Source == app.SourceSparkle ||
 			(a.Source == app.SourceElectron && a.ElectronUpdateURL == "" && a.GitHubRepo == "")
 		if a.CaskName == "" && needsCaskFallback {
 			candidates := app.CaskCandidates(a)

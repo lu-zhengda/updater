@@ -19,8 +19,8 @@ type mockChecker struct {
 	err      error
 }
 
-func (m *mockChecker) Name() string                { return m.name }
-func (m *mockChecker) CanCheck(a *app.App) bool     { return m.canCheck(a) }
+func (m *mockChecker) Name() string             { return m.name }
+func (m *mockChecker) CanCheck(a *app.App) bool { return m.canCheck(a) }
 func (m *mockChecker) Check(_ context.Context, a *app.App) (*checker.UpdateResult, error) {
 	return m.result, m.err
 }
@@ -29,12 +29,12 @@ func (m *mockChecker) Check(_ context.Context, a *app.App) (*checker.UpdateResul
 
 func TestDiscoverBrewFormulae(t *testing.T) {
 	tests := []struct {
-		name       string
-		output     []byte
-		err        error
-		wantCount  int
-		wantNames  []string
-		wantErr    bool
+		name      string
+		output    []byte
+		err       error
+		wantCount int
+		wantNames []string
+		wantErr   bool
 	}{
 		{
 			name:      "two formulae sorted alphabetically",
@@ -323,7 +323,7 @@ func TestEnrichApps_Phase4_CaskProbe_NotFound(t *testing.T) {
 	}
 	runner := &checker.MultiMockCmdRunner{
 		Responses: map[string]checker.MockResponse{
-			"brew list --cask":                        {Output: []byte("")},
+			"brew list --cask":                       {Output: []byte("")},
 			"brew info --cask --json=v2 unknown-app": {Err: fmt.Errorf("exit 1")},
 			"brew info --cask --json=v2 app":         {Err: fmt.Errorf("exit 1")},
 			"brew info --cask --json=v2 unknown":     {Err: fmt.Errorf("exit 1")},
@@ -434,7 +434,7 @@ func TestEnrichApps_Phase4_ElectronProbe(t *testing.T) {
 	}
 	runner := &checker.MultiMockCmdRunner{
 		Responses: map[string]checker.MockResponse{
-			"brew list --cask":                             {Output: []byte("")},
+			"brew list --cask": {Output: []byte("")},
 			"brew info --cask --json=v2 electron-no-meta": {Err: fmt.Errorf("not found")},
 			"brew info --cask --json=v2 nometa":           {Err: fmt.Errorf("not found")},
 			"brew info --cask --json=v2 electron":         {Err: fmt.Errorf("not found")},
@@ -449,6 +449,42 @@ func TestEnrichApps_Phase4_ElectronProbe(t *testing.T) {
 	// All candidates failed → CaskName remains empty.
 	if result[0].CaskName != "" {
 		t.Errorf("CaskName = %q, want empty (all probes failed)", result[0].CaskName)
+	}
+}
+
+func TestEnrichApps_Phase4_SparkleProbe(t *testing.T) {
+	cfg := &config.Config{}
+	apps := []*app.App{
+		{
+			Name:     "PDF Expert",
+			BundleID: "com.readdle.PDFExpert-Mac",
+			Source:   app.SourceSparkle,
+			Path:     "/Applications/PDF Expert.app",
+			FeedURL:  "https://downloads.example.com/appcast.xml",
+		},
+	}
+	runner := &checker.MultiMockCmdRunner{
+		Responses: map[string]checker.MockResponse{
+			"brew list --cask": {Output: []byte("")}, // not installed via brew
+			"brew info --cask --json=v2 pdf-expert": {
+				Output: []byte(`{"casks":[{"token":"pdf-expert","version":"3.12.0"}]}`),
+			},
+		},
+	}
+
+	result, err := EnrichApps(context.Background(), apps, cfg, runner)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result[0].CaskName != "pdf-expert" {
+		t.Errorf("CaskName = %q, want %q", result[0].CaskName, "pdf-expert")
+	}
+	// Still not brew-installed, so source should remain sparkle.
+	if result[0].Source != app.SourceSparkle {
+		t.Errorf("Source = %q, want %q", result[0].Source, app.SourceSparkle)
+	}
+	if result[0].InstalledViaBrew {
+		t.Error("InstalledViaBrew = true, want false")
 	}
 }
 
@@ -716,9 +752,9 @@ func TestCheckAll(t *testing.T) {
 			name:     "mock",
 			canCheck: always,
 			result: &checker.UpdateResult{
-				Source:         "mock",
-				LatestVersion:  "9.0",
-				HasUpdate:      true,
+				Source:        "mock",
+				LatestVersion: "9.0",
+				HasUpdate:     true,
 			},
 		},
 	}
