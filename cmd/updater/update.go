@@ -74,18 +74,13 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 
 	apps = filterIgnored(apps, cfg)
 
-	// If a specific app name was given, verify it exists before checking.
+	// If a specific app selector was given, resolve it before checking.
+	var targetApp *app.App
 	if len(args) > 0 && !flagAll {
-		name := args[0]
-		found := false
-		for _, a := range apps {
-			if strings.EqualFold(a.Name, name) {
-				found = true
-				break
-			}
-		}
-		if !found {
-			return fmt.Errorf("app %q not found. Run 'updater scan' to see available apps", name)
+		query := joinAppNameArgs(args)
+		targetApp, err = resolveAppSelection(apps, query)
+		if err != nil {
+			return fmt.Errorf("%w. Run 'updater scan' to see available apps", err)
 		}
 	}
 
@@ -125,17 +120,20 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 		updatable = autoUpdatable
 	}
 
-	// If a specific app name was given, filter to just that app.
-	if len(args) > 0 && !flagAll && !flagAuto {
-		name := args[0]
+	// If a specific app selector was given, filter to just that app.
+	if targetApp != nil && !flagAll && !flagAuto {
 		var matched []*checker.UpdateResult
 		for _, r := range updatable {
-			if strings.EqualFold(r.App.Name, name) {
+			if targetApp.BundleID != "" && r.App.BundleID == targetApp.BundleID {
+				matched = append(matched, r)
+				continue
+			}
+			if strings.EqualFold(r.App.Name, targetApp.Name) {
 				matched = append(matched, r)
 			}
 		}
 		if len(matched) == 0 {
-			fmt.Fprintf(cmd.OutOrStdout(), "%s is up to date.\n", name)
+			fmt.Fprintf(cmd.OutOrStdout(), "%s is up to date.\n", targetApp.Name)
 			return nil
 		}
 		updatable = matched
@@ -154,7 +152,7 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 	inst := installer.New(runner, nil)
 
 	// Execute updates. When using --all, skip pinned apps unless explicitly named.
-	isExplicit := len(args) > 0 && !flagAll
+	isExplicit := targetApp != nil && !flagAll
 
 	if flagDryRun {
 		return printDryRun(cmd, updatable, isExplicit, cfg)

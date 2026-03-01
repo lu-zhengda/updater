@@ -18,7 +18,7 @@ Policies:
   manual       Only update when explicitly named
   notify-only  Show in notifications but skip in --all and --auto
   clear        Remove the policy (revert to default behavior)`,
-	Args: cobra.ExactArgs(2),
+	Args: cobra.MinimumNArgs(2),
 	RunE: runPolicy,
 }
 
@@ -27,8 +27,8 @@ func init() {
 }
 
 func runPolicy(cmd *cobra.Command, args []string) error {
-	appName := args[0]
-	policy := strings.ToLower(args[1])
+	appName := joinAppNameArgs(args[:len(args)-1])
+	policy := strings.ToLower(args[len(args)-1])
 
 	validPolicies := map[string]bool{
 		config.PolicyAuto: true, config.PolicyManual: true, config.PolicyNotifyOnly: true, "clear": true,
@@ -49,23 +49,18 @@ func runPolicy(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	var bundleID string
-	for _, a := range apps {
-		if strings.EqualFold(a.Name, appName) {
-			bundleID = a.BundleID
-			break
-		}
+	selected, err := resolveAppSelection(apps, appName)
+	if err != nil {
+		return fmt.Errorf("%w. Run 'updater scan' to see available apps", err)
 	}
-	if bundleID == "" {
-		return fmt.Errorf("app %q not found. Run 'updater scan' to see available apps", appName)
-	}
+	bundleID := selected.BundleID
 
 	if policy == "clear" {
 		cfg.RemovePolicy(bundleID)
-		fmt.Fprintf(cmd.OutOrStdout(), "Cleared policy for %s\n", appName)
+		fmt.Fprintf(cmd.OutOrStdout(), "Cleared policy for %s\n", selected.Name)
 	} else {
 		cfg.SetPolicy(bundleID, policy)
-		fmt.Fprintf(cmd.OutOrStdout(), "Set policy for %s to %s\n", appName, policy)
+		fmt.Fprintf(cmd.OutOrStdout(), "Set policy for %s to %s\n", selected.Name, policy)
 	}
 
 	if err := cfg.Save(cfgPath); err != nil {

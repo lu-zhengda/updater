@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/lu-zhengda/updater/internal/config"
 	"github.com/spf13/cobra"
@@ -12,14 +11,14 @@ var pinCmd = &cobra.Command{
 	Use:   "pin <app-name>",
 	Short: "Pin an app to prevent automatic updates",
 	Long:  "Pinned apps show update status but are skipped during 'update --all'.",
-	Args:  cobra.ExactArgs(1),
+	Args:  cobra.MinimumNArgs(1),
 	RunE:  runPin,
 }
 
 var unpinCmd = &cobra.Command{
 	Use:   "unpin <app-name>",
 	Short: "Unpin an app to allow automatic updates",
-	Args:  cobra.ExactArgs(1),
+	Args:  cobra.MinimumNArgs(1),
 	RunE:  runUnpin,
 }
 
@@ -29,7 +28,7 @@ func init() {
 }
 
 func runPin(cmd *cobra.Command, args []string) error {
-	name := args[0]
+	name := joinAppNameArgs(args)
 	cfgPath := config.DefaultPath()
 
 	cfg, err := config.Load(cfgPath)
@@ -42,20 +41,14 @@ func runPin(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	// Find app by name to resolve bundle ID.
-	var bundleID string
-	for _, a := range apps {
-		if strings.EqualFold(a.Name, name) {
-			bundleID = a.BundleID
-			break
-		}
+	selected, err := resolveAppSelection(apps, name)
+	if err != nil {
+		return fmt.Errorf("%w. Run 'updater scan' to see available apps", err)
 	}
-	if bundleID == "" {
-		return fmt.Errorf("app %q not found. Run 'updater scan' to see available apps", name)
-	}
+	bundleID := selected.BundleID
 
 	if cfg.IsPinned(bundleID) {
-		fmt.Fprintf(cmd.OutOrStdout(), "%s is already pinned\n", name)
+		fmt.Fprintf(cmd.OutOrStdout(), "%s is already pinned\n", selected.Name)
 		return nil
 	}
 
@@ -64,12 +57,12 @@ func runPin(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to save config: %w", err)
 	}
 
-	fmt.Fprintf(cmd.OutOrStdout(), "Pinned %s (%s)\n", name, bundleID)
+	fmt.Fprintf(cmd.OutOrStdout(), "Pinned %s (%s)\n", selected.Name, bundleID)
 	return nil
 }
 
 func runUnpin(cmd *cobra.Command, args []string) error {
-	name := args[0]
+	name := joinAppNameArgs(args)
 	cfgPath := config.DefaultPath()
 
 	cfg, err := config.Load(cfgPath)
@@ -82,19 +75,14 @@ func runUnpin(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	var bundleID string
-	for _, a := range apps {
-		if strings.EqualFold(a.Name, name) {
-			bundleID = a.BundleID
-			break
-		}
+	selected, err := resolveAppSelection(apps, name)
+	if err != nil {
+		return fmt.Errorf("%w. Run 'updater scan' to see available apps", err)
 	}
-	if bundleID == "" {
-		return fmt.Errorf("app %q not found. Run 'updater scan' to see available apps", name)
-	}
+	bundleID := selected.BundleID
 
 	if !cfg.IsPinned(bundleID) {
-		fmt.Fprintf(cmd.OutOrStdout(), "%s is not pinned\n", name)
+		fmt.Fprintf(cmd.OutOrStdout(), "%s is not pinned\n", selected.Name)
 		return nil
 	}
 
@@ -103,6 +91,6 @@ func runUnpin(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to save config: %w", err)
 	}
 
-	fmt.Fprintf(cmd.OutOrStdout(), "Unpinned %s (%s)\n", name, bundleID)
+	fmt.Fprintf(cmd.OutOrStdout(), "Unpinned %s (%s)\n", selected.Name, bundleID)
 	return nil
 }
