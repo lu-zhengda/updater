@@ -69,6 +69,8 @@ homebrew_casks:
       - updater-archive
     binaries:
       - updater
+    dependencies:
+      - formula: mas
     completions:
       bash: completions/updater.bash
       zsh: completions/updater.zsh

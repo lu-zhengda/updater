@@ -51,13 +51,19 @@ This installs to `/usr/local/bin/updater`.
 
 ### Dependencies
 
-`updater` works best with these tools installed (all optional):
+If you install via Homebrew Cask, `mas` will be installed automatically as a dependency:
 
 ```sh
-brew install mas   # for Mac App Store update checking
+brew install --cask lu-zhengda/tap/updater
 ```
 
-Homebrew itself is needed for `brew` and `brew-info` sources. If brew or mas aren't installed, those sources are skipped gracefully.
+If you build from source, install `mas` manually for Mac App Store checking:
+
+```sh
+brew install mas
+```
+
+Homebrew itself is needed for `brew` and `brew-info` sources. If brew or mas are not installed, those sources are skipped gracefully.
 
 ## Quick Start
 
