@@ -1,32 +1,163 @@
 # updater
 
-A command-line tool for macOS that discovers installed applications, checks for available updates across multiple sources, and updates them — all from your terminal.
+`updater` is a macOS CLI/TUI that discovers installed apps, checks for updates across multiple ecosystems, and applies the right update action per app.
 
-## What It Does
+## Requirements
 
-`updater` scans `/Applications` and `~/Applications`, identifies where each app gets its updates from, and checks for newer versions. It supports six update sources:
+- macOS
+- Homebrew (recommended)
+- `mas` for Mac App Store checks (installed automatically with the Homebrew cask)
 
-| Source | How It Works |
-|--------|-------------|
-| **Sparkle** | Reads the app's built-in appcast feed (used by iTerm2, Sublime Text, etc.) |
-| **Homebrew Cask** | Checks `brew outdated` for apps installed via `brew install --cask` |
-| **Mac App Store** | Runs `mas outdated` for App Store apps |
-| **GitHub Releases** | Queries the GitHub API for the latest release |
-| **Brew Info** | Falls back to `brew info --cask` for any app with a matching Homebrew cask, even if not installed via brew |
-| **System** | Checks `softwareupdate -l` for macOS system updates |
+## Install (Recommended)
 
-When a Sparkle feed is stale (returns an older version than what's installed), `updater` automatically falls through to the next available source.
+Install from Homebrew tap:
 
-For updates, it picks the right strategy per app:
-- **Brew-installed apps** — runs `brew upgrade --cask` (quits the app first if running, reopens after)
-- **Sparkle/GitHub apps** — downloads and installs DMG/ZIP/PKG directly, or opens the download URL as fallback
-- **Self-updating apps** (Chrome, 1Password, Notion, etc.) — opens the app so its built-in updater can run
-- **App Store apps** — runs `mas upgrade` or opens the App Store updates page
-- **macOS system updates** — opens System Settings > Software Update
+```sh
+brew install --cask lu-zhengda/tap/updater
+updater --version
+```
 
-## Install
+This is the easiest path and includes `mas` automatically as a cask dependency.
 
-### From source (requires Go 1.21+)
+Upgrade later:
+
+```sh
+brew upgrade --cask lu-zhengda/tap/updater
+```
+
+## Quick Start
+
+```sh
+# 1) Validate environment and dependencies
+updater doctor
+
+# 2) Discover installed apps and detected sources
+updater scan
+
+# 3) Check available updates
+updater check
+
+# 4) Preview update actions without changing anything
+updater update --all --dry-run
+
+# 5) Apply updates
+updater update --all
+```
+
+Launch the interactive TUI:
+
+```sh
+updater
+```
+
+## What It Supports
+
+| Source | How updates are checked | Update behavior |
+| --- | --- | --- |
+| Sparkle | Appcast feed from app metadata | Direct DMG/ZIP/PKG install when possible, otherwise opens download URL |
+| Homebrew cask | `brew outdated --cask --greedy --json` | `brew upgrade --cask <token>` |
+| Homebrew formula | `brew outdated --formula --json` | `brew upgrade <formula>` |
+| Mac App Store | `mas outdated` | `mas upgrade <id>` or opens App Store updates |
+| GitHub Releases | GitHub Releases API | Direct install when possible, otherwise opens release asset URL |
+| Electron generic | `latest-mac.yml` from update server | Direct install when possible, otherwise opens app |
+| Brew-info fallback | `brew info --cask --json=v2` | If brew-installed: `brew upgrade --cask`; otherwise opens app |
+| macOS system | `softwareupdate -l` | Opens Software Update settings |
+
+Also detected (for visibility): Setapp, JetBrains Toolbox, and Adobe apps.
+
+## Command Guide
+
+Core update workflow:
+
+```sh
+updater scan
+updater check
+updater update "1Password"
+updater update --all
+updater update --all --auto
+updater update --all --dry-run
+```
+
+Scripting/JSON:
+
+```sh
+updater scan --json
+updater check --json
+updater outdated
+updater history --json
+updater doctor --json
+```
+
+Management:
+
+```sh
+updater pin "Google Chrome"
+updater unpin "Google Chrome"
+updater policy "Google Chrome" manual
+updater install firefox
+updater rollback "Firefox"
+updater cleanup --days 90
+updater cleanup --days 90 --delete
+```
+
+Automation:
+
+```sh
+updater schedule --interval 24
+updater schedule --remove
+```
+
+## Configuration
+
+Config file path:
+
+```text
+~/.config/updater/config.yaml
+```
+
+Example:
+
+```yaml
+ignored_apps:
+  - com.apple.Safari
+
+pinned_apps:
+  - com.google.Chrome
+
+# auto | manual | notify-only
+policies:
+  com.microsoft.VSCode: auto
+  com.google.Chrome: manual
+
+github_mappings:
+  com.microsoft.VSCode: "microsoft/vscode"
+
+cask_mappings:
+  com.readdle.PDFExpert-Mac: "pdf-expert"
+
+github_token: "ghp_..."
+max_concurrent: 10
+max_backups: 1
+interactive_notifications: true
+```
+
+Notes:
+
+- `GITHUB_TOKEN` environment variable overrides `github_token`.
+- `cask_mappings` are only needed when automatic cask token detection is wrong.
+- Use `updater config export` and `updater config import <file>` to move config between machines.
+
+## Safety Model
+
+- `--dry-run` prints the exact planned actions without making changes.
+- Backups are created before install-based updates when app paths are available.
+- Failed direct installs attempt automatic rollback from backup.
+- Pinned apps are skipped in `update --all`.
+- `policy` lets you force per-app behavior (`auto`, `manual`, `notify-only`).
+
+## Build From Source
+
+Requires Go `1.25.7+`.
 
 ```sh
 git clone https://github.com/lu-zhengda/updater.git
@@ -34,201 +165,25 @@ cd updater
 make install PREFIX=~/.local
 ```
 
-This builds a release binary and installs it to `~/.local/bin/updater`. Make sure `~/.local/bin` is in your `PATH`:
+If needed, add to `PATH`:
 
 ```sh
-# Add to your ~/.zshrc or ~/.bashrc
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
-To install system-wide instead:
-
-```sh
-sudo make install
-```
-
-This installs to `/usr/local/bin/updater`.
-
-### Dependencies
-
-If you install via Homebrew Cask, `mas` will be installed automatically as a dependency:
-
-```sh
-brew install --cask lu-zhengda/tap/updater
-```
-
-If you build from source, install `mas` manually for Mac App Store checking:
+If building from source and you want Mac App Store checks, install `mas`:
 
 ```sh
 brew install mas
 ```
 
-Homebrew itself is needed for `brew` and `brew-info` sources. If brew or mas are not installed, those sources are skipped gracefully.
-
-## Quick Start
-
-Running `updater` with no arguments launches the interactive TUI:
-
-```
-$ updater
-```
-
-The TUI shows all checkable apps in a scrollable list with real-time update checking.
-
-| Key | Action |
-|-----|--------|
-| `j`/`k` or arrows | Navigate (wraps around) |
-| `Enter` | Update selected app |
-| `a` | Update all |
-| `d` | Show release notes |
-| `p` | Pin/unpin (skip during update all) |
-| `i` | Ignore/unignore |
-| `r` | Refresh |
-| `q` | Quit |
-
-### CLI Commands
-
-**Scan** your installed apps:
-
-```
-$ updater scan
-NAME                  VERSION         SOURCE   BUNDLE ID
-1Password             8.12.0          unknown  com.1password.1password
-iTerm2                3.6.6           sparkle  com.googlecode.iterm2
-Xcode                 26.2            mas      com.apple.dt.Xcode
-macOS                 26.2            system   com.apple.macOS
-...
-```
-
-**Check** for updates:
-
-```
-$ updater check
-NAME                  CURRENT         LATEST         SOURCE     STATUS
-1Password             8.12.0          8.12.2         homebrew   UPDATE AVAILABLE
-iTerm2                3.6.6           3.6.6          sparkle    ok
-macOS                 26.2            26.3           system     UPDATE AVAILABLE
-Xcode                 26.2            26.2           app store  ok
-...
-```
-
-**Update** a specific app:
-
-```
-$ updater update 1Password
-Updating 1Password (8.12.0 -> 8.12.2) via brew-info...
-```
-
-**Update all** apps with available updates:
-
-```
-$ updater update --all
-```
-
-**JSON output** for scripting:
-
-```
-$ updater outdated
-[{"name":"1Password","bundle_id":"com.1password.1password","current_version":"8.12.0","latest_version":"8.12.2","source":"brew-info","download_url":"..."}]
-```
-
-**Pin** an app to skip it during `update --all`:
-
-```
-$ updater pin 1Password
-$ updater unpin 1Password
-```
-
-**Install** a new app via Homebrew:
-
-```
-$ updater install firefox
-```
-
-**Find unused apps:**
-
-```
-$ updater cleanup --days 90
-$ updater cleanup --days 90 --delete   # move to Trash
-```
-
-**Rollback** to a previous version:
-
-```
-$ updater rollback 1Password
-```
-
-**Schedule** automatic update checks with macOS notifications:
-
-```
-$ updater schedule --interval 24   # check every 24 hours
-$ updater schedule --remove        # remove scheduled check
-```
-
-## Configuration
-
-Config file: `~/.config/updater/config.yaml`
-
-```yaml
-# Apps to skip entirely (by bundle ID)
-ignored_apps:
-  - com.apple.Safari
-
-# Apps to show but skip during "update --all"
-pinned_apps:
-  - com.google.Chrome
-
-# Map bundle IDs to GitHub repos for GitHub Releases checking
-github_mappings:
-  com.microsoft.VSCode: "microsoft/vscode"
-  com.github.GitHubClient: "desktop/desktop"
-
-# Map bundle IDs to Homebrew cask tokens (when the automatic name guess is wrong)
-cask_mappings:
-  com.readdle.PDFExpert-Mac: "pdf-expert"
-
-# GitHub API token for higher rate limits (also reads GITHUB_TOKEN env var)
-github_token: "ghp_..."
-
-# Max concurrent update checks (default: 10)
-max_concurrent: 10
-
-# Number of app backups to keep per app (default: 1)
-max_backups: 1
-```
-
-### When do you need `cask_mappings`?
-
-Most of the time, you don't. `updater` guesses the cask name from the app's display name (e.g., "Google Chrome" becomes `google-chrome`) and verifies it exists. Add an explicit mapping only when the guess is wrong — for example, if an app is named "Docker" but its cask is `docker-desktop`.
-
-## How It Works
-
-```
-/Applications/*.app
-        |
-    [Discovery]  Parse Info.plist for name, version, bundle ID, Sparkle feed URL
-        |
-    [Enrichment] Cross-reference with config mappings, brew casks, brew info
-        |
-    [Checking]   Try checkers in order: Sparkle > Brew > MAS > GitHub > System > Brew Info
-        |         (fall through on stale feeds or errors)
-        |
-    [Update]     brew upgrade | direct install | open app | open download URL | mas upgrade
-        |
-    [Backup]     Back up current version before updating (configurable retention)
-```
-
-## Building
+## Developer Commands
 
 ```sh
-make build    # Build ./updater
-make test     # Run tests with race detection
-make clean    # Remove binary
+make build
+make test
+make clean
 ```
-
-## Claude Code
-
-Available as a skill in the [macos-toolkit](https://github.com/lu-zhengda/macos-toolkit) Claude Code plugin. Ask Claude "check for updates" or "update Firefox" and it runs updater automatically.
 
 ## License
 
