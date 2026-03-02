@@ -10,7 +10,7 @@
 
 ## Requirements
 
-- macOS
+- macOS (the one truly non-negotiable requirement)
 - Homebrew (recommended)
 - `mas` for Mac App Store checks (installed automatically with the Homebrew cask)
 
