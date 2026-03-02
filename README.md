@@ -89,10 +89,18 @@ Scripting/JSON:
 ```sh
 updater scan --json
 updater check --json
-updater outdated
+updater outdated --json
 updater history --json
 updater doctor --json
+updater update --all --dry-run --json
 ```
+
+Agent mode:
+
+- All commands support `--json`.
+- When `updater` detects it is running inside Codex or Claude Code, JSON output is enabled automatically.
+- Override behavior with `UPDATER_AGENT_MODE=0` (force off) or `UPDATER_AGENT_MODE=1` (force on).
+- `updater update --json` is supported for dry-run planning (`--dry-run`).
 
 Management:
 

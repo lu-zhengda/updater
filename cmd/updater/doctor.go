@@ -36,10 +36,10 @@ func init() {
 }
 
 type doctorCheck struct {
-	Name    string        `json:"name"`
-	Status  string        `json:"status"` // "ok", "warning", "not_installed"
-	Detail  string        `json:"detail"`
-	fixFn   func() string `json:"-"` // returns description of what was fixed; nil if no fix available
+	Name   string        `json:"name"`
+	Status string        `json:"status"` // "ok", "warning", "not_installed"
+	Detail string        `json:"detail"`
+	fixFn  func() string `json:"-"` // returns description of what was fixed; nil if no fix available
 }
 
 func runDoctor(cmd *cobra.Command, _ []string) error {
@@ -89,7 +89,7 @@ func runDoctor(cmd *cobra.Command, _ []string) error {
 	// Sparkle feed connectivity.
 	checks = append(checks, checkSparkleFeedConnectivity())
 
-	if flagDoctorJSON {
+	if jsonOutputEnabled(flagDoctorJSON) {
 		enc := json.NewEncoder(cmd.OutOrStdout())
 		enc.SetIndent("", "  ")
 		return enc.Encode(checks)

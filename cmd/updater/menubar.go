@@ -12,7 +12,10 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var flagMenubarRemove bool
+var (
+	flagMenubarRemove bool
+	flagMenubarJSON   bool
+)
 
 var menubarCmd = &cobra.Command{
 	Use:   "menubar",
@@ -23,6 +26,7 @@ var menubarCmd = &cobra.Command{
 
 func init() {
 	menubarCmd.Flags().BoolVar(&flagMenubarRemove, "remove", false, "remove the menu bar agent")
+	menubarCmd.Flags().BoolVar(&flagMenubarJSON, "json", false, "output as JSON")
 	rootCmd.AddCommand(menubarCmd)
 }
 
@@ -59,10 +63,17 @@ type menubarPlistData struct {
 func runMenubar(cmd *cobra.Command, _ []string) error {
 	ctx := cmd.Context()
 	runner := &checker.RealCmdRunner{}
+	useJSON := jsonOutputEnabled(flagMenubarJSON)
 
 	if flagMenubarRemove {
 		if err := removeMenubarAgent(ctx, runner); err != nil {
 			return err
+		}
+		if useJSON {
+			return writeJSON(cmd, map[string]any{
+				"action": "remove",
+				"status": "ok",
+			})
 		}
 		fmt.Fprintln(cmd.OutOrStdout(), "Removed menu bar agent")
 		return nil
@@ -73,6 +84,13 @@ func runMenubar(cmd *cobra.Command, _ []string) error {
 	}
 
 	plistPath, _ := menubarPlistPath()
+	if useJSON {
+		return writeJSON(cmd, map[string]any{
+			"action": "install",
+			"status": "ok",
+			"plist":  plistPath,
+		})
+	}
 	fmt.Fprintln(cmd.OutOrStdout(), "Menu bar agent installed")
 	fmt.Fprintf(cmd.OutOrStdout(), "Plist: %s\n", plistPath)
 	return nil

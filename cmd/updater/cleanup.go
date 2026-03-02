@@ -16,6 +16,7 @@ import (
 var (
 	flagCleanupDays   int
 	flagCleanupDelete bool
+	flagCleanupJSON   bool
 )
 
 var cleanupCmd = &cobra.Command{
@@ -27,11 +28,13 @@ var cleanupCmd = &cobra.Command{
 func init() {
 	cleanupCmd.Flags().IntVar(&flagCleanupDays, "days", 90, "apps unused for this many days")
 	cleanupCmd.Flags().BoolVar(&flagCleanupDelete, "delete", false, "move unused apps to Trash")
+	cleanupCmd.Flags().BoolVar(&flagCleanupJSON, "json", false, "output as JSON")
 	rootCmd.AddCommand(cleanupCmd)
 }
 
 func runCleanup(cmd *cobra.Command, _ []string) error {
 	ctx := cmd.Context()
+	useJSON := jsonOutputEnabled(flagCleanupJSON)
 
 	apps, err := discoverApps()
 	if err != nil {
@@ -41,10 +44,24 @@ func runCleanup(cmd *cobra.Command, _ []string) error {
 	runner := &checker.RealCmdRunner{}
 	cutoff := time.Now().AddDate(0, 0, -flagCleanupDays)
 
-	w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
-	fmt.Fprintln(w, "NAME\tLAST USED\tSIZE")
+	var w *tabwriter.Writer
+	if !useJSON {
+		w = tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
+		fmt.Fprintln(w, "NAME\tLAST USED\tSIZE")
+	}
+
+	type cleanupEntry struct {
+		Name        string `json:"name"`
+		BundleID    string `json:"bundle_id"`
+		Path        string `json:"path"`
+		LastUsed    string `json:"last_used,omitempty"`
+		Size        string `json:"size"`
+		Deleted     bool   `json:"deleted,omitempty"`
+		DeleteError string `json:"delete_error,omitempty"`
+	}
 
 	var unused []*app.App
+	var entries []cleanupEntry
 	for _, a := range apps {
 		lastUsed, err := getLastUsedDate(ctx, runner, a.Path)
 		if err != nil {
@@ -56,21 +73,59 @@ func runCleanup(cmd *cobra.Command, _ []string) error {
 			if !lastUsed.IsZero() {
 				lastStr = lastUsed.Format("2006-01-02")
 			}
-			fmt.Fprintf(w, "%s\t%s\t%s\n", a.Name, lastStr, size)
+			if !useJSON {
+				fmt.Fprintf(w, "%s\t%s\t%s\n", a.Name, lastStr, size)
+			}
+			entry := cleanupEntry{
+				Name:     a.Name,
+				BundleID: a.BundleID,
+				Path:     a.Path,
+				Size:     size,
+			}
+			if !lastUsed.IsZero() {
+				entry.LastUsed = lastStr
+			}
+			entries = append(entries, entry)
 			unused = append(unused, a)
 		}
 	}
-	w.Flush()
+	if !useJSON {
+		w.Flush()
+	}
 
-	fmt.Fprintf(os.Stderr, "\n%d apps unused for %d+ days\n", len(unused), flagCleanupDays)
+	if !useJSON {
+		fmt.Fprintf(os.Stderr, "\n%d apps unused for %d+ days\n", len(unused), flagCleanupDays)
+	}
 
+	deletedCount := 0
+	deleteErrors := 0
 	if flagCleanupDelete && len(unused) > 0 {
-		for _, a := range unused {
-			fmt.Fprintf(cmd.OutOrStdout(), "Moving %s to Trash...\n", a.Name)
-			if err := moveToTrash(ctx, runner, a); err != nil {
-				fmt.Fprintf(os.Stderr, "  error: %v\n", err)
+		for i, a := range unused {
+			if !useJSON {
+				fmt.Fprintf(cmd.OutOrStdout(), "Moving %s to Trash...\n", a.Name)
 			}
+			if err := moveToTrash(ctx, runner, a); err != nil {
+				if !useJSON {
+					fmt.Fprintf(os.Stderr, "  error: %v\n", err)
+				}
+				entries[i].DeleteError = err.Error()
+				deleteErrors++
+				continue
+			}
+			entries[i].Deleted = true
+			deletedCount++
 		}
+	}
+
+	if useJSON {
+		return writeJSON(cmd, map[string]any{
+			"days":          flagCleanupDays,
+			"delete":        flagCleanupDelete,
+			"unused_count":  len(unused),
+			"deleted_count": deletedCount,
+			"delete_errors": deleteErrors,
+			"apps":          entries,
+		})
 	}
 
 	return nil

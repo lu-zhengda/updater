@@ -22,13 +22,17 @@ Policies:
 	RunE: runPolicy,
 }
 
+var flagPolicyJSON bool
+
 func init() {
+	policyCmd.Flags().BoolVar(&flagPolicyJSON, "json", false, "output as JSON")
 	rootCmd.AddCommand(policyCmd)
 }
 
 func runPolicy(cmd *cobra.Command, args []string) error {
 	appName := joinAppNameArgs(args[:len(args)-1])
 	policy := strings.ToLower(args[len(args)-1])
+	useJSON := jsonOutputEnabled(flagPolicyJSON)
 
 	validPolicies := map[string]bool{
 		config.PolicyAuto: true, config.PolicyManual: true, config.PolicyNotifyOnly: true, "clear": true,
@@ -57,9 +61,32 @@ func runPolicy(cmd *cobra.Command, args []string) error {
 
 	if policy == "clear" {
 		cfg.RemovePolicy(bundleID)
+		if useJSON {
+			if err := cfg.Save(cfgPath); err != nil {
+				return fmt.Errorf("failed to save config: %w", err)
+			}
+			return writeJSON(cmd, map[string]any{
+				"action":    "clear_policy",
+				"status":    "updated",
+				"app":       selected.Name,
+				"bundle_id": bundleID,
+			})
+		}
 		fmt.Fprintf(cmd.OutOrStdout(), "Cleared policy for %s\n", selected.Name)
 	} else {
 		cfg.SetPolicy(bundleID, policy)
+		if useJSON {
+			if err := cfg.Save(cfgPath); err != nil {
+				return fmt.Errorf("failed to save config: %w", err)
+			}
+			return writeJSON(cmd, map[string]any{
+				"action":    "set_policy",
+				"status":    "updated",
+				"app":       selected.Name,
+				"bundle_id": bundleID,
+				"policy":    policy,
+			})
+		}
 		fmt.Fprintf(cmd.OutOrStdout(), "Set policy for %s to %s\n", selected.Name, policy)
 	}
 

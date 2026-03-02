@@ -39,7 +39,7 @@ func runScan(cmd *cobra.Command, args []string) error {
 		apps = append(apps, formulaApps...)
 	}
 
-	if flagScanJSON {
+	if jsonOutputEnabled(flagScanJSON) {
 		entries := make([]scanEntry, len(apps))
 		for i, a := range apps {
 			entries[i] = scanEntry{

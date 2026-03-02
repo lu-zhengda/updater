@@ -16,7 +16,10 @@ var outdatedCmd = &cobra.Command{
 	RunE:  runOutdated,
 }
 
+var flagOutdatedJSON bool
+
 func init() {
+	outdatedCmd.Flags().BoolVar(&flagOutdatedJSON, "json", false, "output as JSON")
 	rootCmd.AddCommand(outdatedCmd)
 }
 

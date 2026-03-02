@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/lu-zhengda/updater/internal/backup"
 	"github.com/lu-zhengda/updater/internal/checker"
@@ -12,7 +13,10 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var flagRollbackAll bool
+var (
+	flagRollbackAll  bool
+	flagRollbackJSON bool
+)
 
 var rollbackCmd = &cobra.Command{
 	Use:   "rollback [app-name]",
@@ -23,23 +27,26 @@ var rollbackCmd = &cobra.Command{
 
 func init() {
 	rollbackCmd.Flags().BoolVar(&flagRollbackAll, "all", false, "rollback all apps with backups")
+	rollbackCmd.Flags().BoolVar(&flagRollbackJSON, "json", false, "output as JSON")
 	rootCmd.AddCommand(rollbackCmd)
 }
 
 func runRollback(cmd *cobra.Command, args []string) error {
+	useJSON := jsonOutputEnabled(flagRollbackJSON)
+
 	if flagRollbackAll {
 		if len(args) > 0 {
 			return errors.New("cannot specify app name with --all")
 		}
-		return rollbackAll(cmd)
+		return rollbackAll(cmd, useJSON)
 	}
 	if len(args) == 0 {
 		return errors.New("app name required (or use --all)")
 	}
-	return rollbackSingle(cmd, joinAppNameArgs(args))
+	return rollbackSingle(cmd, joinAppNameArgs(args), useJSON)
 }
 
-func rollbackSingle(cmd *cobra.Command, query string) error {
+func rollbackSingle(cmd *cobra.Command, query string, useJSON bool) error {
 	ctx := cmd.Context()
 
 	cfg, err := config.Load(config.DefaultPath())
@@ -81,8 +88,10 @@ func rollbackSingle(cmd *cobra.Command, query string) error {
 	}
 
 	latest := backups[0]
-	fmt.Fprintf(cmd.OutOrStdout(), "Restoring %s to version %s (backed up %s)...\n",
-		latest.AppName, latest.Version, latest.BackupDate.Format("2006-01-02 15:04"))
+	if !useJSON {
+		fmt.Fprintf(cmd.OutOrStdout(), "Restoring %s to version %s (backed up %s)...\n",
+			latest.AppName, latest.Version, latest.BackupDate.Format("2006-01-02 15:04"))
+	}
 
 	// Quit the app if running.
 	if appErr == nil {
@@ -98,11 +107,21 @@ func rollbackSingle(cmd *cobra.Command, query string) error {
 		return fmt.Errorf("rollback failed: %w", err)
 	}
 
+	if useJSON {
+		return writeJSON(cmd, map[string]any{
+			"mode":        "single",
+			"status":      "restored",
+			"app":         latest.AppName,
+			"version":     latest.Version,
+			"backup_date": latest.BackupDate.Format(time.RFC3339),
+		})
+	}
+
 	fmt.Fprintf(cmd.OutOrStdout(), "Successfully restored %s to version %s\n", latest.AppName, latest.Version)
 	return nil
 }
 
-func rollbackAll(cmd *cobra.Command) error {
+func rollbackAll(cmd *cobra.Command, useJSON bool) error {
 	ctx := cmd.Context()
 	w := cmd.OutOrStdout()
 
@@ -110,6 +129,15 @@ func rollbackAll(cmd *cobra.Command) error {
 	entries, err := os.ReadDir(baseDir)
 	if err != nil {
 		if os.IsNotExist(err) {
+			if useJSON {
+				return writeJSON(cmd, map[string]any{
+					"mode":     "all",
+					"status":   "no_backups",
+					"restored": 0,
+					"failed":   0,
+					"results":  []map[string]any{},
+				})
+			}
 			fmt.Fprintln(w, "No backups found.")
 			return nil
 		}
@@ -128,6 +156,7 @@ func rollbackAll(cmd *cobra.Command) error {
 	installedApps, _ := discoverApps()
 
 	var restored, failed int
+	results := make([]map[string]any, 0, len(entries))
 
 	for _, entry := range entries {
 		if !entry.IsDir() {
@@ -141,7 +170,9 @@ func rollbackAll(cmd *cobra.Command) error {
 		}
 
 		latest := backups[0]
-		fmt.Fprintf(w, "Restoring %s to version %s...\n", latest.AppName, latest.Version)
+		if !useJSON {
+			fmt.Fprintf(w, "Restoring %s to version %s...\n", latest.AppName, latest.Version)
+		}
 
 		// Quit the app if running.
 		for _, a := range installedApps {
@@ -152,16 +183,48 @@ func rollbackAll(cmd *cobra.Command) error {
 		}
 
 		if err := bm.Restore(ctx, dirName); err != nil {
-			fmt.Fprintf(w, "  Failed to restore %s: %v\n", latest.AppName, err)
+			if !useJSON {
+				fmt.Fprintf(w, "  Failed to restore %s: %v\n", latest.AppName, err)
+			}
+			results = append(results, map[string]any{
+				"app":     latest.AppName,
+				"version": latest.Version,
+				"status":  "failed",
+				"error":   err.Error(),
+			})
 			failed++
 			continue
 		}
+		results = append(results, map[string]any{
+			"app":     latest.AppName,
+			"version": latest.Version,
+			"status":  "restored",
+		})
 		restored++
 	}
 
 	if restored == 0 && failed == 0 {
+		if useJSON {
+			return writeJSON(cmd, map[string]any{
+				"mode":     "all",
+				"status":   "no_backups",
+				"restored": 0,
+				"failed":   0,
+				"results":  []map[string]any{},
+			})
+		}
 		fmt.Fprintln(w, "No backups found.")
 		return nil
+	}
+
+	if useJSON {
+		return writeJSON(cmd, map[string]any{
+			"mode":     "all",
+			"status":   "completed",
+			"restored": restored,
+			"failed":   failed,
+			"results":  results,
+		})
 	}
 
 	fmt.Fprintf(w, "Rolled back %d app(s), %d failed.\n", restored, failed)

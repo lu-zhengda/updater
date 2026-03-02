@@ -64,7 +64,7 @@ func runCheck(cmd *cobra.Command, args []string) error {
 	checkers := buildCheckers(runner, cfg.ResolveGitHubToken())
 	results := checkAll(ctx, apps, checkers, cfg.MaxConcurrentOrDefault())
 
-	if flagCheckJSON {
+	if jsonOutputEnabled(flagCheckJSON) {
 		entries := toCheckEntries(results, cfg)
 		enc := json.NewEncoder(cmd.OutOrStdout())
 		enc.SetIndent("", "  ")

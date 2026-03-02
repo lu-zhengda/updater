@@ -21,11 +21,16 @@ var upgradeCmd = &cobra.Command{
 	RunE:  runUpgrade,
 }
 
+var flagUpgradeJSON bool
+
 func init() {
+	upgradeCmd.Flags().BoolVar(&flagUpgradeJSON, "json", false, "output as JSON")
 	rootCmd.AddCommand(upgradeCmd)
 }
 
 func runUpgrade(cmd *cobra.Command, args []string) error {
+	useJSON := jsonOutputEnabled(flagUpgradeJSON)
+
 	// Detect current binary path.
 	execPath, err := os.Executable()
 	if err != nil {
@@ -38,6 +43,12 @@ func runUpgrade(cmd *cobra.Command, args []string) error {
 
 	// Detect Homebrew installation.
 	if isBrewInstall(execPath) {
+		if useJSON {
+			return writeJSON(cmd, map[string]any{
+				"status":      "homebrew_install",
+				"instruction": "brew upgrade lu-zhengda/tap/updater",
+			})
+		}
 		fmt.Fprintln(cmd.OutOrStdout(), "Installed via Homebrew. Run: brew upgrade lu-zhengda/tap/updater")
 		return nil
 	}
@@ -52,6 +63,12 @@ func runUpgrade(cmd *cobra.Command, args []string) error {
 	latestVersion := checker.CleanTagVersion(release.TagName)
 
 	if !versionpkg.IsNewer(version, latestVersion) {
+		if useJSON {
+			return writeJSON(cmd, map[string]any{
+				"status":          "up_to_date",
+				"current_version": version,
+			})
+		}
 		fmt.Fprintf(cmd.OutOrStdout(), "Already up to date (%s)\n", version)
 		return nil
 	}
@@ -100,7 +117,15 @@ func runUpgrade(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to replace binary: %w", err)
 	}
 
-	fmt.Fprintf(cmd.OutOrStdout(), "Updated updater: %s → %s\n", version, latestVersion)
+	if useJSON {
+		return writeJSON(cmd, map[string]any{
+			"status":       "updated",
+			"from_version": version,
+			"to_version":   latestVersion,
+		})
+	}
+
+	fmt.Fprintf(cmd.OutOrStdout(), "Updated updater: %s -> %s\n", version, latestVersion)
 	return nil
 }
 

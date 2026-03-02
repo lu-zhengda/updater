@@ -320,7 +320,7 @@ func TestPrintDryRun_Table(t *testing.T) {
 		},
 	}
 
-	err := printDryRun(cmd, updatable, false, cfg)
+	err := printDryRun(cmd, updatable, false, cfg, false)
 	if err != nil {
 		t.Fatalf("printDryRun() error = %v", err)
 	}
@@ -362,9 +362,6 @@ func TestPrintDryRun_Table(t *testing.T) {
 }
 
 func TestPrintDryRun_JSON(t *testing.T) {
-	flagDryRunJSON = true
-	defer func() { flagDryRunJSON = false }()
-
 	cmd := &cobra.Command{}
 	buf := &bytes.Buffer{}
 	cmd.SetOut(buf)
@@ -380,7 +377,7 @@ func TestPrintDryRun_JSON(t *testing.T) {
 		},
 	}
 
-	err := printDryRun(cmd, updatable, false, cfg)
+	err := printDryRun(cmd, updatable, false, cfg, true)
 	if err != nil {
 		t.Fatalf("printDryRun() error = %v", err)
 	}
@@ -430,7 +427,7 @@ func TestPrintDryRun_Empty(t *testing.T) {
 		},
 	}
 
-	err := printDryRun(cmd, updatable, false, cfg)
+	err := printDryRun(cmd, updatable, false, cfg, false)
 	if err != nil {
 		t.Fatalf("printDryRun() error = %v", err)
 	}
@@ -464,7 +461,7 @@ func TestPrintDryRun_SkipsPinned(t *testing.T) {
 		},
 	}
 
-	err := printDryRun(cmd, updatable, false, cfg)
+	err := printDryRun(cmd, updatable, false, cfg, false)
 	if err != nil {
 		t.Fatalf("printDryRun() error = %v", err)
 	}
@@ -504,7 +501,7 @@ func TestPrintDryRun_SkipsNotifyOnly(t *testing.T) {
 		},
 	}
 
-	err := printDryRun(cmd, updatable, false, cfg)
+	err := printDryRun(cmd, updatable, false, cfg, false)
 	if err != nil {
 		t.Fatalf("printDryRun() error = %v", err)
 	}

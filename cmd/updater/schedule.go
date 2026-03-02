@@ -15,6 +15,7 @@ import (
 var (
 	flagScheduleInterval int
 	flagScheduleRemove   bool
+	flagScheduleJSON     bool
 )
 
 var scheduleCmd = &cobra.Command{
@@ -26,6 +27,7 @@ var scheduleCmd = &cobra.Command{
 func init() {
 	scheduleCmd.Flags().IntVar(&flagScheduleInterval, "interval", 24, "check interval in hours")
 	scheduleCmd.Flags().BoolVar(&flagScheduleRemove, "remove", false, "remove scheduled checks")
+	scheduleCmd.Flags().BoolVar(&flagScheduleJSON, "json", false, "output as JSON")
 	rootCmd.AddCommand(scheduleCmd)
 }
 
@@ -154,10 +156,17 @@ func removeScheduleCore(ctx context.Context, runner checker.CmdRunner) error {
 func runSchedule(cmd *cobra.Command, _ []string) error {
 	ctx := cmd.Context()
 	runner := &checker.RealCmdRunner{}
+	useJSON := jsonOutputEnabled(flagScheduleJSON)
 
 	if flagScheduleRemove {
 		if err := removeScheduleCore(ctx, runner); err != nil {
 			return err
+		}
+		if useJSON {
+			return writeJSON(cmd, map[string]any{
+				"action": "remove",
+				"status": "ok",
+			})
 		}
 		fmt.Fprintln(cmd.OutOrStdout(), "Removed scheduled checks")
 		return nil
@@ -171,6 +180,16 @@ func runSchedule(cmd *cobra.Command, _ []string) error {
 	plistPath, _ := schedulePlistPath()
 	home, _ := os.UserHomeDir()
 	logPath := filepath.Join(home, "Library", "Logs", "updater-notify.log")
+
+	if useJSON {
+		return writeJSON(cmd, map[string]any{
+			"action":         "install",
+			"status":         "ok",
+			"interval_hours": flagScheduleInterval,
+			"plist":          plistPath,
+			"log":            logPath,
+		})
+	}
 
 	fmt.Fprintf(cmd.OutOrStdout(), "Scheduled update checks every %d hours\n", flagScheduleInterval)
 	fmt.Fprintf(cmd.OutOrStdout(), "Plist: %s\n", plistPath)

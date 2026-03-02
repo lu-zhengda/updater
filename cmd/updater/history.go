@@ -28,13 +28,15 @@ func init() {
 }
 
 func runHistory(cmd *cobra.Command, args []string) error {
+	useJSON := jsonOutputEnabled(flagHistoryJSON)
+
 	entries, err := history.List(history.DefaultPath())
 	if err != nil {
 		return fmt.Errorf("failed to read history: %w", err)
 	}
 
 	if len(entries) == 0 {
-		if flagHistoryJSON {
+		if useJSON {
 			fmt.Fprintln(cmd.OutOrStdout(), "[]")
 			return nil
 		}
@@ -52,7 +54,7 @@ func runHistory(cmd *cobra.Command, args []string) error {
 		entries = entries[:flagHistoryLimit]
 	}
 
-	if flagHistoryJSON {
+	if useJSON {
 		enc := json.NewEncoder(cmd.OutOrStdout())
 		enc.SetIndent("", "  ")
 		return enc.Encode(entries)

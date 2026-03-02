@@ -22,7 +22,14 @@ var unpinCmd = &cobra.Command{
 	RunE:  runUnpin,
 }
 
+var (
+	flagPinJSON   bool
+	flagUnpinJSON bool
+)
+
 func init() {
+	pinCmd.Flags().BoolVar(&flagPinJSON, "json", false, "output as JSON")
+	unpinCmd.Flags().BoolVar(&flagUnpinJSON, "json", false, "output as JSON")
 	rootCmd.AddCommand(pinCmd)
 	rootCmd.AddCommand(unpinCmd)
 }
@@ -30,6 +37,7 @@ func init() {
 func runPin(cmd *cobra.Command, args []string) error {
 	name := joinAppNameArgs(args)
 	cfgPath := config.DefaultPath()
+	useJSON := jsonOutputEnabled(flagPinJSON)
 
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
@@ -48,6 +56,15 @@ func runPin(cmd *cobra.Command, args []string) error {
 	bundleID := selected.BundleID
 
 	if cfg.IsPinned(bundleID) {
+		if useJSON {
+			return writeJSON(cmd, map[string]any{
+				"action":    "pin",
+				"status":    "already_pinned",
+				"changed":   false,
+				"app":       selected.Name,
+				"bundle_id": bundleID,
+			})
+		}
 		fmt.Fprintf(cmd.OutOrStdout(), "%s is already pinned\n", selected.Name)
 		return nil
 	}
@@ -57,6 +74,16 @@ func runPin(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to save config: %w", err)
 	}
 
+	if useJSON {
+		return writeJSON(cmd, map[string]any{
+			"action":    "pin",
+			"status":    "pinned",
+			"changed":   true,
+			"app":       selected.Name,
+			"bundle_id": bundleID,
+		})
+	}
+
 	fmt.Fprintf(cmd.OutOrStdout(), "Pinned %s (%s)\n", selected.Name, bundleID)
 	return nil
 }
@@ -64,6 +91,7 @@ func runPin(cmd *cobra.Command, args []string) error {
 func runUnpin(cmd *cobra.Command, args []string) error {
 	name := joinAppNameArgs(args)
 	cfgPath := config.DefaultPath()
+	useJSON := jsonOutputEnabled(flagUnpinJSON)
 
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
@@ -82,6 +110,15 @@ func runUnpin(cmd *cobra.Command, args []string) error {
 	bundleID := selected.BundleID
 
 	if !cfg.IsPinned(bundleID) {
+		if useJSON {
+			return writeJSON(cmd, map[string]any{
+				"action":    "unpin",
+				"status":    "not_pinned",
+				"changed":   false,
+				"app":       selected.Name,
+				"bundle_id": bundleID,
+			})
+		}
 		fmt.Fprintf(cmd.OutOrStdout(), "%s is not pinned\n", selected.Name)
 		return nil
 	}
@@ -89,6 +126,16 @@ func runUnpin(cmd *cobra.Command, args []string) error {
 	cfg.Unpin(bundleID)
 	if err := cfg.Save(cfgPath); err != nil {
 		return fmt.Errorf("failed to save config: %w", err)
+	}
+
+	if useJSON {
+		return writeJSON(cmd, map[string]any{
+			"action":    "unpin",
+			"status":    "unpinned",
+			"changed":   true,
+			"app":       selected.Name,
+			"bundle_id": bundleID,
+		})
 	}
 
 	fmt.Fprintf(cmd.OutOrStdout(), "Unpinned %s (%s)\n", selected.Name, bundleID)

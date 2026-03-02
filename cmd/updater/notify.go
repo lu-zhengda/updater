@@ -17,6 +17,7 @@ import (
 var (
 	flagInteractive bool
 	flagAutoUpdate  bool
+	flagNotifyJSON  bool
 )
 
 var notifyCmd = &cobra.Command{
@@ -29,11 +30,13 @@ var notifyCmd = &cobra.Command{
 func init() {
 	notifyCmd.Flags().BoolVar(&flagInteractive, "interactive", false, "show dialog with action buttons")
 	notifyCmd.Flags().BoolVar(&flagAutoUpdate, "auto-update", false, "automatically install safe updates after notification")
+	notifyCmd.Flags().BoolVar(&flagNotifyJSON, "json", false, "output as JSON")
 	rootCmd.AddCommand(notifyCmd)
 }
 
 func runNotify(cmd *cobra.Command, _ []string) error {
 	ctx := cmd.Context()
+	useJSON := jsonOutputEnabled(flagNotifyJSON)
 
 	cfg, err := config.Load(config.DefaultPath())
 	if err != nil {
@@ -73,6 +76,12 @@ func runNotify(cmd *cobra.Command, _ []string) error {
 	}
 
 	if len(updatable) == 0 {
+		if useJSON {
+			return writeJSON(cmd, map[string]any{
+				"updates_available": 0,
+				"notified":          false,
+			})
+		}
 		return nil // silent exit
 	}
 
@@ -80,14 +89,29 @@ func runNotify(cmd *cobra.Command, _ []string) error {
 	subtitle := buildNotificationSubtitle(updatable)
 
 	if flagInteractive || cfg.InteractiveNotifications {
-		return sendInteractiveNotification(ctx, runner, len(updatable), body)
-	}
-	if err := sendNotification(ctx, runner, len(updatable), body, subtitle); err != nil {
-		return err
+		if err := sendInteractiveNotification(ctx, runner, len(updatable), body); err != nil {
+			return err
+		}
+	} else {
+		if err := sendNotification(ctx, runner, len(updatable), body, subtitle); err != nil {
+			return err
+		}
 	}
 
+	updated, failed := []string{}, []string{}
 	if flagAutoUpdate {
-		autoUpdateAfterNotify(ctx, cfg, updatable)
+		updated, failed = autoUpdateAfterNotify(ctx, cfg, updatable)
+	}
+
+	if useJSON {
+		return writeJSON(cmd, map[string]any{
+			"updates_available": len(updatable),
+			"interactive":       flagInteractive || cfg.InteractiveNotifications,
+			"auto_update":       flagAutoUpdate,
+			"updated":           updated,
+			"failed":            failed,
+			"notified":          true,
+		})
 	}
 	return nil
 }
@@ -95,7 +119,7 @@ func runNotify(cmd *cobra.Command, _ []string) error {
 // autoUpdateAfterNotify performs safe auto-updates for eligible apps after the
 // notification has been sent. It skips pinned, major-update, system/setapp/toolbox/adobe,
 // and manual/notify-only policy apps.
-func autoUpdateAfterNotify(ctx context.Context, cfg *config.Config, updatable []*checker.UpdateResult) {
+func autoUpdateAfterNotify(ctx context.Context, cfg *config.Config, updatable []*checker.UpdateResult) ([]string, []string) {
 	runner := &checker.RealCmdRunner{}
 	bm := backup.NewManager(backup.DefaultBaseDir(), cfg.MaxBackupsOrDefault(), runner)
 	inst := installer.New(runner, nil)
@@ -128,6 +152,7 @@ func autoUpdateAfterNotify(ctx context.Context, cfg *config.Config, updatable []
 		}
 		_ = sendNotification(ctx, runner, len(updated), body, "")
 	}
+	return updated, failed
 }
 
 // buildNotificationBody creates the notification body text showing version transitions,

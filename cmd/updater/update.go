@@ -155,7 +155,7 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 	isExplicit := targetApp != nil && !flagAll
 
 	if flagDryRun {
-		return printDryRun(cmd, updatable, isExplicit, cfg)
+		return printDryRun(cmd, updatable, isExplicit, cfg, jsonOutputEnabled(flagDryRunJSON))
 	}
 
 	// Split updates into sequential and parallel groups.
@@ -480,7 +480,7 @@ func describeAction(r *checker.UpdateResult) string {
 }
 
 // printDryRun displays what updates would be applied without making changes.
-func printDryRun(cmd *cobra.Command, updatable []*checker.UpdateResult, isExplicit bool, cfg *config.Config) error {
+func printDryRun(cmd *cobra.Command, updatable []*checker.UpdateResult, isExplicit bool, cfg *config.Config, asJSON bool) error {
 	var planned []*checker.UpdateResult
 	for _, r := range updatable {
 		if !isExplicit && cfg.IsPinned(r.App.BundleID) {
@@ -497,7 +497,7 @@ func printDryRun(cmd *cobra.Command, updatable []*checker.UpdateResult, isExplic
 		return nil
 	}
 
-	if flagDryRunJSON {
+	if asJSON {
 		return printDryRunJSON(cmd, planned)
 	}
 

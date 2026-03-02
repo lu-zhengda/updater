@@ -23,11 +23,22 @@ var uiCmd = &cobra.Command{
 	RunE:  runUI,
 }
 
+var flagUIJSON bool
+
 func init() {
+	uiCmd.Flags().BoolVar(&flagUIJSON, "json", false, "output as JSON")
 	rootCmd.AddCommand(uiCmd)
 }
 
-func runUI(_ *cobra.Command, _ []string) error {
+func runUI(cmd *cobra.Command, _ []string) error {
+	if jsonOutputEnabled(flagUIJSON) {
+		return writeJSON(cmd, map[string]any{
+			"status":  "unsupported",
+			"command": "ui",
+			"message": "interactive TUI is not available in JSON mode",
+		})
+	}
+
 	cfgPath := config.DefaultPath()
 	cfg, err := config.Load(cfgPath)
 	if err != nil {

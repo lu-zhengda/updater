@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 
@@ -29,16 +30,51 @@ var configImportCmd = &cobra.Command{
 	RunE:  runConfigImport,
 }
 
+var flagConfigJSON bool
+
 func init() {
+	configCmd.PersistentFlags().BoolVar(&flagConfigJSON, "json", false, "output as JSON")
 	configCmd.AddCommand(configExportCmd)
 	configCmd.AddCommand(configImportCmd)
 	rootCmd.AddCommand(configCmd)
 }
 
 func runConfigExport(cmd *cobra.Command, args []string) error {
+	useJSON := jsonOutputEnabled(flagConfigJSON)
+
 	cfg, err := config.Load(config.DefaultPath())
 	if err != nil {
 		return fmt.Errorf("failed to load config: %w", err)
+	}
+
+	if len(args) == 1 {
+		var data []byte
+		if useJSON {
+			data, err = json.MarshalIndent(cfg, "", "  ")
+		} else {
+			data, err = yaml.Marshal(cfg)
+		}
+		if err != nil {
+			return fmt.Errorf("failed to marshal config: %w", err)
+		}
+
+		if err := os.WriteFile(args[0], data, 0o644); err != nil {
+			return fmt.Errorf("failed to write file: %w", err)
+		}
+
+		if useJSON {
+			return writeJSON(cmd, map[string]any{
+				"status": "exported",
+				"format": "json",
+				"path":   args[0],
+			})
+		}
+		fmt.Fprintf(cmd.OutOrStdout(), "Config exported to %s\n", args[0])
+		return nil
+	}
+
+	if useJSON {
+		return writeJSON(cmd, cfg)
 	}
 
 	data, err := yaml.Marshal(cfg)
@@ -46,19 +82,13 @@ func runConfigExport(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to marshal config: %w", err)
 	}
 
-	if len(args) == 1 {
-		if err := os.WriteFile(args[0], data, 0o644); err != nil {
-			return fmt.Errorf("failed to write file: %w", err)
-		}
-		fmt.Fprintf(cmd.OutOrStdout(), "Config exported to %s\n", args[0])
-		return nil
-	}
-
 	_, err = cmd.OutOrStdout().Write(data)
 	return err
 }
 
 func runConfigImport(cmd *cobra.Command, args []string) error {
+	useJSON := jsonOutputEnabled(flagConfigJSON)
+
 	importData, err := os.ReadFile(args[0])
 	if err != nil {
 		return fmt.Errorf("failed to read import file: %w", err)
@@ -78,6 +108,13 @@ func runConfigImport(cmd *cobra.Command, args []string) error {
 
 	if err := merged.Save(config.DefaultPath()); err != nil {
 		return fmt.Errorf("failed to save merged config: %w", err)
+	}
+
+	if useJSON {
+		return writeJSON(cmd, map[string]any{
+			"status": "imported",
+			"path":   args[0],
+		})
 	}
 
 	fmt.Fprintln(cmd.OutOrStdout(), "Config imported and merged successfully.")
