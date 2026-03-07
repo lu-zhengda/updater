@@ -78,6 +78,7 @@ Core update workflow:
 ```sh
 updater scan
 updater check
+updater check --share
 updater update "1Password"
 updater update --all
 updater update --all --auto

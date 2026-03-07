@@ -19,6 +19,7 @@ import (
 
 var flagVerbose bool
 var flagCheckJSON bool
+var flagCheckShare bool
 
 var checkCmd = &cobra.Command{
 	Use:   "check",
@@ -29,11 +30,13 @@ var checkCmd = &cobra.Command{
 func init() {
 	checkCmd.Flags().BoolVarP(&flagVerbose, "verbose", "v", false, "show release notes for available updates")
 	checkCmd.Flags().BoolVar(&flagCheckJSON, "json", false, "output results as JSON")
+	checkCmd.Flags().BoolVar(&flagCheckShare, "share", false, "copy a shareable update summary to clipboard")
 	rootCmd.AddCommand(checkCmd)
 }
 
 func runCheck(cmd *cobra.Command, args []string) error {
 	ctx := cmd.Context()
+	useJSON := jsonOutputEnabled(flagCheckJSON)
 
 	cfg, err := config.Load(config.DefaultPath())
 	if err != nil {
@@ -64,7 +67,7 @@ func runCheck(cmd *cobra.Command, args []string) error {
 	checkers := buildCheckers(runner, cfg.ResolveGitHubToken())
 	results := checkAll(ctx, apps, checkers, cfg.MaxConcurrentOrDefault())
 
-	if jsonOutputEnabled(flagCheckJSON) {
+	if useJSON {
 		entries := toCheckEntries(results, cfg)
 		enc := json.NewEncoder(cmd.OutOrStdout())
 		enc.SetIndent("", "  ")
@@ -78,12 +81,14 @@ func runCheck(cmd *cobra.Command, args []string) error {
 			}
 		}
 		fmt.Fprintf(os.Stderr, "%d apps checked, %d updates available\n", len(entries), updateCount)
+		maybeShareCheckResults(cmd, results, cfg, useJSON, flagCheckShare)
 		cfg.LastChecked = time.Now()
 		_ = cfg.Save(config.DefaultPath())
 		return nil
 	}
 
 	printCheckResults(cmd, results, cfg)
+	maybeShareCheckResults(cmd, results, cfg, useJSON, flagCheckShare)
 
 	cfg.LastChecked = time.Now()
 	_ = cfg.Save(config.DefaultPath())
