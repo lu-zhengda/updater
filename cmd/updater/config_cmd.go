@@ -94,8 +94,8 @@ func runConfigImport(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to read import file: %w", err)
 	}
 
-	var imported config.Config
-	if err := yaml.Unmarshal(importData, &imported); err != nil {
+	imported, err := config.Parse(importData)
+	if err != nil {
 		return fmt.Errorf("failed to parse import file: %w", err)
 	}
 
@@ -104,7 +104,7 @@ func runConfigImport(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to load current config: %w", err)
 	}
 
-	merged := config.Merge(current, &imported)
+	merged := config.Merge(current, imported)
 
 	if err := merged.Save(config.DefaultPath()); err != nil {
 		return fmt.Errorf("failed to save merged config: %w", err)

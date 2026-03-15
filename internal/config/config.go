@@ -18,20 +18,21 @@ const (
 
 // Config holds the user configuration for the updater.
 type Config struct {
-	IgnoredApps    []string          `yaml:"ignored_apps"`
-	GitHubMappings map[string]string `yaml:"github_mappings"`
-	CaskMappings   map[string]string `yaml:"cask_mappings"`
-	GitHubToken    string            `yaml:"github_token"`
-	MaxConcurrent  int               `yaml:"max_concurrent"`
-	PinnedApps       []string          `yaml:"pinned_apps"`
-	MaxBackups       int               `yaml:"max_backups"`
-	ScheduleOffered  bool              `yaml:"schedule_offered"`
-	ScheduleInterval int               `yaml:"schedule_interval"`
-	LastChecked      time.Time         `yaml:"last_checked,omitempty"`
-	Policies                 map[string]string `yaml:"policies,omitempty"` // bundleID → "auto"|"manual"|"notify-only"
-	InteractiveNotifications bool              `yaml:"interactive_notifications"`
-	ignoredSet               map[string]bool   `yaml:"-"`
-	pinnedSet        map[string]bool   `yaml:"-"`
+	IgnoredApps              []string                         `yaml:"ignored_apps"`
+	GitHubMappings           map[string]string                `yaml:"github_mappings"`
+	CaskMappings             map[string]string                `yaml:"cask_mappings"`
+	SourceOverrides          map[string]*SourceOverrideConfig `yaml:"source_overrides,omitempty"`
+	GitHubToken              string                           `yaml:"github_token"`
+	MaxConcurrent            int                              `yaml:"max_concurrent"`
+	PinnedApps               []string                         `yaml:"pinned_apps"`
+	MaxBackups               int                              `yaml:"max_backups"`
+	ScheduleOffered          bool                             `yaml:"schedule_offered"`
+	ScheduleInterval         int                              `yaml:"schedule_interval"`
+	LastChecked              time.Time                        `yaml:"last_checked,omitempty"`
+	Policies                 map[string]string                `yaml:"policies,omitempty"` // bundleID → "auto"|"manual"|"notify-only"
+	InteractiveNotifications bool                             `yaml:"interactive_notifications"`
+	ignoredSet               map[string]bool                  `yaml:"-"`
+	pinnedSet                map[string]bool                  `yaml:"-"`
 }
 
 // DefaultPath returns the default config file path (~/.config/updater/config.yaml).
@@ -41,6 +42,18 @@ func DefaultPath() string {
 		return ""
 	}
 	return filepath.Join(home, ".config", "updater", "config.yaml")
+}
+
+// Parse decodes config YAML and applies config-local validation.
+func Parse(data []byte) (*Config, error) {
+	var cfg Config
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		return nil, fmt.Errorf("failed to parse config file: %w", err)
+	}
+
+	cfg.buildIgnoredSet()
+	cfg.buildPinnedSet()
+	return &cfg, nil
 }
 
 // Load reads a YAML config file from path. If the file does not exist,
@@ -54,14 +67,7 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("failed to read config file: %w", err)
 	}
 
-	var cfg Config
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
-		return nil, fmt.Errorf("failed to parse config file: %w", err)
-	}
-
-	cfg.buildIgnoredSet()
-	cfg.buildPinnedSet()
-	return &cfg, nil
+	return Parse(data)
 }
 
 // Save writes the config to a YAML file at path.
@@ -104,6 +110,14 @@ func (c *Config) CaskToken(bundleID string) string {
 		return ""
 	}
 	return c.CaskMappings[bundleID]
+}
+
+// SourceOverride returns the source override for the given bundle ID, if configured.
+func (c *Config) SourceOverride(bundleID string) *SourceOverrideConfig {
+	if c.SourceOverrides == nil {
+		return nil
+	}
+	return c.SourceOverrides[bundleID]
 }
 
 // ResolveGitHubToken returns the GitHub API token, preferring the
@@ -222,6 +236,13 @@ func Merge(current, imported *Config) *Config {
 	// Merge maps: imported overrides current.
 	result.GitHubMappings = mergeMaps(current.GitHubMappings, imported.GitHubMappings)
 	result.CaskMappings = mergeMaps(current.CaskMappings, imported.CaskMappings)
+	result.SourceOverrides = cloneSourceOverrides(current.SourceOverrides)
+	for bundleID, override := range imported.SourceOverrides {
+		if result.SourceOverrides == nil {
+			result.SourceOverrides = make(map[string]*SourceOverrideConfig, len(imported.SourceOverrides))
+		}
+		result.SourceOverrides[bundleID] = override.clone()
+	}
 	result.Policies = mergeMaps(current.Policies, imported.Policies)
 
 	// Non-zero scalar overrides.
