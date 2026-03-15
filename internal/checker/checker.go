@@ -26,6 +26,9 @@ type UpdateResult struct {
 	IsMajorUpdate  bool // true when latest has a higher major version
 	StaleSource    bool // true when the source's latest is older than installed
 	Error          error
+	// Explicit override provenance is copied from the checked app when present.
+	SourceOverrideActive bool
+	SourceOverrideKind   string
 }
 
 // Checker is implemented by each update source (Sparkle, Brew, MAS, GitHub).

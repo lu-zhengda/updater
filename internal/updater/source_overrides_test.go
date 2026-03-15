@@ -2,6 +2,7 @@ package updater
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/lu-zhengda/updater/internal/app"
@@ -438,6 +439,156 @@ func TestEnrichApps_ExplicitSourceOverrides_DoNotMutateSyntheticEntries(t *testi
 	}
 	if got[1].SourceOverrideActive || got[1].ResolvedSourceOverride != nil || got[1].SourceOverrideKind != "" {
 		t.Fatalf("system entry must not become override-backed: %#v", got[1])
+	}
+}
+
+func TestCheckWithFallthrough_ExplicitGitHubOverride_DoesNotFallThroughOnError(t *testing.T) {
+	a := &app.App{
+		Name:                 "Example",
+		Version:              "1.0.0",
+		Source:               app.SourceGitHub,
+		GitHubRepo:           "owner/repo",
+		SourceOverrideActive: true,
+		SourceOverrideKind:   string(config.SourceOverrideKindGitHub),
+		ResolvedSourceOverride: &app.SourceOverride{
+			Kind: string(config.SourceOverrideKindGitHub),
+			Repo: "owner/repo",
+		},
+	}
+
+	checkers := []checker.Checker{
+		&mockChecker{
+			name:     "github",
+			canCheck: func(*app.App) bool { return true },
+			err:      fmt.Errorf("boom"),
+		},
+		&mockChecker{
+			name:     "brew-info",
+			canCheck: func(*app.App) bool { return true },
+			result: &checker.UpdateResult{
+				Source:        "brew-info",
+				LatestVersion: "2.0.0",
+				HasUpdate:     true,
+			},
+		},
+	}
+
+	result := CheckWithFallthrough(context.Background(), a, checkers)
+	if result.Error == nil {
+		t.Fatal("expected github error without fallthrough")
+	}
+	if result.Source != "github" {
+		t.Fatalf("Source = %q, want %q", result.Source, "github")
+	}
+	if !result.SourceOverrideActive || result.SourceOverrideKind != string(config.SourceOverrideKindGitHub) {
+		t.Fatalf("expected override provenance on result, got %#v", result)
+	}
+}
+
+func TestCheckWithFallthrough_ExplicitSparkleOverride_DoesNotFallThroughOnStale(t *testing.T) {
+	a := &app.App{
+		Name:                 "Example",
+		Version:              "2.0.0",
+		Source:               app.SourceSparkle,
+		FeedURL:              "https://example.com/appcast.xml",
+		CaskName:             "example",
+		SourceOverrideActive: true,
+		SourceOverrideKind:   string(config.SourceOverrideKindSparkle),
+		ResolvedSourceOverride: &app.SourceOverride{
+			Kind:       string(config.SourceOverrideKindSparkle),
+			AppcastURL: "https://example.com/appcast.xml",
+		},
+	}
+
+	checkers := []checker.Checker{
+		&mockChecker{
+			name:     "sparkle",
+			canCheck: func(*app.App) bool { return true },
+			result: &checker.UpdateResult{
+				Source:      "sparkle",
+				StaleSource: true,
+			},
+		},
+		&mockChecker{
+			name:     "brew-info",
+			canCheck: func(*app.App) bool { return true },
+			result: &checker.UpdateResult{
+				Source:        "brew-info",
+				LatestVersion: "3.0.0",
+				HasUpdate:     true,
+			},
+		},
+	}
+
+	result := CheckWithFallthrough(context.Background(), a, checkers)
+	if result.Error == nil {
+		t.Fatal("expected sparkle stale result without brew-info fallthrough")
+	}
+	if result.Source != "sparkle" {
+		t.Fatalf("Source = %q, want %q", result.Source, "sparkle")
+	}
+	if !result.SourceOverrideActive || result.SourceOverrideKind != string(config.SourceOverrideKindSparkle) {
+		t.Fatalf("expected override provenance on result, got %#v", result)
+	}
+}
+
+func TestCheckWithFallthrough_CopiesOverrideProvenanceToResult(t *testing.T) {
+	a := &app.App{
+		Name:                 "Example",
+		Version:              "1.0.0",
+		Source:               app.SourceBrew,
+		CaskName:             "example",
+		InstalledViaBrew:     true,
+		SourceOverrideActive: true,
+		SourceOverrideKind:   string(config.SourceOverrideKindBrew),
+	}
+
+	checkers := []checker.Checker{
+		&mockChecker{
+			name:     "brew",
+			canCheck: func(*app.App) bool { return true },
+			result: &checker.UpdateResult{
+				Source:         "brew",
+				CurrentVersion: "1.0.0",
+				LatestVersion:  "1.1.0",
+				HasUpdate:      true,
+			},
+		},
+	}
+
+	result := CheckWithFallthrough(context.Background(), a, checkers)
+	if !result.SourceOverrideActive || result.SourceOverrideKind != string(config.SourceOverrideKindBrew) {
+		t.Fatalf("expected override provenance on result, got %#v", result)
+	}
+}
+
+func TestCheckAll_ExplicitOverrideWithoutCompatibleChecker_ReturnsErrorResult(t *testing.T) {
+	a := &app.App{
+		Name:                 "Example",
+		Version:              "1.0.0",
+		Source:               app.SourceGitHub,
+		SourceOverrideActive: true,
+		SourceOverrideKind:   string(config.SourceOverrideKindGitHub),
+	}
+
+	results := CheckAll(context.Background(), []*app.App{a}, []checker.Checker{
+		&mockChecker{
+			name:     "sparkle",
+			canCheck: func(*app.App) bool { return true },
+		},
+	}, 1)
+
+	if len(results) != 1 {
+		t.Fatalf("got %d results, want 1", len(results))
+	}
+	if results[0].Error == nil {
+		t.Fatalf("expected deterministic override-backed error result, got %#v", results[0])
+	}
+	if results[0].Source != "github" {
+		t.Fatalf("Source = %q, want %q", results[0].Source, "github")
+	}
+	if !results[0].SourceOverrideActive || results[0].SourceOverrideKind != string(config.SourceOverrideKindGitHub) {
+		t.Fatalf("expected override provenance on result, got %#v", results[0])
 	}
 }
 

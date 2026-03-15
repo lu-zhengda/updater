@@ -256,6 +256,74 @@ func BuildCheckers(runner checker.CmdRunner, githubToken string) []checker.Check
 	}
 }
 
+func checkersForApp(a *app.App, all []checker.Checker) []checker.Checker {
+	if a == nil || !a.SourceOverrideActive {
+		return all
+	}
+
+	var filtered []checker.Checker
+	for _, c := range all {
+		switch a.SourceOverrideKind {
+		case string(config.SourceOverrideKindGitHub):
+			if c.Name() == string(config.SourceOverrideKindGitHub) {
+				filtered = append(filtered, c)
+			}
+		case string(config.SourceOverrideKindSparkle):
+			if c.Name() == string(config.SourceOverrideKindSparkle) {
+				filtered = append(filtered, c)
+			}
+		case string(config.SourceOverrideKindBrew):
+			if c.Name() == "brew" || c.Name() == string(app.SourceBrewInfo) {
+				filtered = append(filtered, c)
+			}
+		}
+	}
+
+	return filtered
+}
+
+func effectiveResultSource(a *app.App, fallback string) string {
+	if fallback != "" {
+		return fallback
+	}
+	if a == nil {
+		return "unknown"
+	}
+	if a.Source != "" && a.Source != app.SourceUnknown {
+		return string(a.Source)
+	}
+	if a.SourceOverrideKind != "" {
+		return a.SourceOverrideKind
+	}
+	return "unknown"
+}
+
+func withOverrideProvenance(result *checker.UpdateResult, a *app.App) *checker.UpdateResult {
+	if result == nil || a == nil {
+		return result
+	}
+	if result.App == nil {
+		result.App = a
+	}
+	result.SourceOverrideActive = a.SourceOverrideActive
+	result.SourceOverrideKind = a.SourceOverrideKind
+	return result
+}
+
+func noCheckerResult(a *app.App) *checker.UpdateResult {
+	source := "unknown"
+	if a != nil && a.SourceOverrideActive {
+		source = effectiveResultSource(a, "")
+	}
+
+	return withOverrideProvenance(&checker.UpdateResult{
+		App:            a,
+		Source:         source,
+		CurrentVersion: a.Version,
+		Error:          fmt.Errorf("no checker could provide a result for %s", a.Name),
+	}, a)
+}
+
 // CheckAll runs update checks on all apps concurrently.
 // It uses a semaphore to limit concurrency to maxConcurrency goroutines.
 // If a checker returns a stale result or an error, the next compatible checker is tried.
@@ -272,15 +340,22 @@ func CheckAll(ctx context.Context, apps []*app.App, checkers []checker.Checker, 
 	)
 
 	for _, a := range apps {
+		appCheckers := checkersForApp(a, checkers)
+
 		// Check if any checker can handle this app.
 		hasChecker := false
-		for _, c := range checkers {
+		for _, c := range appCheckers {
 			if c.CanCheck(a) {
 				hasChecker = true
 				break
 			}
 		}
 		if !hasChecker {
+			if a != nil && a.SourceOverrideActive {
+				mu.Lock()
+				results = append(results, noCheckerResult(a))
+				mu.Unlock()
+			}
 			continue
 		}
 
@@ -291,7 +366,7 @@ func CheckAll(ctx context.Context, apps []*app.App, checkers []checker.Checker, 
 			defer wg.Done()
 			defer func() { <-sem }() // release semaphore slot
 
-			result := CheckWithFallthrough(ctx, a, checkers)
+			result := CheckWithFallthrough(ctx, a, appCheckers)
 
 			mu.Lock()
 			results = append(results, result)
@@ -305,6 +380,8 @@ func CheckAll(ctx context.Context, apps []*app.App, checkers []checker.Checker, 
 
 // CheckWithFallthrough tries checkers in order, falling through on stale results or errors.
 func CheckWithFallthrough(ctx context.Context, a *app.App, checkers []checker.Checker) *checker.UpdateResult {
+	checkers = checkersForApp(a, checkers)
+
 	var lastErr error
 	var lastSource string
 	var staleCount int
@@ -322,31 +399,40 @@ func CheckWithFallthrough(ctx context.Context, a *app.App, checkers []checker.Ch
 		}
 
 		if result.StaleSource {
+			lastSource = result.Source
 			staleCount++
 			continue // stale feed, try next checker
 		}
 
-		return result
+		return withOverrideProvenance(result, a)
 	}
 
 	// All checkers failed or were stale — return error result from last attempt.
 	if lastErr != nil {
-		return &checker.UpdateResult{
+		return withOverrideProvenance(&checker.UpdateResult{
 			App:            a,
-			Source:         lastSource,
+			Source:         effectiveResultSource(a, lastSource),
 			CurrentVersion: a.Version,
 			Error:          lastErr,
-		}
+		}, a)
+	}
+
+	if len(checkers) == 0 {
+		return noCheckerResult(a)
 	}
 
 	msg := fmt.Sprintf("no checker could provide a result for %s", a.Name)
 	if staleCount > 0 {
 		msg = fmt.Sprintf("all %d source(s) returned stale data for %s", staleCount, a.Name)
 	}
-	return &checker.UpdateResult{
+	source := "unknown"
+	if a != nil && a.SourceOverrideActive {
+		source = effectiveResultSource(a, lastSource)
+	}
+	return withOverrideProvenance(&checker.UpdateResult{
 		App:            a,
-		Source:         "unknown",
+		Source:         source,
 		CurrentVersion: a.Version,
 		Error:          fmt.Errorf("%s", msg),
-	}
+	}, a)
 }

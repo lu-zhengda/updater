@@ -96,3 +96,43 @@ func TestFallthrough_GitHub404_ToBrewInfo(t *testing.T) {
 		t.Errorf("LatestVersion = %q, want %q", result.LatestVersion, "2.0.0")
 	}
 }
+
+func TestIntegration_ExplicitGitHubOverride_SuppressesFallbackOnError(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.NotFound(w, nil)
+	}))
+	defer ts.Close()
+
+	runner := &checker.MockCmdRunner{
+		Output: []byte(`{"casks":[{"token":"missing-app","version":"2.0.0"}]}`),
+	}
+
+	a := &app.App{
+		Name:                 "MissingApp",
+		Version:              "1.0.0",
+		Source:               app.SourceGitHub,
+		GitHubRepo:           "example/missing-app",
+		CaskName:             "missing-app",
+		SourceOverrideActive: true,
+		SourceOverrideKind:   "github",
+	}
+
+	checkers := []checker.Checker{
+		checker.NewGitHubChecker(ts.Client(), ts.URL, ""),
+		checker.NewBrewInfoChecker(runner),
+	}
+
+	result := CheckWithFallthrough(context.Background(), a, checkers)
+	if result.Error == nil {
+		t.Fatalf("expected pinned github error result, got %#v", result)
+	}
+	if result.Source != "github" {
+		t.Fatalf("Source = %q, want %q", result.Source, "github")
+	}
+	if result.LatestVersion != "" {
+		t.Fatalf("LatestVersion = %q, want empty because brew-info fallback must be suppressed", result.LatestVersion)
+	}
+	if !result.SourceOverrideActive || result.SourceOverrideKind != "github" {
+		t.Fatalf("expected override provenance on result, got %#v", result)
+	}
+}
