@@ -159,7 +159,10 @@ func checkConfigValidation() []doctorCheck {
 	return validateConfigMappings(cfg, apps)
 }
 
-// validateConfigMappings checks config entries against discovered app bundle IDs.
+// validateConfigMappings checks legacy config entries against discovered app
+// bundle IDs. Explicit source_overrides are schema-validated elsewhere and are
+// intentionally treated as dormant-but-valid when the bundle ID is not
+// currently installed.
 func validateConfigMappings(cfg *config.Config, apps []*app.App) []doctorCheck {
 	bundleIDs := make(map[string]bool, len(apps))
 	for _, a := range apps {

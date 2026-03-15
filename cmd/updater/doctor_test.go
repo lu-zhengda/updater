@@ -216,6 +216,25 @@ func TestValidateConfigMappings_NoApps(t *testing.T) {
 	}
 }
 
+func TestValidateConfigMappings_SourceOverridesAreDormant(t *testing.T) {
+	cfg := &config.Config{
+		SourceOverrides: map[string]*config.SourceOverrideConfig{
+			"com.example.not-installed": {
+				Kind: config.SourceOverrideKindGitHub,
+				Repo: "owner/repo",
+			},
+		},
+	}
+
+	checks := validateConfigMappings(cfg, []*app.App{{BundleID: "com.other.app"}})
+	if len(checks) != 1 {
+		t.Fatalf("expected 1 check, got %d", len(checks))
+	}
+	if checks[0].Status != "ok" {
+		t.Fatalf("source_overrides should not be treated as stale: %#v", checks)
+	}
+}
+
 func TestCheckDiskSpace_OK(t *testing.T) {
 	c := checkDiskSpace()
 	if c.Status != "ok" && c.Status != "warning" {
@@ -286,6 +305,59 @@ func TestValidateConfigMappings_Fix(t *testing.T) {
 	}
 	if !strings.Contains(checks[0].Detail, "com.stale.pinned") {
 		t.Errorf("detail should mention stale pinned, got %q", checks[0].Detail)
+	}
+}
+
+func TestValidateConfigMappings_FixDoesNotRemoveSourceOverrides(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	cfgPath := config.DefaultPath()
+	if err := os.MkdirAll(filepath.Dir(cfgPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll failed: %v", err)
+	}
+	if err := os.WriteFile(cfgPath, []byte(`
+github_mappings:
+  com.example.stale: owner/repo
+source_overrides:
+  com.example.dormant:
+    kind: github
+    repo: owner/repo
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
+
+	cfg := &config.Config{
+		GitHubMappings: map[string]string{
+			"com.example.stale": "owner/repo",
+		},
+		SourceOverrides: map[string]*config.SourceOverrideConfig{
+			"com.example.dormant": {
+				Kind: config.SourceOverrideKindGitHub,
+				Repo: "owner/repo",
+			},
+		},
+	}
+
+	checks := validateConfigMappings(cfg, []*app.App{{BundleID: "com.other.app"}})
+	if len(checks) != 1 {
+		t.Fatalf("expected 1 check, got %d", len(checks))
+	}
+	if checks[0].fixFn == nil {
+		t.Fatal("expected fixFn")
+	}
+
+	checks[0].fixFn()
+
+	loaded, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if loaded.GitHubRepo("com.example.stale") != "" {
+		t.Fatal("expected stale legacy mapping to be removed")
+	}
+	if got := loaded.SourceOverride("com.example.dormant"); got == nil || got.Repo != "owner/repo" {
+		t.Fatalf("expected dormant source override to remain, got %#v", got)
 	}
 }
 
