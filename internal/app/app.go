@@ -12,6 +12,7 @@ const (
 	SourceMAS         Source = "mas"
 	SourceSparkle     Source = "sparkle"
 	SourceBrew        Source = "brew"
+	SourceBrewInfo    Source = "brew-info"
 	SourceGitHub      Source = "github"
 	SourceBrewFormula Source = "formula"
 	SourceSystem      Source = "system"
@@ -34,9 +35,13 @@ type App struct {
 	CaskName         string
 	MASID            string
 	GitHubRepo       string // "owner/repo"
-	FormulaName       string // Homebrew formula name (e.g. "node", "python@3.12")
-	InstalledViaBrew  bool   // true only if actually installed via brew
-	ElectronUpdateURL string // Generic update server base URL from app-update.yml
+	FormulaName      string // Homebrew formula name (e.g. "node", "python@3.12")
+	InstalledViaBrew bool   // true only if actually installed via brew
+	// Explicit override provenance is populated only from source_overrides.
+	ResolvedSourceOverride *SourceOverride
+	SourceOverrideActive   bool
+	SourceOverrideKind     string
+	ElectronUpdateURL      string // Generic update server base URL from app-update.yml
 }
 
 // ToCaskName converts an app display name to a likely Homebrew cask name.

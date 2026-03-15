@@ -89,12 +89,19 @@ func DiscoverBrewFormulae(ctx context.Context, runner checker.CmdRunner) ([]*app
 	return apps, nil
 }
 
-// EnrichApps applies config mappings and cross-references with brew casks
-// to enrich app metadata. It sets CaskName and InstalledViaBrew, and probes
-// brew info for unknown apps to discover available casks.
+// EnrichApps applies explicit source overrides, config mappings, and
+// cross-references with brew casks to enrich app metadata. It sets CaskName and
+// InstalledViaBrew, and probes brew info for eligible apps to discover
+// available casks.
 func EnrichApps(ctx context.Context, apps []*app.App, cfg *config.Config, runner checker.CmdRunner) ([]*app.App, error) {
+	// Phase 0: Apply explicit source overrides before legacy mappings or brew heuristics.
+	applyExplicitSourceOverrides(apps, cfg)
+
 	// Phase 1: Apply GitHub repo mappings from config.
 	for _, a := range apps {
+		if hasExplicitSourceOverride(a) {
+			continue
+		}
 		if repo := cfg.GitHubRepo(a.BundleID); repo != "" {
 			a.GitHubRepo = repo
 			if a.Source == app.SourceUnknown {
@@ -105,6 +112,9 @@ func EnrichApps(ctx context.Context, apps []*app.App, cfg *config.Config, runner
 
 	// Phase 2: Apply cask mappings from config (bundleID → cask token).
 	for _, a := range apps {
+		if hasExplicitSourceOverride(a) {
+			continue
+		}
 		if token := cfg.CaskToken(a.BundleID); token != "" {
 			a.CaskName = token
 		}
@@ -123,6 +133,19 @@ func EnrichApps(ctx context.Context, apps []*app.App, cfg *config.Config, runner
 	appCandidates := map[*app.App][]string{}
 
 	for _, a := range apps {
+		if a.CaskName != "" && casks[a.CaskName] {
+			a.InstalledViaBrew = true
+			if hasExplicitBrewOverride(a) {
+				a.Source = app.SourceBrew
+			} else if a.Source == app.SourceUnknown {
+				a.Source = app.SourceBrew
+			}
+		}
+
+		if hasExplicitSourceOverride(a) {
+			continue
+		}
+
 		// Compute cask-token candidates for apps that may need brew-info fallback:
 		// - SourceUnknown apps
 		// - SourceSparkle apps (Sparkle feeds can become stale)
