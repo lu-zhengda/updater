@@ -562,6 +562,45 @@ func TestCheckWithFallthrough_CopiesOverrideProvenanceToResult(t *testing.T) {
 	}
 }
 
+func TestCheckWithFallthrough_DoesNotMutateSharedCheckerResult(t *testing.T) {
+	shared := &checker.UpdateResult{
+		Source:         "github",
+		CurrentVersion: "1.0.0",
+		LatestVersion:  "1.1.0",
+		HasUpdate:      true,
+	}
+	a := &app.App{
+		Name:                 "Example",
+		Version:              "1.0.0",
+		Source:               app.SourceGitHub,
+		GitHubRepo:           "owner/repo",
+		SourceOverrideActive: true,
+		SourceOverrideKind:   string(config.SourceOverrideKindGitHub),
+	}
+
+	checkers := []checker.Checker{
+		&mockChecker{
+			name:     "github",
+			canCheck: func(*app.App) bool { return true },
+			result:   shared,
+		},
+	}
+
+	result := CheckWithFallthrough(context.Background(), a, checkers)
+	if result == shared {
+		t.Fatal("expected result to be copied before provenance is stamped")
+	}
+	if result.App != a {
+		t.Fatalf("result.App = %#v, want checked app", result.App)
+	}
+	if !result.SourceOverrideActive || result.SourceOverrideKind != string(config.SourceOverrideKindGitHub) {
+		t.Fatalf("expected override provenance on copied result, got %#v", result)
+	}
+	if shared.App != nil || shared.SourceOverrideActive || shared.SourceOverrideKind != "" {
+		t.Fatalf("shared checker result was mutated: %#v", shared)
+	}
+}
+
 func TestCheckAll_ExplicitOverrideWithoutCompatibleChecker_ReturnsErrorResult(t *testing.T) {
 	a := &app.App{
 		Name:                 "Example",

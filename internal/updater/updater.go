@@ -302,12 +302,16 @@ func withOverrideProvenance(result *checker.UpdateResult, a *app.App) *checker.U
 	if result == nil || a == nil {
 		return result
 	}
-	if result.App == nil {
-		result.App = a
+
+	// Checkers may reuse result structs across calls in tests or callers; copy
+	// before stamping app-specific provenance to avoid cross-call mutation.
+	resultCopy := *result
+	if resultCopy.App == nil {
+		resultCopy.App = a
 	}
-	result.SourceOverrideActive = a.SourceOverrideActive
-	result.SourceOverrideKind = a.SourceOverrideKind
-	return result
+	resultCopy.SourceOverrideActive = a.SourceOverrideActive
+	resultCopy.SourceOverrideKind = a.SourceOverrideKind
+	return &resultCopy
 }
 
 func noCheckerResult(a *app.App) *checker.UpdateResult {
