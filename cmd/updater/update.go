@@ -353,7 +353,7 @@ func executeUpdate(ctx context.Context, r *checker.UpdateResult, runner checker.
 // performUpdate prints the update status, executes the update, and records the result in history.
 func performUpdate(cmd *cobra.Command, ctx context.Context, r *checker.UpdateResult, runner checker.CmdRunner, bm *backup.Manager, inst *installer.Installer) {
 	fmt.Fprintf(cmd.OutOrStdout(), "Updating %s (%s -> %s) via %s...\n",
-		r.App.Name, r.CurrentVersion, r.LatestVersion, r.Source)
+		r.App.Name, r.CurrentVersion, r.LatestVersion, canonicalSourceLabel(r.Source, r.SourceOverrideActive))
 
 	updateErr, rolledBack := executeUpdate(ctx, r, runner, bm, inst)
 	if errors.Is(updateErr, checker.ErrOpenedExternally) {
@@ -506,7 +506,7 @@ func printDryRun(cmd *cobra.Command, updatable []*checker.UpdateResult, isExplic
 	fmt.Fprintln(w, "APP\tFROM\tTO\tSOURCE\tACTION")
 	for _, r := range planned {
 		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
-			r.App.Name, r.CurrentVersion, r.LatestVersion, r.Source, describeAction(r))
+			r.App.Name, r.CurrentVersion, r.LatestVersion, canonicalSourceLabel(r.Source, r.SourceOverrideActive), describeAction(r))
 	}
 	w.Flush()
 	fmt.Fprintf(cmd.OutOrStdout(), "\n%d update(s) would be applied.\n", len(planned))
@@ -515,6 +515,7 @@ func printDryRun(cmd *cobra.Command, updatable []*checker.UpdateResult, isExplic
 
 // dryRunEntry represents a single entry in the JSON dry-run output.
 type dryRunEntry struct {
+	sourceOverrideJSON
 	App    string `json:"app"`
 	From   string `json:"from"`
 	To     string `json:"to"`
@@ -527,11 +528,12 @@ func printDryRunJSON(cmd *cobra.Command, planned []*checker.UpdateResult) error 
 	entries := make([]dryRunEntry, len(planned))
 	for i, r := range planned {
 		entries[i] = dryRunEntry{
-			App:    r.App.Name,
-			From:   r.CurrentVersion,
-			To:     r.LatestVersion,
-			Source: r.Source,
-			Action: describeAction(r),
+			sourceOverrideJSON: sourceOverrideFieldsFromResult(r),
+			App:                r.App.Name,
+			From:               r.CurrentVersion,
+			To:                 r.LatestVersion,
+			Source:             r.Source,
+			Action:             describeAction(r),
 		}
 	}
 	enc := json.NewEncoder(cmd.OutOrStdout())

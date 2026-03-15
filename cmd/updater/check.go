@@ -130,7 +130,7 @@ func printCheckResults(cmd *cobra.Command, results []*checker.UpdateResult, cfg 
 	errCount := 0
 	pinnedCount := 0
 	for _, r := range results {
-		src := cliSourceName(r.Source)
+		src := checkSourceLabel(r.Source, r.SourceOverrideActive)
 		if r.Error != nil {
 			errCount++
 			fmt.Fprintf(w, "%s\t%s\t-\t%s\tERROR: %v\n", r.App.Name, r.CurrentVersion, src, r.Error)
@@ -189,6 +189,7 @@ func cliSourceName(source string) string {
 
 // checkEntry is the JSON representation of a check result.
 type checkEntry struct {
+	sourceOverrideJSON
 	Name           string `json:"name"`
 	BundleID       string `json:"bundle_id"`
 	CurrentVersion string `json:"current_version"`
@@ -205,13 +206,14 @@ func toCheckEntries(results []*checker.UpdateResult, cfg *config.Config) []check
 	var entries []checkEntry
 	for _, r := range results {
 		e := checkEntry{
-			Name:           r.App.Name,
-			BundleID:       r.App.BundleID,
-			CurrentVersion: r.CurrentVersion,
-			LatestVersion:  r.LatestVersion,
-			Source:         r.Source,
-			DownloadURL:    r.DownloadURL,
-			ReleaseNotes:   r.ReleaseNotes,
+			sourceOverrideJSON: sourceOverrideFieldsFromResult(r),
+			Name:               r.App.Name,
+			BundleID:           r.App.BundleID,
+			CurrentVersion:     r.CurrentVersion,
+			LatestVersion:      r.LatestVersion,
+			Source:             r.Source,
+			DownloadURL:        r.DownloadURL,
+			ReleaseNotes:       r.ReleaseNotes,
 		}
 		switch {
 		case r.Error != nil:

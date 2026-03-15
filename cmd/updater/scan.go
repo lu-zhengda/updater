@@ -1,12 +1,15 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 	"text/tabwriter"
 
+	"github.com/lu-zhengda/updater/internal/app"
 	"github.com/lu-zhengda/updater/internal/checker"
+	"github.com/lu-zhengda/updater/internal/config"
 	"github.com/spf13/cobra"
 )
 
@@ -26,31 +29,41 @@ func init() {
 func runScan(cmd *cobra.Command, args []string) error {
 	ctx := cmd.Context()
 
+	cfg, err := config.Load(config.DefaultPath())
+	if err != nil {
+		return fmt.Errorf("failed to load config: %w", err)
+	}
+
 	apps, err := discoverApps()
 	if err != nil {
 		return err
 	}
 
 	runner := &checker.RealCmdRunner{}
+	var formulaApps []*app.App
 	formulaApps, fErr := discoverBrewFormulae(ctx, runner)
 	if fErr != nil {
 		fmt.Fprintf(os.Stderr, "warning: could not discover brew formulae: %v\n", fErr)
-	} else {
-		apps = append(apps, formulaApps...)
+	}
+
+	apps, err = loadScanApps(ctx, cfg, runner, apps, formulaApps)
+	if err != nil {
+		return err
 	}
 
 	if jsonOutputEnabled(flagScanJSON) {
 		entries := make([]scanEntry, len(apps))
 		for i, a := range apps {
 			entries[i] = scanEntry{
-				Name:             a.Name,
-				BundleID:         a.BundleID,
-				Version:          a.Version,
-				Source:           string(a.Source),
-				FeedURL:          a.FeedURL,
-				GitHubRepo:       a.GitHubRepo,
-				CaskName:         a.CaskName,
-				InstalledViaBrew: a.InstalledViaBrew,
+				sourceOverrideJSON: sourceOverrideFieldsFromApp(a),
+				Name:               a.Name,
+				BundleID:           a.BundleID,
+				Version:            a.Version,
+				Source:             string(a.Source),
+				FeedURL:            a.FeedURL,
+				GitHubRepo:         a.GitHubRepo,
+				CaskName:           a.CaskName,
+				InstalledViaBrew:   a.InstalledViaBrew,
 			}
 		}
 		enc := json.NewEncoder(cmd.OutOrStdout())
@@ -65,7 +78,7 @@ func runScan(cmd *cobra.Command, args []string) error {
 	w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
 	fmt.Fprintln(w, "NAME\tVERSION\tSOURCE\tBUNDLE ID")
 	for _, a := range apps {
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", a.Name, a.Version, a.Source, a.BundleID)
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", a.Name, a.Version, canonicalSourceLabel(string(a.Source), a.SourceOverrideActive), a.BundleID)
 	}
 	w.Flush()
 
@@ -73,8 +86,15 @@ func runScan(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
+func loadScanApps(ctx context.Context, cfg *config.Config, runner checker.CmdRunner, discoveredApps, formulaApps []*app.App) ([]*app.App, error) {
+	apps := append([]*app.App{}, discoveredApps...)
+	apps = append(apps, formulaApps...)
+	return enrichApps(ctx, apps, cfg, runner)
+}
+
 // scanEntry is the JSON representation of a discovered app.
 type scanEntry struct {
+	sourceOverrideJSON
 	Name             string `json:"name"`
 	BundleID         string `json:"bundle_id"`
 	Version          string `json:"version"`

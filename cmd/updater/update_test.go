@@ -15,6 +15,7 @@ import (
 	"github.com/lu-zhengda/updater/internal/backup"
 	"github.com/lu-zhengda/updater/internal/checker"
 	"github.com/lu-zhengda/updater/internal/config"
+	"github.com/lu-zhengda/updater/internal/history"
 	"github.com/spf13/cobra"
 )
 
@@ -409,6 +410,35 @@ func TestPrintDryRun_JSON(t *testing.T) {
 	}
 }
 
+func TestPrintDryRunJSON_ExplicitOverrideSerializesProvenance(t *testing.T) {
+	cmd := &cobra.Command{}
+	buf := &bytes.Buffer{}
+	cmd.SetOut(buf)
+
+	if err := printDryRunJSON(cmd, []*checker.UpdateResult{{
+		App:                  &app.App{Name: "Example"},
+		Source:               "github",
+		CurrentVersion:       "1.0.0",
+		LatestVersion:        "1.1.0",
+		HasUpdate:            true,
+		SourceOverrideActive: true,
+		SourceOverrideKind:   "github",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	var entries []dryRunEntry
+	if err := json.Unmarshal(buf.Bytes(), &entries); err != nil {
+		t.Fatalf("failed to parse JSON output: %v\n%s", err, buf.String())
+	}
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(entries))
+	}
+	if !entries[0].SourceOverride || entries[0].SourceOverrideKind != "github" {
+		t.Fatalf("expected override metadata in dry-run json, got %#v", entries[0])
+	}
+}
+
 func TestPrintDryRun_Empty(t *testing.T) {
 	cmd := &cobra.Command{}
 	buf := &bytes.Buffer{}
@@ -539,5 +569,28 @@ func TestRunUpdate_JSONRequiresDryRun(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "--json requires --dry-run") {
 		t.Errorf("unexpected error message: %v", err)
+	}
+}
+
+func TestPerformUpdate_ExplicitOverridePrintsCanonicalSourceLabel(t *testing.T) {
+	cmd := &cobra.Command{}
+	buf := &bytes.Buffer{}
+	cmd.SetOut(buf)
+
+	origHistoryPath := history.DefaultPath
+	history.DefaultPath = func() string { return filepath.Join(t.TempDir(), "history.json") }
+	defer func() { history.DefaultPath = origHistoryPath }()
+
+	performUpdate(cmd, context.Background(), &checker.UpdateResult{
+		App:                  &app.App{Name: "Example"},
+		Source:               "github",
+		CurrentVersion:       "1.0.0",
+		LatestVersion:        "1.1.0",
+		SourceOverrideActive: true,
+		SourceOverrideKind:   "github",
+	}, &checker.MockCmdRunner{}, nil, nil)
+
+	if !strings.Contains(buf.String(), "Updating Example (1.0.0 -> 1.1.0) via github (override)...") {
+		t.Fatalf("expected live update line to show canonical override source, got %q", buf.String())
 	}
 }

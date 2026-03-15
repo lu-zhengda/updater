@@ -1,12 +1,15 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/lu-zhengda/updater/internal/app"
 	"github.com/lu-zhengda/updater/internal/checker"
 	"github.com/lu-zhengda/updater/internal/config"
+	"github.com/spf13/cobra"
 )
 
 func TestToCheckEntries_UpdateAvailable(t *testing.T) {
@@ -169,6 +172,27 @@ func TestToCheckEntries_DownloadURL(t *testing.T) {
 	}
 }
 
+func TestToCheckEntries_ExplicitOverrideSerializesProvenance(t *testing.T) {
+	cfg := &config.Config{}
+	results := []*checker.UpdateResult{{
+		App:                  &app.App{Name: "Example", BundleID: "com.example.app"},
+		Source:               "brew-info",
+		CurrentVersion:       "1.0.0",
+		LatestVersion:        "1.1.0",
+		HasUpdate:            true,
+		SourceOverrideActive: true,
+		SourceOverrideKind:   "brew",
+	}}
+
+	entries := toCheckEntries(results, cfg)
+	if len(entries) != 1 {
+		t.Fatalf("got %d entries, want 1", len(entries))
+	}
+	if !entries[0].SourceOverride || entries[0].SourceOverrideKind != "brew" {
+		t.Fatalf("expected override metadata, got %#v", entries[0])
+	}
+}
+
 func TestCliSourceName(t *testing.T) {
 	tests := []struct {
 		source string
@@ -193,5 +217,33 @@ func TestCliSourceName(t *testing.T) {
 				t.Errorf("cliSourceName(%q) = %q, want %q", tt.source, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestCheckSourceLabel_OverrideUsesCanonicalSource(t *testing.T) {
+	if got := checkSourceLabel("brew-info", true); got != "brew-info (override)" {
+		t.Fatalf("checkSourceLabel = %q, want %q", got, "brew-info (override)")
+	}
+}
+
+func TestPrintCheckResults_ExplicitOverrideUsesCanonicalSourceLabel(t *testing.T) {
+	cmd := &cobra.Command{}
+	buf := &bytes.Buffer{}
+	cmd.SetOut(buf)
+
+	results := []*checker.UpdateResult{{
+		App:                  &app.App{Name: "Example", BundleID: "com.example.app"},
+		Source:               "brew-info",
+		CurrentVersion:       "1.0.0",
+		LatestVersion:        "1.1.0",
+		HasUpdate:            true,
+		SourceOverrideActive: true,
+		SourceOverrideKind:   "brew",
+	}}
+
+	printCheckResults(cmd, results, &config.Config{})
+
+	if !strings.Contains(buf.String(), "brew-info (override)") {
+		t.Fatalf("expected canonical override source label, got %q", buf.String())
 	}
 }
