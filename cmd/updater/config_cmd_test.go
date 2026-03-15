@@ -169,3 +169,33 @@ func TestRunConfigImport_RejectsInvalidSourceOverrides(t *testing.T) {
 		t.Fatalf("runConfigImport error = %q, want github repo validation", err.Error())
 	}
 }
+
+func TestRunConfigImport_RejectsNullSourceOverrides(t *testing.T) {
+	t.Setenv(agentModeEnv, "0")
+	t.Setenv("HOME", t.TempDir())
+
+	oldFlagConfigJSON := flagConfigJSON
+	flagConfigJSON = false
+	t.Cleanup(func() {
+		flagConfigJSON = oldFlagConfigJSON
+	})
+
+	importPath := t.TempDir() + "/import.yaml"
+	importData := `source_overrides:
+  com.example.null: null
+`
+	if err := os.WriteFile(importPath, []byte(importData), 0o644); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
+
+	cmd := &cobra.Command{}
+	cmd.SetOut(io.Discard)
+
+	err := runConfigImport(cmd, []string{importPath})
+	if err == nil {
+		t.Fatal("expected runConfigImport to reject null source_overrides entries")
+	}
+	if !strings.Contains(err.Error(), "source_overrides entry must be a non-null mapping") {
+		t.Fatalf("runConfigImport error = %q, want null-entry validation", err.Error())
+	}
+}

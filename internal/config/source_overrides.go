@@ -108,6 +108,16 @@ func validSparkleAppcastURL(appcastURL string) bool {
 	return strings.HasPrefix(appcastURL, "http://") || strings.HasPrefix(appcastURL, "https://")
 }
 
+func validateSourceOverrides(overrides map[string]*SourceOverrideConfig) error {
+	for bundleID, override := range overrides {
+		if override == nil {
+			return fmt.Errorf("source_overrides entry must be a non-null mapping for %q", bundleID)
+		}
+	}
+
+	return nil
+}
+
 func cloneSourceOverrides(overrides map[string]*SourceOverrideConfig) map[string]*SourceOverrideConfig {
 	if len(overrides) == 0 {
 		return nil

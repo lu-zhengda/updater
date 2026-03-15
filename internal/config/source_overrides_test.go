@@ -105,6 +105,20 @@ func TestLoadConfig_SourceOverrides(t *testing.T) {
 `,
 			wantMessage: "unexpected field",
 		},
+		{
+			name: "null source override entry fails",
+			content: `source_overrides:
+  com.example.null: null
+`,
+			wantMessage: "source_overrides entry must be a non-null mapping",
+		},
+		{
+			name: "blank source override entry fails",
+			content: `source_overrides:
+  com.example.blank:
+`,
+			wantMessage: "source_overrides entry must be a non-null mapping",
+		},
 	}
 
 	for _, tt := range tests {

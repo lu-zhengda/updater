@@ -50,6 +50,9 @@ func Parse(data []byte) (*Config, error) {
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("failed to parse config file: %w", err)
 	}
+	if err := validateSourceOverrides(cfg.SourceOverrides); err != nil {
+		return nil, fmt.Errorf("failed to parse config file: %w", err)
+	}
 
 	cfg.buildIgnoredSet()
 	cfg.buildPinnedSet()
