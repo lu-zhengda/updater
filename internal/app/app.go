@@ -42,6 +42,7 @@ type App struct {
 	SourceOverrideActive   bool
 	SourceOverrideKind     string
 	ElectronUpdateURL      string // Generic update server base URL from app-update.yml
+	enrichmentBaseline     *enrichmentBaseline
 }
 
 // ToCaskName converts an app display name to a likely Homebrew cask name.
