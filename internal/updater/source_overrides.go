@@ -6,14 +6,17 @@ import (
 )
 
 func applyExplicitSourceOverrides(apps []*app.App, cfg *config.Config) {
-	if cfg == nil {
-		return
-	}
-
 	for _, a := range apps {
 		if a == nil {
 			continue
 		}
+
+		clearExplicitSourceOverrideState(a)
+
+		if cfg == nil {
+			continue
+		}
+
 		applyExplicitSourceOverride(a, cfg.SourceOverride(a.BundleID))
 	}
 }
@@ -59,6 +62,16 @@ func hasExplicitSourceOverride(a *app.App) bool {
 
 func hasExplicitBrewOverride(a *app.App) bool {
 	return hasExplicitSourceOverride(a) && a.SourceOverrideKind == string(config.SourceOverrideKindBrew)
+}
+
+func clearExplicitSourceOverrideState(a *app.App) {
+	if a == nil {
+		return
+	}
+
+	a.ResolvedSourceOverride = nil
+	a.SourceOverrideActive = false
+	a.SourceOverrideKind = ""
 }
 
 func updateExplicitBrewOverrideSource(a *app.App) {

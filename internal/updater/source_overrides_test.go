@@ -158,6 +158,60 @@ func TestEnrichApps_ExplicitSparkleOverride_PinsFeedAndSource(t *testing.T) {
 	}
 }
 
+func TestEnrichApps_ReEnrichingSameApps_ResetsExplicitOverrideState(t *testing.T) {
+	apps := []*app.App{
+		{
+			Name:     "Example",
+			BundleID: "com.example.app",
+			Source:   app.SourceUnknown,
+		},
+	}
+
+	firstCfg := &config.Config{
+		SourceOverrides: map[string]*config.SourceOverrideConfig{
+			"com.example.app": {
+				Kind: config.SourceOverrideKindGitHub,
+				Repo: "explicit/repo",
+			},
+		},
+	}
+
+	got, err := EnrichApps(context.Background(), apps, firstCfg, mockRunnerWithNoBrew())
+	if err != nil {
+		t.Fatalf("first EnrichApps failed: %v", err)
+	}
+	if !got[0].SourceOverrideActive {
+		t.Fatal("SourceOverrideActive = false after first enrich, want true")
+	}
+	if got[0].GitHubRepo != "explicit/repo" {
+		t.Fatalf("GitHubRepo = %q after first enrich, want %q", got[0].GitHubRepo, "explicit/repo")
+	}
+
+	secondCfg := &config.Config{
+		GitHubMappings: map[string]string{
+			"com.example.app": "legacy/repo",
+		},
+	}
+
+	got, err = EnrichApps(context.Background(), apps, secondCfg, mockRunnerWithNoBrew())
+	if err != nil {
+		t.Fatalf("second EnrichApps failed: %v", err)
+	}
+
+	if got[0].SourceOverrideActive {
+		t.Fatalf("SourceOverrideActive = true after re-enrich, want false: %#v", got[0])
+	}
+	if got[0].SourceOverrideKind != "" {
+		t.Fatalf("SourceOverrideKind = %q after re-enrich, want empty", got[0].SourceOverrideKind)
+	}
+	if got[0].ResolvedSourceOverride != nil {
+		t.Fatalf("ResolvedSourceOverride = %#v after re-enrich, want nil", got[0].ResolvedSourceOverride)
+	}
+	if got[0].GitHubRepo != "legacy/repo" {
+		t.Fatalf("GitHubRepo = %q after re-enrich, want %q", got[0].GitHubRepo, "legacy/repo")
+	}
+}
+
 func TestEnrichApps_LegacyMappings_DoNotSetOverrideProvenance(t *testing.T) {
 	cfg := &config.Config{
 		GitHubMappings: map[string]string{
