@@ -74,7 +74,7 @@ func TestLoadScanApps_AppliesEnrichmentOverrides(t *testing.T) {
 
 	apps, err := loadScanApps(context.Background(), cfg, &checker.MockCmdRunner{}, []*app.App{
 		{Name: "Example", BundleID: "com.example.app", Source: app.SourceUnknown},
-	}, nil)
+	}, nil, nil)
 	if err != nil {
 		t.Fatalf("loadScanApps failed: %v", err)
 	}

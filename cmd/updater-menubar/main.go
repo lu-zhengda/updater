@@ -73,6 +73,11 @@ func onReady() {
 			apps = append(apps, formulaApps...)
 		}
 
+		npmApps, err := updater.DiscoverNpmPackages(ctx, runner)
+		if err == nil {
+			apps = append(apps, npmApps...)
+		}
+
 		apps, err = updater.EnrichApps(ctx, apps, cfg, runner)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "failed to enrich apps: %v\n", err)

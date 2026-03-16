@@ -70,6 +70,13 @@ func runUI(cmd *cobra.Command, _ []string) error {
 			apps = append(apps, formulaApps...)
 		}
 
+		npmApps, nErr := discoverNpmPackages(ctx, runner)
+		if nErr != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not discover npm packages: %v\n", nErr)
+		} else {
+			apps = append(apps, npmApps...)
+		}
+
 		apps, err = enrichApps(ctx, apps, cfg, runner)
 		if err != nil {
 			return nil, err

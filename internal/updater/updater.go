@@ -89,6 +89,32 @@ func DiscoverBrewFormulae(ctx context.Context, runner checker.CmdRunner) ([]*app
 	return apps, nil
 }
 
+// DiscoverNpmPackages creates synthetic App entries for each globally installed npm package.
+func DiscoverNpmPackages(ctx context.Context, runner checker.CmdRunner) ([]*app.App, error) {
+	packages, err := checker.ListInstalledNpmPackages(ctx, runner)
+	if err != nil {
+		return nil, err
+	}
+
+	names := make([]string, 0, len(packages))
+	for name := range packages {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	apps := make([]*app.App, 0, len(packages))
+	for _, name := range names {
+		apps = append(apps, &app.App{
+			Name:       name,
+			BundleID:   "npm.global." + name,
+			Version:    packages[name],
+			Source:     app.SourceNpm,
+			NpmPackage: name,
+		})
+	}
+	return apps, nil
+}
+
 // EnrichApps applies explicit source overrides, config mappings, and
 // cross-references with brew casks to enrich app metadata. It sets CaskName and
 // InstalledViaBrew, and probes brew info for eligible apps to discover
@@ -251,6 +277,7 @@ func BuildCheckers(runner checker.CmdRunner, githubToken string) []checker.Check
 		checker.NewSystemChecker(runner),
 		checker.NewBrewFormulaChecker(runner),
 		checker.NewElectronChecker(nil),
+		checker.NewNpmChecker(runner),
 		checker.NewManagedChecker(),
 		checker.NewBrewInfoChecker(runner), // fallback: any app with a CaskName
 	}

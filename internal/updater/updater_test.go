@@ -712,8 +712,8 @@ func TestBuildCheckers(t *testing.T) {
 	runner := &checker.MockCmdRunner{}
 	checkers := BuildCheckers(runner, "test-token")
 
-	if len(checkers) != 9 {
-		t.Fatalf("got %d checkers, want 9", len(checkers))
+	if len(checkers) != 10 {
+		t.Fatalf("got %d checkers, want 10", len(checkers))
 	}
 
 	expectedNames := []string{
@@ -724,6 +724,7 @@ func TestBuildCheckers(t *testing.T) {
 		"system",
 		"formula",
 		"electron",
+		"npm",
 		"managed",
 		"brew-info",
 	}

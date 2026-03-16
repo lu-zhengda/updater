@@ -46,7 +46,13 @@ func runScan(cmd *cobra.Command, args []string) error {
 		fmt.Fprintf(os.Stderr, "warning: could not discover brew formulae: %v\n", fErr)
 	}
 
-	apps, err = loadScanApps(ctx, cfg, runner, apps, formulaApps)
+	var npmApps []*app.App
+	npmApps, nErr := discoverNpmPackages(ctx, runner)
+	if nErr != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not discover npm packages: %v\n", nErr)
+	}
+
+	apps, err = loadScanApps(ctx, cfg, runner, apps, formulaApps, npmApps)
 	if err != nil {
 		return err
 	}
@@ -86,9 +92,10 @@ func runScan(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func loadScanApps(ctx context.Context, cfg *config.Config, runner checker.CmdRunner, discoveredApps, formulaApps []*app.App) ([]*app.App, error) {
+func loadScanApps(ctx context.Context, cfg *config.Config, runner checker.CmdRunner, discoveredApps, formulaApps, npmApps []*app.App) ([]*app.App, error) {
 	apps := append([]*app.App{}, discoveredApps...)
 	apps = append(apps, formulaApps...)
+	apps = append(apps, npmApps...)
 	return enrichApps(ctx, apps, cfg, runner)
 }
 

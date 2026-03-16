@@ -57,6 +57,13 @@ func runCheck(cmd *cobra.Command, args []string) error {
 		apps = append(apps, formulaApps...)
 	}
 
+	npmApps, err := discoverNpmPackages(ctx, runner)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not discover npm packages: %v\n", err)
+	} else {
+		apps = append(apps, npmApps...)
+	}
+
 	apps, err = enrichApps(ctx, apps, cfg, runner)
 	if err != nil {
 		return err
@@ -103,6 +110,10 @@ func discoverApps() ([]*app.App, error) {
 
 func discoverBrewFormulae(ctx context.Context, runner checker.CmdRunner) ([]*app.App, error) {
 	return updater.DiscoverBrewFormulae(ctx, runner)
+}
+
+func discoverNpmPackages(ctx context.Context, runner checker.CmdRunner) ([]*app.App, error) {
+	return updater.DiscoverNpmPackages(ctx, runner)
 }
 
 func enrichApps(ctx context.Context, apps []*app.App, cfg *config.Config, runner checker.CmdRunner) ([]*app.App, error) {
@@ -180,6 +191,8 @@ func cliSourceName(source string) string {
 		return "homebrew"
 	case "formula":
 		return "formula"
+	case "npm":
+		return "npm"
 	case "electron", "setapp", "toolbox", "adobe":
 		return source
 	default:

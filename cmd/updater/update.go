@@ -67,6 +67,13 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 		apps = append(apps, formulaApps...)
 	}
 
+	npmApps, nErr := discoverNpmPackages(ctx, runner)
+	if nErr != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not discover npm packages: %v\n", nErr)
+	} else {
+		apps = append(apps, npmApps...)
+	}
+
 	apps, err = enrichApps(ctx, apps, cfg, runner)
 	if err != nil {
 		return err
@@ -271,6 +278,17 @@ func executeUpdate(ctx context.Context, r *checker.UpdateResult, runner checker.
 		fmt.Println(string(output))
 		return nil, false
 
+	case "npm":
+		if r.App.NpmPackage == "" {
+			return fmt.Errorf("no npm package name for %s", r.App.Name), false
+		}
+		output, err := runner.Run(ctx, "npm", "install", "-g", r.App.NpmPackage+"@latest")
+		if err != nil {
+			return fmt.Errorf("failed to update npm package %s: %w", r.App.NpmPackage, err), false
+		}
+		fmt.Println(string(output))
+		return nil, false
+
 	case "system":
 		_, err := runner.Run(ctx, "open", "x-apple.systempreferences:com.apple.Software-Update-Settings.extension")
 		if err != nil {
@@ -456,6 +474,8 @@ func describeAction(r *checker.UpdateResult) string {
 		return "open App Store"
 	case "formula":
 		return fmt.Sprintf("brew upgrade %s", r.App.FormulaName)
+	case "npm":
+		return fmt.Sprintf("npm install -g %s@latest", r.App.NpmPackage)
 	case "system":
 		return "open Software Update"
 	case "sparkle", "github":

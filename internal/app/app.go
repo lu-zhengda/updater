@@ -20,6 +20,7 @@ const (
 	SourceSetapp      Source = "setapp"
 	SourceToolbox     Source = "toolbox"
 	SourceAdobe       Source = "adobe"
+	SourceNpm         Source = "npm"
 	SourceUnknown     Source = "unknown"
 )
 
@@ -41,6 +42,7 @@ type App struct {
 	ResolvedSourceOverride *SourceOverride
 	SourceOverrideActive   bool
 	SourceOverrideKind     string
+	NpmPackage             string // Globally installed npm package name
 	ElectronUpdateURL      string // Generic update server base URL from app-update.yml
 	enrichmentBaseline     *enrichmentBaseline
 }
