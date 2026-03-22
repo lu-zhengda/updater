@@ -159,6 +159,33 @@ func (c *Config) ScheduleIntervalOrDefault() int {
 	return 24
 }
 
+// Ignore adds a bundle ID to the ignored list.
+func (c *Config) Ignore(bundleID string) {
+	if c.IsIgnored(bundleID) {
+		return
+	}
+	c.IgnoredApps = append(c.IgnoredApps, bundleID)
+	if c.ignoredSet == nil {
+		c.ignoredSet = make(map[string]bool)
+	}
+	c.ignoredSet[bundleID] = true
+}
+
+// Unignore removes a bundle ID from the ignored list.
+func (c *Config) Unignore(bundleID string) {
+	if !c.IsIgnored(bundleID) {
+		return
+	}
+	delete(c.ignoredSet, bundleID)
+	filtered := make([]string, 0, len(c.IgnoredApps))
+	for _, id := range c.IgnoredApps {
+		if id != bundleID {
+			filtered = append(filtered, id)
+		}
+	}
+	c.IgnoredApps = filtered
+}
+
 // IsPinned reports whether the given bundle ID is in the pinned list.
 func (c *Config) IsPinned(bundleID string) bool {
 	if c.pinnedSet == nil {

@@ -109,6 +109,7 @@ type Model struct {
 	checking   bool
 	updating   map[int]bool
 	ignored    map[int]bool
+	ignoredIDs map[string]bool
 	pinned     map[int]bool
 	pinnedIDs  map[string]bool
 	width      int
@@ -170,6 +171,7 @@ func NewModel(loadFn LoadFunc, checkFn CheckFunc, updateFn UpdateFunc, scheduleF
 		loading:     true,
 		updating:    make(map[int]bool),
 		ignored:     make(map[int]bool),
+		ignoredIDs:  make(map[string]bool),
 		pinned:      make(map[int]bool),
 		pinnedIDs:   make(map[string]bool),
 		selected:    make(map[int]bool),
@@ -749,17 +751,35 @@ func (m *Model) cursorRowIdx() int {
 	return m.visible[m.cursor]
 }
 
-// toggleIgnore toggles the ignored state of the currently selected app.
+// toggleIgnore toggles the ignored state of the currently selected app
+// and persists the change to the config file.
 func (m *Model) toggleIgnore() {
 	idx := m.cursorRowIdx()
 	if idx < 0 {
 		return
 	}
+	bundleID := m.rows[idx].app.BundleID
 	if m.ignored[idx] {
 		delete(m.ignored, idx)
+		delete(m.ignoredIDs, bundleID)
+		if m.cfg != nil {
+			m.cfg.Unignore(bundleID)
+			if err := m.cfg.Save(m.cfgPath); err != nil {
+				m.statusMsg = fmt.Sprintf("Warning: failed to save config: %v", err)
+				return
+			}
+		}
 		m.statusMsg = fmt.Sprintf("Unignored %s", m.rows[idx].app.Name)
 	} else {
 		m.ignored[idx] = true
+		m.ignoredIDs[bundleID] = true
+		if m.cfg != nil {
+			m.cfg.Ignore(bundleID)
+			if err := m.cfg.Save(m.cfgPath); err != nil {
+				m.statusMsg = fmt.Sprintf("Warning: failed to save config: %v", err)
+				return
+			}
+		}
 		m.statusMsg = fmt.Sprintf("Ignored %s", m.rows[idx].app.Name)
 	}
 }
@@ -797,7 +817,8 @@ func (m Model) toggleDetail() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// togglePin toggles the pinned state of the currently selected app.
+// togglePin toggles the pinned state of the currently selected app
+// and persists the change to the config file.
 func (m *Model) togglePin() {
 	idx := m.cursorRowIdx()
 	if idx < 0 {
@@ -807,10 +828,24 @@ func (m *Model) togglePin() {
 	if m.pinned[idx] {
 		delete(m.pinned, idx)
 		delete(m.pinnedIDs, bundleID)
+		if m.cfg != nil {
+			m.cfg.Unpin(bundleID)
+			if err := m.cfg.Save(m.cfgPath); err != nil {
+				m.statusMsg = fmt.Sprintf("Warning: failed to save config: %v", err)
+				return
+			}
+		}
 		m.statusMsg = fmt.Sprintf("Unpinned %s", m.rows[idx].app.Name)
 	} else {
 		m.pinned[idx] = true
 		m.pinnedIDs[bundleID] = true
+		if m.cfg != nil {
+			m.cfg.Pin(bundleID)
+			if err := m.cfg.Save(m.cfgPath); err != nil {
+				m.statusMsg = fmt.Sprintf("Warning: failed to save config: %v", err)
+				return
+			}
+		}
 		m.statusMsg = fmt.Sprintf("Pinned %s", m.rows[idx].app.Name)
 	}
 }

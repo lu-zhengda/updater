@@ -220,6 +220,76 @@ func TestPinUnpin(t *testing.T) {
 	cfg.Unpin("com.example.nonexistent")
 }
 
+func TestIgnoreUnignore(t *testing.T) {
+	cfg := defaultConfig()
+
+	// Ignore an app.
+	cfg.Ignore("com.example.app")
+	if !cfg.IsIgnored("com.example.app") {
+		t.Error("expected com.example.app to be ignored")
+	}
+	if len(cfg.IgnoredApps) != 1 {
+		t.Errorf("expected 1 ignored app, got %d", len(cfg.IgnoredApps))
+	}
+
+	// Ignore same app again (idempotent).
+	cfg.Ignore("com.example.app")
+	if len(cfg.IgnoredApps) != 1 {
+		t.Errorf("duplicate ignore: expected 1 ignored app, got %d", len(cfg.IgnoredApps))
+	}
+
+	// Unignore.
+	cfg.Unignore("com.example.app")
+	if cfg.IsIgnored("com.example.app") {
+		t.Error("expected com.example.app to not be ignored after unignore")
+	}
+	if len(cfg.IgnoredApps) != 0 {
+		t.Errorf("expected 0 ignored apps, got %d", len(cfg.IgnoredApps))
+	}
+
+	// Unignore non-existent (no-op).
+	cfg.Unignore("com.example.nonexistent")
+}
+
+func TestIgnore_NilIgnoredSet(t *testing.T) {
+	cfg := &Config{} // ignoredSet is nil
+	cfg.Ignore("com.example.app")
+	if !cfg.IsIgnored("com.example.app") {
+		t.Error("expected com.example.app to be ignored after Ignore on nil ignoredSet")
+	}
+	if len(cfg.IgnoredApps) != 1 || cfg.IgnoredApps[0] != "com.example.app" {
+		t.Errorf("IgnoredApps = %v, want [com.example.app]", cfg.IgnoredApps)
+	}
+}
+
+func TestIgnorePersistsAcrossReload(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+
+	cfg := defaultConfig()
+	cfg.Ignore("com.example.app1")
+	cfg.Ignore("com.example.app2")
+
+	if err := cfg.Save(cfgPath); err != nil {
+		t.Fatalf("Save failed: %v", err)
+	}
+
+	loaded, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+
+	if !loaded.IsIgnored("com.example.app1") {
+		t.Error("expected com.example.app1 to be ignored after reload")
+	}
+	if !loaded.IsIgnored("com.example.app2") {
+		t.Error("expected com.example.app2 to be ignored after reload")
+	}
+	if loaded.IsIgnored("com.example.other") {
+		t.Error("expected com.example.other to not be ignored")
+	}
+}
+
 func TestConfigSaveAndReload(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "sub", "config.yaml")
