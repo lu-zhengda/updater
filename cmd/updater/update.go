@@ -74,6 +74,13 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 		apps = append(apps, npmApps...)
 	}
 
+	uvApps, uErr := discoverUvTools(ctx, runner)
+	if uErr != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not discover uv tools: %v\n", uErr)
+	} else {
+		apps = append(apps, uvApps...)
+	}
+
 	apps, err = enrichApps(ctx, apps, cfg, runner)
 	if err != nil {
 		return err
@@ -289,6 +296,17 @@ func executeUpdate(ctx context.Context, r *checker.UpdateResult, runner checker.
 		fmt.Println(string(output))
 		return nil, false
 
+	case "uv":
+		if r.App.UvTool == "" {
+			return fmt.Errorf("no uv tool name for %s", r.App.Name), false
+		}
+		output, err := runner.Run(ctx, "uv", "tool", "upgrade", r.App.UvTool)
+		if err != nil {
+			return fmt.Errorf("failed to upgrade uv tool %s: %w", r.App.UvTool, err), false
+		}
+		fmt.Println(string(output))
+		return nil, false
+
 	case "system":
 		_, err := runner.Run(ctx, "open", "x-apple.systempreferences:com.apple.Software-Update-Settings.extension")
 		if err != nil {
@@ -476,6 +494,8 @@ func describeAction(r *checker.UpdateResult) string {
 		return fmt.Sprintf("brew upgrade %s", r.App.FormulaName)
 	case "npm":
 		return fmt.Sprintf("npm install -g %s@latest", r.App.NpmPackage)
+	case "uv":
+		return fmt.Sprintf("uv tool upgrade %s", r.App.UvTool)
 	case "system":
 		return "open Software Update"
 	case "sparkle", "github":

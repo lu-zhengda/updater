@@ -62,6 +62,13 @@ func runOutdated(cmd *cobra.Command, _ []string) error {
 		apps = append(apps, npmApps...)
 	}
 
+	uvApps, uErr := discoverUvTools(ctx, runner)
+	if uErr != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not discover uv tools: %v\n", uErr)
+	} else {
+		apps = append(apps, uvApps...)
+	}
+
 	apps, err = enrichApps(ctx, apps, cfg, runner)
 	if err != nil {
 		return err

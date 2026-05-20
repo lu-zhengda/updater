@@ -21,6 +21,7 @@ const (
 	SourceToolbox     Source = "toolbox"
 	SourceAdobe       Source = "adobe"
 	SourceNpm         Source = "npm"
+	SourceUv          Source = "uv"
 	SourceUnknown     Source = "unknown"
 )
 
@@ -43,6 +44,7 @@ type App struct {
 	SourceOverrideActive   bool
 	SourceOverrideKind     string
 	NpmPackage             string // Globally installed npm package name
+	UvTool                 string // Tool name managed by `uv tool install`
 	ElectronUpdateURL      string // Generic update server base URL from app-update.yml
 	enrichmentBaseline     *enrichmentBaseline
 }

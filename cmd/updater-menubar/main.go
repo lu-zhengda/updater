@@ -78,6 +78,11 @@ func onReady() {
 			apps = append(apps, npmApps...)
 		}
 
+		uvApps, err := updater.DiscoverUvTools(ctx, runner)
+		if err == nil {
+			apps = append(apps, uvApps...)
+		}
+
 		apps, err = updater.EnrichApps(ctx, apps, cfg, runner)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "failed to enrich apps: %v\n", err)

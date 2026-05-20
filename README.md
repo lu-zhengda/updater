@@ -67,6 +67,8 @@ updater
 | GitHub Releases | GitHub Releases API | Direct install when possible, otherwise opens release asset URL |
 | Electron generic | `latest-mac.yml` from update server | Direct install when possible, otherwise opens app |
 | Brew-info fallback | `brew info --cask --json=v2` | If brew-installed: `brew upgrade --cask`; otherwise opens app |
+| npm globals | `npm outdated -g --json` | `npm install -g <pkg>@latest` |
+| uv tools | `uv tool list` + PyPI JSON | `uv tool upgrade <tool>` |
 | macOS system | `softwareupdate -l` | Opens Software Update settings |
 
 Also detected (for visibility): Setapp, JetBrains Toolbox, and Adobe apps.

@@ -126,6 +126,45 @@ func TestDiscoverBrewFormulae_VersionCorrectness(t *testing.T) {
 	}
 }
 
+func TestDiscoverUvTools(t *testing.T) {
+	runner := &checker.MockCmdRunner{
+		Output: []byte(`black v25.1.0
+- black
+- blackd
+ruff v0.8.4
+- ruff
+`),
+	}
+	apps, err := DiscoverUvTools(context.Background(), runner)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(apps) != 2 {
+		t.Fatalf("got %d apps, want 2", len(apps))
+	}
+	// Sorted alphabetically.
+	if apps[0].Name != "black" || apps[0].UvTool != "black" {
+		t.Errorf("apps[0] = %+v, want black/black", apps[0])
+	}
+	if apps[0].Source != app.SourceUv {
+		t.Errorf("apps[0].Source = %q, want %q", apps[0].Source, app.SourceUv)
+	}
+	if apps[0].BundleID != "uv.tool.black" {
+		t.Errorf("apps[0].BundleID = %q, want uv.tool.black", apps[0].BundleID)
+	}
+	if apps[1].Name != "ruff" || apps[1].Version != "0.8.4" {
+		t.Errorf("apps[1] = %+v, want ruff/0.8.4", apps[1])
+	}
+}
+
+func TestDiscoverUvTools_RunnerError(t *testing.T) {
+	runner := &checker.MockCmdRunner{Err: fmt.Errorf("uv not installed")}
+	_, err := DiscoverUvTools(context.Background(), runner)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+}
+
 // --- EnrichApps ---
 
 func TestEnrichApps_Phase1_GitHubMapping(t *testing.T) {
@@ -527,7 +566,7 @@ func TestEnrichApps_VSCode_GetsCaskViaBasename(t *testing.T) {
 		t.Errorf("CaskName = %q, want %q", result[0].CaskName, "visual-studio-code")
 	}
 	// BrewInfoChecker should now be able to handle this app.
-	brewInfoChecker := BuildCheckers(&checker.MockCmdRunner{}, "")[9] // last checker
+	brewInfoChecker := BuildCheckers(&checker.MockCmdRunner{}, "")[10] // last checker
 	if !brewInfoChecker.CanCheck(result[0]) {
 		t.Error("BrewInfoChecker.CanCheck = false, want true (app has CaskName)")
 	}
@@ -570,7 +609,7 @@ func TestEnrichApps_GitHubDesktop_GetsCaskViaBundleIDSegment(t *testing.T) {
 	if result[0].CaskName != "github" {
 		t.Errorf("CaskName = %q, want %q", result[0].CaskName, "github")
 	}
-	brewInfoChecker := BuildCheckers(&checker.MockCmdRunner{}, "")[9]
+	brewInfoChecker := BuildCheckers(&checker.MockCmdRunner{}, "")[10]
 	if !brewInfoChecker.CanCheck(result[0]) {
 		t.Error("BrewInfoChecker.CanCheck = false, want true (app has CaskName)")
 	}
@@ -614,7 +653,7 @@ func TestEnrichApps_GenericElectron_GetsCaskViaDisplayName(t *testing.T) {
 	if result[0].CaskName != "acme" {
 		t.Errorf("CaskName = %q, want %q", result[0].CaskName, "acme")
 	}
-	brewInfoChecker := BuildCheckers(&checker.MockCmdRunner{}, "")[9]
+	brewInfoChecker := BuildCheckers(&checker.MockCmdRunner{}, "")[10]
 	if !brewInfoChecker.CanCheck(result[0]) {
 		t.Error("BrewInfoChecker.CanCheck = false, want true (app has CaskName)")
 	}
@@ -712,8 +751,8 @@ func TestBuildCheckers(t *testing.T) {
 	runner := &checker.MockCmdRunner{}
 	checkers := BuildCheckers(runner, "test-token")
 
-	if len(checkers) != 10 {
-		t.Fatalf("got %d checkers, want 10", len(checkers))
+	if len(checkers) != 11 {
+		t.Fatalf("got %d checkers, want 11", len(checkers))
 	}
 
 	expectedNames := []string{
@@ -725,6 +764,7 @@ func TestBuildCheckers(t *testing.T) {
 		"formula",
 		"electron",
 		"npm",
+		"uv",
 		"managed",
 		"brew-info",
 	}

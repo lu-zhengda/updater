@@ -52,7 +52,13 @@ func runScan(cmd *cobra.Command, args []string) error {
 		fmt.Fprintf(os.Stderr, "warning: could not discover npm packages: %v\n", nErr)
 	}
 
-	apps, err = loadScanApps(ctx, cfg, runner, apps, formulaApps, npmApps)
+	var uvApps []*app.App
+	uvApps, uErr := discoverUvTools(ctx, runner)
+	if uErr != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not discover uv tools: %v\n", uErr)
+	}
+
+	apps, err = loadScanApps(ctx, cfg, runner, apps, formulaApps, npmApps, uvApps)
 	if err != nil {
 		return err
 	}
@@ -92,10 +98,11 @@ func runScan(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func loadScanApps(ctx context.Context, cfg *config.Config, runner checker.CmdRunner, discoveredApps, formulaApps, npmApps []*app.App) ([]*app.App, error) {
+func loadScanApps(ctx context.Context, cfg *config.Config, runner checker.CmdRunner, discoveredApps, formulaApps, npmApps, uvApps []*app.App) ([]*app.App, error) {
 	apps := append([]*app.App{}, discoveredApps...)
 	apps = append(apps, formulaApps...)
 	apps = append(apps, npmApps...)
+	apps = append(apps, uvApps...)
 	return enrichApps(ctx, apps, cfg, runner)
 }
 

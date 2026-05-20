@@ -89,6 +89,32 @@ func DiscoverBrewFormulae(ctx context.Context, runner checker.CmdRunner) ([]*app
 	return apps, nil
 }
 
+// DiscoverUvTools creates synthetic App entries for each tool installed via `uv tool install`.
+func DiscoverUvTools(ctx context.Context, runner checker.CmdRunner) ([]*app.App, error) {
+	tools, err := checker.ListInstalledUvTools(ctx, runner)
+	if err != nil {
+		return nil, err
+	}
+
+	names := make([]string, 0, len(tools))
+	for name := range tools {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	apps := make([]*app.App, 0, len(tools))
+	for _, name := range names {
+		apps = append(apps, &app.App{
+			Name:     name,
+			BundleID: "uv.tool." + name,
+			Version:  tools[name],
+			Source:   app.SourceUv,
+			UvTool:   name,
+		})
+	}
+	return apps, nil
+}
+
 // DiscoverNpmPackages creates synthetic App entries for each globally installed npm package.
 func DiscoverNpmPackages(ctx context.Context, runner checker.CmdRunner) ([]*app.App, error) {
 	packages, err := checker.ListInstalledNpmPackages(ctx, runner)
@@ -278,6 +304,7 @@ func BuildCheckers(runner checker.CmdRunner, githubToken string) []checker.Check
 		checker.NewBrewFormulaChecker(runner),
 		checker.NewElectronChecker(nil),
 		checker.NewNpmChecker(runner),
+		checker.NewUvChecker(nil, ""),
 		checker.NewManagedChecker(),
 		checker.NewBrewInfoChecker(runner), // fallback: any app with a CaskName
 	}
