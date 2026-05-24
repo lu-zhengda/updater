@@ -22,6 +22,7 @@ const (
 	SourceAdobe       Source = "adobe"
 	SourceNpm         Source = "npm"
 	SourceUv          Source = "uv"
+	SourceCargo       Source = "cargo"
 	SourceUnknown     Source = "unknown"
 )
 
@@ -45,6 +46,7 @@ type App struct {
 	SourceOverrideKind     string
 	NpmPackage             string // Globally installed npm package name
 	UvTool                 string // Tool name managed by `uv tool install`
+	CargoCrate             string // Crate name installed via `cargo install`
 	ElectronUpdateURL      string // Generic update server base URL from app-update.yml
 	enrichmentBaseline     *enrichmentBaseline
 }

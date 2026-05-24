@@ -141,6 +141,32 @@ func DiscoverNpmPackages(ctx context.Context, runner checker.CmdRunner) ([]*app.
 	return apps, nil
 }
 
+// DiscoverCargoCrates creates synthetic App entries for each crate installed via `cargo install`.
+func DiscoverCargoCrates(ctx context.Context, runner checker.CmdRunner) ([]*app.App, error) {
+	crates, err := checker.ListInstalledCargoCrates(ctx, runner)
+	if err != nil {
+		return nil, err
+	}
+
+	names := make([]string, 0, len(crates))
+	for name := range crates {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	apps := make([]*app.App, 0, len(crates))
+	for _, name := range names {
+		apps = append(apps, &app.App{
+			Name:       name,
+			BundleID:   "cargo.crate." + name,
+			Version:    crates[name],
+			Source:     app.SourceCargo,
+			CargoCrate: name,
+		})
+	}
+	return apps, nil
+}
+
 // EnrichApps applies explicit source overrides, config mappings, and
 // cross-references with brew casks to enrich app metadata. It sets CaskName and
 // InstalledViaBrew, and probes brew info for eligible apps to discover
@@ -305,6 +331,7 @@ func BuildCheckers(runner checker.CmdRunner, githubToken string) []checker.Check
 		checker.NewElectronChecker(nil),
 		checker.NewNpmChecker(runner),
 		checker.NewUvChecker(nil, ""),
+		checker.NewCargoChecker(nil, ""),
 		checker.NewManagedChecker(),
 		checker.NewBrewInfoChecker(runner), // fallback: any app with a CaskName
 	}

@@ -81,6 +81,13 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 		apps = append(apps, uvApps...)
 	}
 
+	cargoApps, cErr := discoverCargoCrates(ctx, runner)
+	if cErr != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not discover cargo crates: %v\n", cErr)
+	} else {
+		apps = append(apps, cargoApps...)
+	}
+
 	apps, err = enrichApps(ctx, apps, cfg, runner)
 	if err != nil {
 		return err
@@ -307,6 +314,18 @@ func executeUpdate(ctx context.Context, r *checker.UpdateResult, runner checker.
 		fmt.Println(string(output))
 		return nil, false
 
+	case "cargo":
+		if r.App.CargoCrate == "" {
+			return fmt.Errorf("no cargo crate name for %s", r.App.Name), false
+		}
+		// `cargo install <crate>` upgrades in place when a newer version exists.
+		output, err := runner.Run(ctx, "cargo", "install", r.App.CargoCrate)
+		if err != nil {
+			return fmt.Errorf("failed to upgrade cargo crate %s: %w", r.App.CargoCrate, err), false
+		}
+		fmt.Println(string(output))
+		return nil, false
+
 	case "system":
 		_, err := runner.Run(ctx, "open", "x-apple.systempreferences:com.apple.Software-Update-Settings.extension")
 		if err != nil {
@@ -496,6 +515,8 @@ func describeAction(r *checker.UpdateResult) string {
 		return fmt.Sprintf("npm install -g %s@latest", r.App.NpmPackage)
 	case "uv":
 		return fmt.Sprintf("uv tool upgrade %s", r.App.UvTool)
+	case "cargo":
+		return fmt.Sprintf("cargo install %s", r.App.CargoCrate)
 	case "system":
 		return "open Software Update"
 	case "sparkle", "github":

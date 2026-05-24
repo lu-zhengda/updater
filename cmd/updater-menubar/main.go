@@ -83,6 +83,11 @@ func onReady() {
 			apps = append(apps, uvApps...)
 		}
 
+		cargoApps, err := updater.DiscoverCargoCrates(ctx, runner)
+		if err == nil {
+			apps = append(apps, cargoApps...)
+		}
+
 		apps, err = updater.EnrichApps(ctx, apps, cfg, runner)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "failed to enrich apps: %v\n", err)

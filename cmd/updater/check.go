@@ -71,6 +71,13 @@ func runCheck(cmd *cobra.Command, args []string) error {
 		apps = append(apps, uvApps...)
 	}
 
+	cargoApps, err := discoverCargoCrates(ctx, runner)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not discover cargo crates: %v\n", err)
+	} else {
+		apps = append(apps, cargoApps...)
+	}
+
 	apps, err = enrichApps(ctx, apps, cfg, runner)
 	if err != nil {
 		return err
@@ -125,6 +132,10 @@ func discoverNpmPackages(ctx context.Context, runner checker.CmdRunner) ([]*app.
 
 func discoverUvTools(ctx context.Context, runner checker.CmdRunner) ([]*app.App, error) {
 	return updater.DiscoverUvTools(ctx, runner)
+}
+
+func discoverCargoCrates(ctx context.Context, runner checker.CmdRunner) ([]*app.App, error) {
+	return updater.DiscoverCargoCrates(ctx, runner)
 }
 
 func enrichApps(ctx context.Context, apps []*app.App, cfg *config.Config, runner checker.CmdRunner) ([]*app.App, error) {
@@ -206,6 +217,8 @@ func cliSourceName(source string) string {
 		return "npm"
 	case "uv":
 		return "uv"
+	case "cargo":
+		return "cargo"
 	case "electron", "setapp", "toolbox", "adobe":
 		return source
 	default:

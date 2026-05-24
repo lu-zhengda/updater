@@ -69,6 +69,7 @@ updater
 | Brew-info fallback | `brew info --cask --json=v2` | If brew-installed: `brew upgrade --cask`; otherwise opens app |
 | npm globals | `npm outdated -g --json` | `npm install -g <pkg>@latest` |
 | uv tools | `uv tool list` + PyPI JSON | `uv tool upgrade <tool>` |
+| cargo crates | `cargo install --list` + crates.io API | `cargo install <crate>` |
 | macOS system | `softwareupdate -l` | Opens Software Update settings |
 
 Also detected (for visibility): Setapp, JetBrains Toolbox, and Adobe apps.
