@@ -3,6 +3,7 @@ package checker
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/lu-zhengda/updater/internal/app"
@@ -181,6 +182,38 @@ func TestNpmChecker_FallbackToNpmView(t *testing.T) {
 	}
 	if result.LatestVersion != "5.7.3" {
 		t.Errorf("LatestVersion = %q, want %q", result.LatestVersion, "5.7.3")
+	}
+}
+
+func TestNpmChecker_FallbackToNpmViewArray(t *testing.T) {
+	// npm 12 may wrap the version in an array, even for a single package.
+	runner := &MultiMockCmdRunner{
+		Responses: map[string]MockResponse{
+			"npm outdated -g --json": {
+				Output: []byte(`not json`),
+			},
+			"npm view @scope/tool version --json": {
+				Output: []byte("[\n  \"2.4.1\"\n]\n"),
+			},
+		},
+	}
+	c := NewNpmChecker(runner)
+	a := &app.App{
+		Name:       "@scope/tool",
+		Version:    "2.3.0",
+		Source:     app.SourceNpm,
+		NpmPackage: "@scope/tool",
+	}
+
+	result, err := c.Check(context.Background(), a)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.LatestVersion != "2.4.1" {
+		t.Errorf("LatestVersion = %q, want %q", result.LatestVersion, "2.4.1")
+	}
+	if strings.ContainsAny(result.LatestVersion, "\r\n") {
+		t.Errorf("LatestVersion %q contains a line break", result.LatestVersion)
 	}
 }
 

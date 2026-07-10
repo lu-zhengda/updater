@@ -94,11 +94,27 @@ func (n *NpmChecker) viewLatestVersion(ctx context.Context, pkg string) (string,
 	if err != nil {
 		return "", fmt.Errorf("npm view %s version: %w", pkg, err)
 	}
-	// npm view returns a JSON string like "5.7.3"\n
+	// npm historically returned a JSON string like "5.7.3", while npm 12
+	// may wrap the same value in a one-element array. Accept both forms.
 	var ver string
 	if jsonErr := json.Unmarshal(output, &ver); jsonErr != nil {
-		// Some versions of npm return the version without JSON quotes.
-		ver = strings.TrimSpace(string(output))
+		var versions []string
+		if arrayErr := json.Unmarshal(output, &versions); arrayErr == nil {
+			for i := len(versions) - 1; i >= 0; i-- {
+				if versions[i] != "" {
+					ver = versions[i]
+					break
+				}
+			}
+		} else {
+			// Some versions of npm return the version without JSON quotes.
+			// Only accept a single-line fallback so command output can never
+			// inject additional rows into terminal renderers.
+			ver = strings.TrimSpace(string(output))
+			if strings.ContainsAny(ver, "\r\n") {
+				return "", fmt.Errorf("npm view returned invalid version for %s", pkg)
+			}
+		}
 	}
 	if ver == "" {
 		return "", fmt.Errorf("npm view returned empty version for %s", pkg)

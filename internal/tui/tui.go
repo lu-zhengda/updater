@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"
@@ -1640,6 +1641,14 @@ func pad(s string, w int) string {
 
 // truncate truncates a string to max length, appending "..." if truncated.
 func truncate(s string, max int) string {
+	// Terminal cells must never contain embedded control characters: a newline
+	// in discovered metadata would otherwise split one logical row into several.
+	s = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return ' '
+		}
+		return r
+	}, s)
 	if max < 4 {
 		max = 4
 	}
