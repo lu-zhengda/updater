@@ -155,6 +155,8 @@ func (m *menubarApp) runCheck(ctx context.Context) ([]*checker.UpdateResult, err
 		}
 	})
 
+	writeCheckCache(cacheEntriesFromResults(results, cfg.IsPinned))
+
 	var updatable []*checker.UpdateResult
 	for _, r := range results {
 		if r.HasUpdate && r.Error == nil && !cfg.IsPinned(r.App.BundleID) {
@@ -292,8 +294,8 @@ func (m *menubarApp) rebuild(updatable []*checker.UpdateResult, status string) {
 
 	systray.AddSeparator()
 
-	terminal := systray.AddMenuItem("Open Terminal UI", "Open the interactive updater TUI in Terminal")
-	onClick(gen, terminal, func() { go openTerminalUI() })
+	openWin := systray.AddMenuItem("Open Updater…", "Open the Updater window with the full update list")
+	onClick(gen, openWin, func() { go openUpdaterWindow() })
 
 	prefs := systray.AddMenuItem("Preferences", "")
 	interval := menubarCheckInterval()
@@ -335,17 +337,42 @@ func (m *menubarApp) mutateConfig(fn func(*config.Config)) {
 	m.refresh()
 }
 
-// openTerminalUI opens the interactive TUI in Terminal using this same
-// binary (a terminal stdin routes the bundle executable to the CLI/TUI).
-func openTerminalUI() {
+// windowProcMu serializes window-opening so repeated menu clicks don't race.
+var windowProcMu sync.Mutex
+
+// openUpdaterWindow launches the built-in updates window (`updater window`).
+// From inside Updater.app the window is launched through the bundle (via
+// `open -n`) so it carries the app's identity instead of a generic "exec"
+// process; a bare dev binary execs itself directly.
+func openUpdaterWindow() {
+	windowProcMu.Lock()
+	defer windowProcMu.Unlock()
+
 	self, err := os.Executable()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "cannot locate own executable: %v\n", err)
 		return
 	}
-	if err := exec.Command("open", "-a", "Terminal", self).Run(); err != nil {
-		fmt.Fprintf(os.Stderr, "failed to open Terminal UI: %v\n", err)
+
+	// Already open? The window process runs this same binary with the
+	// "window" argument regardless of launch path.
+	if exec.Command("pgrep", "-f", self+" window").Run() == nil {
+		return
 	}
+
+	var cmd *exec.Cmd
+	if bundle, ok := strings.CutSuffix(self, "/Contents/MacOS/updater"); ok {
+		cmd = exec.Command("open", "-n", bundle, "--args", "window")
+	} else {
+		cmd = exec.Command(self, "window")
+	}
+	cmd.Stdout = os.Stderr
+	cmd.Stderr = os.Stderr
+	if err := cmd.Start(); err != nil {
+		fmt.Fprintf(os.Stderr, "failed to open Updater window: %v\n", err)
+		return
+	}
+	go func() { _ = cmd.Wait() }()
 }
 
 // onClick invokes fn on every click until the menu generation is replaced.

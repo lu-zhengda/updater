@@ -142,6 +142,12 @@ the menu bar, posts a macOS notification when new updates appear, and lets
 you update a single app or everything from the dropdown (updates go through
 the regular update path, so backups/history behave identically).
 
+"Open Updater…" in the dropdown opens the app's built-in updates window — a
+native window with the full app list (like the TUI, but part of the app):
+cached results appear instantly, a fresh check streams in with progress, and
+each row can be updated, pinned, or ignored. Everything runs in-process; the
+window never shells out to the terminal.
+
 The dropdown has a "Start at Login" toggle; the same LaunchAgent can be
 managed from the CLI:
 
