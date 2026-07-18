@@ -50,6 +50,8 @@ func runWindow() error {
 	defer w.Destroy()
 	w.SetTitle("Updater")
 	w.SetSize(760, 560, webview.HintNone)
+	// Activate once the run loop is going — calls before Run() are dropped.
+	w.Dispatch(func() { activateWindow(w.Window()) })
 
 	state := &windowState{results: map[string]*checker.UpdateResult{}}
 
