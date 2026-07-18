@@ -15,9 +15,9 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>0.15.1-6-g443a8e1-dirty</string>
+	<string>0.15.1-7-g28d6161-dirty</string>
 	<key>CFBundleVersion</key>
-	<string>0.15.1-6-g443a8e1-dirty</string>
+	<string>0.15.1-7-g28d6161-dirty</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>11.0</string>
 	<key>LSUIElement</key>

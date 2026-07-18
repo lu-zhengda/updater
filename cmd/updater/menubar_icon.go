@@ -9,10 +9,10 @@ import (
 )
 
 // generateIcon renders the menu bar template icon at 22 px: the same
-// "update cycle" mark as the app icon (scripts/genicon) — a clockwise
-// refresh ring with an arrowhead and a rising arrow in the center — drawn
-// in black with 4×4 supersampling so macOS can tint it for light/dark
-// menu bars.
+// double-chevron "upgrade" mark as the app icon (scripts/genicon), drawn in
+// black with 4×4 supersampling so macOS can tint it for light/dark menu
+// bars. The faded bottom chevron uses partial alpha, which template images
+// preserve.
 func generateIcon() []byte {
 	const size = 22
 	img := image.NewNRGBA(image.Rect(0, 0, size, size))
@@ -40,71 +40,29 @@ func generateIcon() []byte {
 	return buf.Bytes()
 }
 
-// updateMarkCoverage draws the "update cycle" mark in unit space — kept in
-// sync with scripts/genicon/main.go, with slightly heavier strokes so the
-// mark stays crisp at 22 px.
+// updateMarkCoverage draws the double-chevron "upgrade" mark in unit space —
+// kept in sync with scripts/genicon/main.go, with slightly heavier strokes
+// and wider spacing so the mark stays crisp at 22 px.
 func updateMarkCoverage(u, v, px float64) float64 {
-	const (
-		cx, cy   = 0.5, 0.5
-		ringR    = 0.36
-		ringHalf = 0.062
-		gapFrom  = -80.0
-		gapTo    = -20.0
-	)
-
-	dx, dy := u-cx, v-cy
-	dist := math.Hypot(dx, dy)
-	angle := math.Atan2(dy, dx) * 180 / math.Pi
+	const halfW = 0.075
 
 	aa := func(d float64) float64 {
 		return math.Max(0, math.Min(1, d/px+0.5))
 	}
+	capsule := func(x1, y1, x2, y2 float64) float64 {
+		dx, dy := x2-x1, y2-y1
+		l2 := dx*dx + dy*dy
+		t := ((u-x1)*dx + (v-y1)*dy) / l2
+		t = math.Max(0, math.Min(1, t))
+		return halfW - math.Hypot(u-(x1+t*dx), v-(y1+t*dy))
+	}
 
 	var cov float64
-
-	inGap := angle > gapFrom && angle < gapTo
-	if !inGap {
-		cov = math.Max(cov, aa(ringHalf-math.Abs(dist-ringR)))
-	}
-
-	// Round cap at the lower gap edge; the upper edge is the arrowhead.
-	{
-		rad := gapTo * math.Pi / 180
-		ex, ey := cx+ringR*math.Cos(rad), cy+ringR*math.Sin(rad)
-		cov = math.Max(cov, aa(ringHalf-math.Hypot(u-ex, v-ey)))
-	}
-
-	// Arrowhead pointing clockwise into the gap.
-	{
-		rad := gapFrom * math.Pi / 180
-		ex, ey := cx+ringR*math.Cos(rad), cy+ringR*math.Sin(rad)
-		tx, ty := -math.Sin(rad), math.Cos(rad)
-		p := (u-ex)*tx + (v-ey)*ty
-		q := (u-ex)*-ty + (v-ey)*tx
-		const headLen, headHalfW = 0.14, 0.085
-		if p > -0.05 && p < headLen {
-			t := math.Max(0, p) / headLen
-			cov = math.Max(cov, aa(headHalfW*(1-t)-math.Abs(q)))
-		}
-	}
-
-	// Rising arrow in the center.
-	{
-		const (
-			tipY      = 0.30
-			headBaseY = 0.56
-			headHalfW = 0.155
-			shaftHalf = 0.062
-			bottomY   = 0.76
-		)
-		if v >= tipY && v <= headBaseY {
-			t := (v - tipY) / (headBaseY - tipY)
-			cov = math.Max(cov, aa(t*headHalfW-math.Abs(u-cx)))
-		}
-		if v >= headBaseY-0.02 && v <= bottomY {
-			cov = math.Max(cov, aa(shaftHalf-math.Abs(u-cx)))
-		}
-	}
-
+	// Top chevron, full strength.
+	cov = math.Max(cov, aa(capsule(0.22, 0.46, 0.50, 0.24)))
+	cov = math.Max(cov, aa(capsule(0.50, 0.24, 0.78, 0.46)))
+	// Bottom chevron, faded.
+	cov = math.Max(cov, 0.5*aa(capsule(0.22, 0.76, 0.50, 0.54)))
+	cov = math.Max(cov, 0.5*aa(capsule(0.50, 0.54, 0.78, 0.76)))
 	return cov
 }
