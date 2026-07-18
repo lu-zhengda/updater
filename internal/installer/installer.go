@@ -144,14 +144,28 @@ func (inst *Installer) installDMG(ctx context.Context, dmgPath, appPath, appName
 	// Remove quarantine attribute.
 	_, _ = inst.runner.Run(ctx, "xattr", "-rd", "com.apple.quarantine", appBundle)
 
-	// Copy app to target location (replace existing).
-	appDir := filepath.Dir(appPath)
-	appBase := filepath.Base(appPath)
-	_, err = inst.runner.Run(ctx, "cp", "-a", appBundle, filepath.Join(appDir, appBase))
-	if err != nil {
-		return fmt.Errorf("failed to copy app: %w", err)
-	}
+	return inst.replaceApp(ctx, appBundle, appPath)
+}
 
+// replaceApp swaps the app at appPath with srcBundle via a staged copy.
+// A plain `cp -a src dst` would copy src INTO dst when dst already exists
+// (nesting the new bundle inside the old one), so stage next to the target
+// on the same volume, remove the old bundle, and rename into place.
+func (inst *Installer) replaceApp(ctx context.Context, srcBundle, appPath string) error {
+	staging := appPath + ".updater-staging"
+	_, _ = inst.runner.Run(ctx, "rm", "-rf", staging)
+
+	if _, err := inst.runner.Run(ctx, "cp", "-a", srcBundle, staging); err != nil {
+		_, _ = inst.runner.Run(ctx, "rm", "-rf", staging)
+		return fmt.Errorf("failed to stage new app: %w", err)
+	}
+	if _, err := inst.runner.Run(ctx, "rm", "-rf", appPath); err != nil {
+		_, _ = inst.runner.Run(ctx, "rm", "-rf", staging)
+		return fmt.Errorf("failed to remove old app: %w", err)
+	}
+	if _, err := inst.runner.Run(ctx, "mv", staging, appPath); err != nil {
+		return fmt.Errorf("failed to move new app into place: %w", err)
+	}
 	return nil
 }
 
@@ -225,13 +239,7 @@ func (inst *Installer) installZIP(ctx context.Context, zipPath, appPath, appName
 	// Remove quarantine attribute.
 	_, _ = inst.runner.Run(ctx, "xattr", "-rd", "com.apple.quarantine", appBundle)
 
-	// Copy to target.
-	_, err = inst.runner.Run(ctx, "cp", "-a", appBundle, appPath)
-	if err != nil {
-		return fmt.Errorf("failed to copy app: %w", err)
-	}
-
-	return nil
+	return inst.replaceApp(ctx, appBundle, appPath)
 }
 
 // installPKG runs the macOS package installer (requires sudo).

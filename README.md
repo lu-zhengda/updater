@@ -83,6 +83,7 @@ updater scan
 updater check
 updater check --share
 updater update "1Password"
+updater update --bundle-id com.1password.1password
 updater update --all
 updater update --all --auto
 updater update --all --dry-run

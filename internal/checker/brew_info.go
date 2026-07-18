@@ -5,10 +5,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/lu-zhengda/updater/internal/app"
 	"github.com/lu-zhengda/updater/internal/version"
 )
+
+// brewInfoRetryDelay is the pause before retrying a failed brew info call.
+// A var so tests can shorten it.
+var brewInfoRetryDelay = 500 * time.Millisecond
 
 // brewInfoResponse represents the JSON response from `brew info --cask --json=v2`.
 type brewInfoResponse struct {
@@ -53,7 +58,17 @@ func (b *BrewInfoChecker) Check(ctx context.Context, a *app.App) (*UpdateResult,
 
 	output, err := b.runner.Run(ctx, "brew", "info", "--cask", "--json=v2", a.CaskName)
 	if err != nil {
-		return nil, fmt.Errorf("failed to run brew info for %s: %w", a.CaskName, err)
+		// brew fails transiently when several brew processes contend for its
+		// locks/cache during a concurrent check run; retry once after a pause.
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(brewInfoRetryDelay):
+		}
+		output, err = b.runner.Run(ctx, "brew", "info", "--cask", "--json=v2", a.CaskName)
+		if err != nil {
+			return nil, fmt.Errorf("failed to run brew info for %s: %w", a.CaskName, err)
+		}
 	}
 
 	latestVersion, err := parseBrewInfo(output)

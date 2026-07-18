@@ -465,3 +465,43 @@ func (r *noAppZIPRunner) Run(_ context.Context, name string, args ...string) ([]
 func readFile(path string) ([]byte, error) {
 	return os.ReadFile(path)
 }
+
+// TestReplaceAppReplacesExistingBundle uses the real command runner and a real
+// filesystem: replacing an existing .app must swap the bundle, not nest the
+// new bundle inside the old one (the `cp -a src existing-dir` trap).
+func TestReplaceAppReplacesExistingBundle(t *testing.T) {
+	tmp := t.TempDir()
+
+	writeBundle := func(path, version string) {
+		if err := os.MkdirAll(filepath.Join(path, "Contents"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(path, "Contents", "version.txt"), []byte(version), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	src := filepath.Join(tmp, "extracted", "Test.app")
+	dst := filepath.Join(tmp, "Applications", "Test.app")
+	writeBundle(src, "2.0")
+	writeBundle(dst, "1.0")
+
+	inst := New(&checker.RealCmdRunner{}, nil)
+	if err := inst.replaceApp(context.Background(), src, dst); err != nil {
+		t.Fatalf("replaceApp failed: %v", err)
+	}
+
+	got, err := os.ReadFile(filepath.Join(dst, "Contents", "version.txt"))
+	if err != nil {
+		t.Fatalf("failed to read installed version: %v", err)
+	}
+	if string(got) != "2.0" {
+		t.Errorf("installed version = %q, want 2.0 (old bundle not replaced)", got)
+	}
+	if _, err := os.Stat(filepath.Join(dst, "Test.app")); !os.IsNotExist(err) {
+		t.Error("new bundle was nested inside the old bundle instead of replacing it")
+	}
+	if _, err := os.Stat(dst + ".updater-staging"); !os.IsNotExist(err) {
+		t.Error("staging directory was left behind")
+	}
+}

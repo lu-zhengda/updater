@@ -184,11 +184,17 @@ func ListInstalledUvTools(ctx context.Context, runner CmdRunner) (map[string]str
 	return tools, nil
 }
 
-// NonRegistryUvTools returns the set of tools (by name) whose own requirement
-// was installed from a non-registry source (git/path/url/editable) according
-// to uv's receipt files. Errors are treated as "registry" — the PyPI check
-// will surface any real problem.
-func NonRegistryUvTools(ctx context.Context, runner CmdRunner, tools map[string]string) map[string]bool {
+// UvReceiptInfo captures the install-source facts updater needs from a
+// tool's uv-receipt.toml.
+type UvReceiptInfo struct {
+	NonRegistry bool // installed from git/path/url/editable, not PyPI
+	Pinned      bool // requirement pinned to an exact version (specifier "==")
+}
+
+// UvToolReceipts reads uv's receipt file for each tool and reports install
+// provenance. Errors yield a zero-value entry — the PyPI check will surface
+// any real problem.
+func UvToolReceipts(ctx context.Context, runner CmdRunner, tools map[string]string) map[string]UvReceiptInfo {
 	output, err := runner.Run(ctx, "uv", "tool", "dir")
 	if err != nil {
 		return nil
@@ -198,40 +204,38 @@ func NonRegistryUvTools(ctx context.Context, runner CmdRunner, tools map[string]
 		return nil
 	}
 
-	nonRegistry := make(map[string]bool)
+	infos := make(map[string]UvReceiptInfo)
 	for name := range tools {
 		data, err := os.ReadFile(filepath.Join(dir, name, "uv-receipt.toml"))
 		if err != nil {
 			continue
 		}
-		if uvToolFromNonRegistrySource(string(data), name) {
-			nonRegistry[name] = true
-		}
+		infos[name] = parseUvReceipt(string(data), name)
 	}
-	return nonRegistry
+	return infos
 }
 
-// uvToolFromNonRegistrySource reports whether the receipt's requirement entry
-// for the tool itself carries a git/path/url/editable source. Receipt entries
-// look like:
+// parseUvReceipt inspects the receipt's requirement entry for the tool
+// itself. Receipt entries look like:
 //
 //	requirements = [
 //	    { name = "agent-reach", git = "https://github.com/x/y.git?rev=abc" },
+//	    { name = "bilibili-cli", specifier = "==0.6.2" },
 //	    { name = "browser-cookie3" },
 //	]
 //
 // Entries never contain nested braces, so scanning brace groups is sufficient.
-func uvToolFromNonRegistrySource(receipt, tool string) bool {
+func parseUvReceipt(receipt, tool string) UvReceiptInfo {
 	nameKey := `name = "` + strings.ToLower(strings.ReplaceAll(tool, "_", "-")) + `"`
 	rest := receipt
 	for {
 		start := strings.Index(rest, "{")
 		if start < 0 {
-			return false
+			return UvReceiptInfo{}
 		}
 		end := strings.Index(rest[start:], "}")
 		if end < 0 {
-			return false
+			return UvReceiptInfo{}
 		}
 		entry := rest[start : start+end]
 		rest = rest[start+end+1:]
@@ -240,10 +244,13 @@ func uvToolFromNonRegistrySource(receipt, tool string) bool {
 		if !strings.Contains(normalized, nameKey) {
 			continue
 		}
-		return strings.Contains(entry, "git =") ||
-			strings.Contains(entry, "path =") ||
-			strings.Contains(entry, "url =") ||
-			strings.Contains(entry, "editable =")
+		return UvReceiptInfo{
+			NonRegistry: strings.Contains(entry, "git =") ||
+				strings.Contains(entry, "path =") ||
+				strings.Contains(entry, "url =") ||
+				strings.Contains(entry, "editable ="),
+			Pinned: strings.Contains(entry, `specifier = "==`),
+		}
 	}
 }
 

@@ -288,7 +288,14 @@ func executeUpdate(ctx context.Context, r *checker.UpdateResult, runner checker.
 		if r.App.UvTool == "" {
 			return fmt.Errorf("no uv tool name for %s", r.App.Name), false
 		}
-		output, err := runner.Run(ctx, "uv", "tool", "upgrade", r.App.UvTool)
+		// `uv tool upgrade` honors the version constraint from install time.
+		// A receipt pinned to an exact version would silently no-op, so
+		// reinstall at the target version instead.
+		uvArgs := []string{"tool", "upgrade", r.App.UvTool}
+		if r.App.UvPinned && r.LatestVersion != "" {
+			uvArgs = []string{"tool", "install", fmt.Sprintf("%s==%s", r.App.UvTool, r.LatestVersion)}
+		}
+		output, err := runner.Run(ctx, "uv", uvArgs...)
 		if err != nil {
 			return fmt.Errorf("failed to upgrade uv tool %s: %w", r.App.UvTool, err), false
 		}
@@ -495,6 +502,9 @@ func describeAction(r *checker.UpdateResult) string {
 	case "npm":
 		return fmt.Sprintf("npm install -g %s@latest", r.App.NpmPackage)
 	case "uv":
+		if r.App.UvPinned && r.LatestVersion != "" {
+			return fmt.Sprintf("uv tool install %s==%s (pinned install)", r.App.UvTool, r.LatestVersion)
+		}
 		return fmt.Sprintf("uv tool upgrade %s", r.App.UvTool)
 	case "cargo":
 		return fmt.Sprintf("cargo install %s", r.App.CargoCrate)

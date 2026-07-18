@@ -98,7 +98,7 @@ func DiscoverUvTools(ctx context.Context, runner checker.CmdRunner) ([]*app.App,
 		return nil, err
 	}
 
-	nonRegistry := checker.NonRegistryUvTools(ctx, runner, tools)
+	receipts := checker.UvToolReceipts(ctx, runner, tools)
 
 	names := make([]string, 0, len(tools))
 	for name := range tools {
@@ -114,7 +114,8 @@ func DiscoverUvTools(ctx context.Context, runner checker.CmdRunner) ([]*app.App,
 			Version:       tools[name],
 			Source:        app.SourceUv,
 			UvTool:        name,
-			UvNonRegistry: nonRegistry[name],
+			UvNonRegistry: receipts[name].NonRegistry,
+			UvPinned:      receipts[name].Pinned,
 		})
 	}
 	return apps, nil

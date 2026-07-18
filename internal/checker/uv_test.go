@@ -309,18 +309,19 @@ requirements = [
 		name    string
 		receipt string
 		tool    string
-		want    bool
+		want    UvReceiptInfo
 	}{
-		{"git install is non-registry", gitReceipt, "agent-reach", true},
-		{"plain registry install", registryReceipt, "black", false},
-		{"pinned registry install", pinnedReceipt, "bilibili-cli", false},
-		{"tool missing from receipt", registryReceipt, "ruff", false},
-		{"underscore name matches dash entry", gitReceipt, "agent_reach", true},
+		{"git install is non-registry", gitReceipt, "agent-reach", UvReceiptInfo{NonRegistry: true}},
+		{"plain registry install", registryReceipt, "black", UvReceiptInfo{}},
+		{"pinned registry install", pinnedReceipt, "bilibili-cli", UvReceiptInfo{Pinned: true}},
+		{"range specifier is not a pin", pinnedReceipt, "av", UvReceiptInfo{}},
+		{"tool missing from receipt", registryReceipt, "ruff", UvReceiptInfo{}},
+		{"underscore name matches dash entry", gitReceipt, "agent_reach", UvReceiptInfo{NonRegistry: true}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := uvToolFromNonRegistrySource(tt.receipt, tt.tool); got != tt.want {
-				t.Errorf("uvToolFromNonRegistrySource(%q) = %v, want %v", tt.tool, got, tt.want)
+			if got := parseUvReceipt(tt.receipt, tt.tool); got != tt.want {
+				t.Errorf("parseUvReceipt(%q) = %+v, want %+v", tt.tool, got, tt.want)
 			}
 		})
 	}

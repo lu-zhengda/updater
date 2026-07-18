@@ -47,6 +47,7 @@ type App struct {
 	NpmPackage             string // Globally installed npm package name
 	UvTool                 string // Tool name managed by `uv tool install`
 	UvNonRegistry          bool   // true when the uv tool was installed from git/path/url, not PyPI
+	UvPinned               bool   // true when the uv tool requirement pins an exact version (==)
 	CargoCrate             string // Crate name installed via `cargo install`
 	ElectronUpdateURL      string // Generic update server base URL from app-update.yml
 	enrichmentBaseline     *enrichmentBaseline

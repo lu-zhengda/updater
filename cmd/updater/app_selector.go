@@ -25,11 +25,25 @@ func resolveAppSelection(apps []*app.App, query string) (*app.App, error) {
 		return nil, fmt.Errorf("app name is required")
 	}
 
-	// Keep exact display-name match highest priority.
+	// Keep exact display-name match highest priority — but names can collide
+	// across sources (e.g. a brew formula and a uv tool both named "httpie"),
+	// so an exact match must still be unique.
+	var exact []*app.App
 	for _, a := range apps {
 		if strings.EqualFold(a.Name, query) {
-			return a, nil
+			exact = append(exact, a)
 		}
+	}
+	if len(exact) == 1 {
+		return exact[0], nil
+	}
+	if len(exact) > 1 {
+		ids := make([]string, 0, len(exact))
+		for _, a := range exact {
+			ids = append(ids, a.BundleID)
+		}
+		sort.Strings(ids)
+		return nil, fmt.Errorf("app %q is ambiguous (bundle IDs: %s); use --bundle-id to pick one", query, strings.Join(ids, ", "))
 	}
 
 	queryNorm := normalizeAppSelector(query)
