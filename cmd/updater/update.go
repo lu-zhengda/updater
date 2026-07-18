@@ -25,6 +25,7 @@ var (
 	flagAuto       bool
 	flagDryRun     bool
 	flagDryRunJSON bool
+	flagBundleID   string
 )
 
 var updateCmd = &cobra.Command{
@@ -38,6 +39,7 @@ func init() {
 	updateCmd.Flags().BoolVar(&flagAuto, "auto", false, "unattended mode (no prompts)")
 	updateCmd.Flags().BoolVar(&flagDryRun, "dry-run", false, "show what would be updated without making changes")
 	updateCmd.Flags().BoolVar(&flagDryRunJSON, "json", false, "output dry run results as JSON (requires --dry-run)")
+	updateCmd.Flags().StringVar(&flagBundleID, "bundle-id", "", "select the app to update by exact bundle ID instead of name")
 	rootCmd.AddCommand(updateCmd)
 }
 
@@ -53,7 +55,7 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to load config: %w", err)
 	}
 
-	runner := &checker.RealCmdRunner{}
+	runner := newRunner()
 
 	apps, err := discoverAll(ctx, cfg, runner)
 	if err != nil {
@@ -63,8 +65,20 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 	apps = filterIgnored(apps, cfg)
 
 	// If a specific app selector was given, resolve it before checking.
+	// --bundle-id is an exact, unambiguous selector (names can collide);
+	// it takes precedence over a name argument.
 	var targetApp *app.App
-	if len(args) > 0 && !flagAll {
+	if flagBundleID != "" && !flagAll {
+		for _, a := range apps {
+			if a.BundleID == flagBundleID {
+				targetApp = a
+				break
+			}
+		}
+		if targetApp == nil {
+			return fmt.Errorf("no app with bundle ID %q found. Run 'updater scan' to see available apps", flagBundleID)
+		}
+	} else if len(args) > 0 && !flagAll {
 		query := joinAppNameArgs(args)
 		targetApp, err = resolveAppSelection(apps, query)
 		if err != nil {

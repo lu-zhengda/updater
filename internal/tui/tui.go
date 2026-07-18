@@ -20,8 +20,10 @@ import (
 	"github.com/lu-zhengda/updater/internal/history"
 )
 
-// CheckFunc checks all apps for updates and returns results.
-type CheckFunc func(ctx context.Context, apps []*app.App) []*checker.UpdateResult
+// CheckFunc checks all apps for updates and returns results. onResult, when
+// non-nil, is invoked once per completed app check so the UI can stream
+// progress; calls are serialized but come from checker goroutines.
+type CheckFunc func(ctx context.Context, apps []*app.App, onResult func(*checker.UpdateResult)) []*checker.UpdateResult
 
 // UpdateFunc executes an update for a single app.
 type UpdateFunc func(ctx context.Context, result *checker.UpdateResult) error
@@ -74,9 +76,13 @@ type loadDoneMsg struct {
 	err    error
 }
 
-type checkDoneMsg struct {
-	results []*checker.UpdateResult
+// checkResultMsg streams one completed app check into the UI.
+type checkResultMsg struct {
+	result *checker.UpdateResult
 }
+
+// checkDoneMsg signals that the check stream has finished.
+type checkDoneMsg struct{}
 
 type updateDoneMsg struct {
 	index int
@@ -108,6 +114,8 @@ type Model struct {
 	offset     int // scroll offset for the viewport
 	loading    bool // true while discovering/enriching apps
 	checking   bool
+	checkCh    chan *checker.UpdateResult // streams per-app check results
+	checkDone  int                        // apps checked so far in the current run
 	updating   map[int]bool
 	ignored    map[int]bool
 	ignoredIDs map[string]bool
@@ -204,12 +212,30 @@ func (m Model) startLoad() tea.Cmd {
 	}
 }
 
-// startCheck returns a command that runs the check function in the background.
-func (m Model) startCheck() tea.Cmd {
+// startCheck kicks off the check stream: the check function runs in its own
+// goroutine, pushing each completed result into a channel the Update loop
+// drains one message at a time.
+func (m *Model) startCheck() tea.Cmd {
+	ch := make(chan *checker.UpdateResult, 32)
+	m.checkCh = ch
+	m.checkDone = 0
+	checkFn, apps := m.checkFn, m.apps
+	go func() {
+		checkFn(context.Background(), apps, func(r *checker.UpdateResult) { ch <- r })
+		close(ch)
+	}()
+	return waitCheckEvent(ch)
+}
+
+// waitCheckEvent returns a command that delivers the next streamed check
+// result, or checkDoneMsg once the stream closes.
+func waitCheckEvent(ch chan *checker.UpdateResult) tea.Cmd {
 	return func() tea.Msg {
-		ctx := context.Background()
-		results := m.checkFn(ctx, m.apps)
-		return checkDoneMsg{results: results}
+		r, ok := <-ch
+		if !ok {
+			return checkDoneMsg{}
+		}
+		return checkResultMsg{result: r}
 	}
 }
 
@@ -330,11 +356,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, tea.Batch(cmds...)
 
+	case checkResultMsg:
+		m.applyResult(msg.result)
+		m.checkDone++
+		m.rebuildVisible()
+		m.statusMsg = fmt.Sprintf("Checking… %d/%d", m.checkDone, len(m.apps))
+		return m, waitCheckEvent(m.checkCh)
+
 	case checkDoneMsg:
 		m.checking = false
-		m.applyResults(msg.results)
+		m.checkCh = nil
 		m.rebuildVisible()
-		m.statusMsg = fmt.Sprintf("Checked %d apps", len(msg.results))
+		m.statusMsg = fmt.Sprintf("Checked %d apps", m.checkDone)
 		m.saveLastChecked()
 		return m, nil
 
@@ -1006,16 +1039,13 @@ func (m Model) handleRefresh() (tea.Model, tea.Cmd) {
 	return m, tea.Batch(m.startLoad(), m.spinner.Tick)
 }
 
-// applyResults matches check results back to rows by app pointer.
-func (m *Model) applyResults(results []*checker.UpdateResult) {
-	resultMap := make(map[*app.App]*checker.UpdateResult, len(results))
-	for _, r := range results {
-		resultMap[r.App] = r
-	}
-	for i, r := range m.rows {
-		if result, ok := resultMap[r.app]; ok {
+// applyResult matches a single check result back to its row by app pointer.
+func (m *Model) applyResult(result *checker.UpdateResult) {
+	for i := range m.rows {
+		if m.rows[i].app == result.App {
 			m.rows[i].result = result
 			m.rows[i].checked = true
+			return
 		}
 	}
 }

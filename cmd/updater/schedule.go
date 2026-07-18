@@ -155,7 +155,7 @@ func removeScheduleCore(ctx context.Context, runner checker.CmdRunner) error {
 
 func runSchedule(cmd *cobra.Command, _ []string) error {
 	ctx := cmd.Context()
-	runner := &checker.RealCmdRunner{}
+	runner := newRunner()
 	useJSON := jsonOutputEnabled(flagScheduleJSON)
 
 	if flagScheduleRemove {

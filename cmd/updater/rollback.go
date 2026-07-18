@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/lu-zhengda/updater/internal/backup"
-	"github.com/lu-zhengda/updater/internal/checker"
 	"github.com/lu-zhengda/updater/internal/config"
 	"github.com/spf13/cobra"
 )
@@ -54,7 +53,7 @@ func rollbackSingle(cmd *cobra.Command, query string, useJSON bool) error {
 		return fmt.Errorf("failed to load config: %w", err)
 	}
 
-	runner := &checker.RealCmdRunner{}
+	runner := newRunner()
 	bm := backup.NewManager(backup.DefaultBaseDir(), cfg.MaxBackupsOrDefault(), runner)
 
 	backupName := query
@@ -149,7 +148,7 @@ func rollbackAll(cmd *cobra.Command, useJSON bool) error {
 		return fmt.Errorf("failed to load config: %w", err)
 	}
 
-	runner := &checker.RealCmdRunner{}
+	runner := newRunner()
 	bm := backup.NewManager(baseDir, cfg.MaxBackupsOrDefault(), runner)
 
 	// Discover installed apps once for quit-if-running lookups.

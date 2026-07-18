@@ -34,7 +34,7 @@ func runScan(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to load config: %w", err)
 	}
 
-	runner := &checker.RealCmdRunner{}
+	runner := newRunner()
 
 	apps, err := discoverAll(ctx, cfg, runner)
 	if err != nil {

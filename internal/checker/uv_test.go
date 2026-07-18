@@ -280,3 +280,70 @@ func TestParseUvToolLine(t *testing.T) {
 		})
 	}
 }
+
+func TestUvToolFromNonRegistrySource(t *testing.T) {
+	gitReceipt := `[tool]
+requirements = [
+    { name = "agent-reach", git = "https://github.com/Panniantong/Agent-Reach.git?rev=22d7f03" },
+    { name = "browser-cookie3" },
+]
+entrypoints = [
+    { name = "agent-reach", install-path = "/Users/x/.local/bin/agent-reach", from = "agent-reach" },
+]
+`
+	registryReceipt := `[tool]
+requirements = [{ name = "black" }]
+python = "3.13.12"
+entrypoints = [
+    { name = "black", install-path = "/Users/x/.local/bin/black", from = "black" },
+]
+`
+	pinnedReceipt := `[tool]
+requirements = [
+    { name = "bilibili-cli", specifier = "==0.6.2" },
+    { name = "av", specifier = ">=14.0" },
+]
+`
+
+	tests := []struct {
+		name    string
+		receipt string
+		tool    string
+		want    bool
+	}{
+		{"git install is non-registry", gitReceipt, "agent-reach", true},
+		{"plain registry install", registryReceipt, "black", false},
+		{"pinned registry install", pinnedReceipt, "bilibili-cli", false},
+		{"tool missing from receipt", registryReceipt, "ruff", false},
+		{"underscore name matches dash entry", gitReceipt, "agent_reach", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := uvToolFromNonRegistrySource(tt.receipt, tt.tool); got != tt.want {
+				t.Errorf("uvToolFromNonRegistrySource(%q) = %v, want %v", tt.tool, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestUvChecker_Check_NonRegistrySkipsPyPI(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		t.Error("PyPI should not be queried for non-registry tools")
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	c := NewUvChecker(srv.Client(), srv.URL)
+	a := &app.App{Name: "agent-reach", Version: "0.3.0", Source: app.SourceUv, UvTool: "agent-reach", UvNonRegistry: true}
+
+	result, err := c.Check(context.Background(), a)
+	if err != nil {
+		t.Fatalf("Check returned error: %v", err)
+	}
+	if result.HasUpdate {
+		t.Error("non-registry tool should not report an update")
+	}
+	if result.LatestVersion != "0.3.0" {
+		t.Errorf("LatestVersion = %q, want installed version", result.LatestVersion)
+	}
+}

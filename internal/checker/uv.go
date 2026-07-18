@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -103,9 +105,21 @@ func (u *UvChecker) fetchLatestVersion(ctx context.Context, pkg string) (string,
 }
 
 // Check queries PyPI for the latest version of the tool's distribution.
+// Tools installed from git/path/url sources have no PyPI release to compare
+// against, so they report up to date rather than a 404 error.
 func (u *UvChecker) Check(ctx context.Context, a *app.App) (*UpdateResult, error) {
 	if a.UvTool == "" {
 		return nil, fmt.Errorf("failed to check uv update: no tool name for %s", a.Name)
+	}
+
+	if a.UvNonRegistry {
+		return &UpdateResult{
+			App:            a,
+			Source:         "uv",
+			CurrentVersion: a.Version,
+			LatestVersion:  a.Version,
+			HasUpdate:      false,
+		}, nil
 	}
 
 	latest, err := u.fetchLatestVersion(ctx, a.UvTool)
@@ -168,6 +182,69 @@ func ListInstalledUvTools(ctx context.Context, runner CmdRunner) (map[string]str
 		tools[name] = ver
 	}
 	return tools, nil
+}
+
+// NonRegistryUvTools returns the set of tools (by name) whose own requirement
+// was installed from a non-registry source (git/path/url/editable) according
+// to uv's receipt files. Errors are treated as "registry" — the PyPI check
+// will surface any real problem.
+func NonRegistryUvTools(ctx context.Context, runner CmdRunner, tools map[string]string) map[string]bool {
+	output, err := runner.Run(ctx, "uv", "tool", "dir")
+	if err != nil {
+		return nil
+	}
+	dir := strings.TrimSpace(string(output))
+	if dir == "" {
+		return nil
+	}
+
+	nonRegistry := make(map[string]bool)
+	for name := range tools {
+		data, err := os.ReadFile(filepath.Join(dir, name, "uv-receipt.toml"))
+		if err != nil {
+			continue
+		}
+		if uvToolFromNonRegistrySource(string(data), name) {
+			nonRegistry[name] = true
+		}
+	}
+	return nonRegistry
+}
+
+// uvToolFromNonRegistrySource reports whether the receipt's requirement entry
+// for the tool itself carries a git/path/url/editable source. Receipt entries
+// look like:
+//
+//	requirements = [
+//	    { name = "agent-reach", git = "https://github.com/x/y.git?rev=abc" },
+//	    { name = "browser-cookie3" },
+//	]
+//
+// Entries never contain nested braces, so scanning brace groups is sufficient.
+func uvToolFromNonRegistrySource(receipt, tool string) bool {
+	nameKey := `name = "` + strings.ToLower(strings.ReplaceAll(tool, "_", "-")) + `"`
+	rest := receipt
+	for {
+		start := strings.Index(rest, "{")
+		if start < 0 {
+			return false
+		}
+		end := strings.Index(rest[start:], "}")
+		if end < 0 {
+			return false
+		}
+		entry := rest[start : start+end]
+		rest = rest[start+end+1:]
+
+		normalized := strings.ToLower(strings.ReplaceAll(entry, "_", "-"))
+		if !strings.Contains(normalized, nameKey) {
+			continue
+		}
+		return strings.Contains(entry, "git =") ||
+			strings.Contains(entry, "path =") ||
+			strings.Contains(entry, "url =") ||
+			strings.Contains(entry, "editable =")
+	}
 }
 
 // parseUvToolLine extracts (name, version) from a line like "black v25.1.0".

@@ -4,9 +4,15 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/lu-zhengda/updater/internal/app"
 )
+
+// systemCheckTimeout bounds `softwareupdate -l`, which scans Apple's update
+// servers and can take minutes when results are not cached. A slow scan
+// should not hold up the rest of a check run.
+const systemCheckTimeout = 90 * time.Second
 
 // SystemChecker checks for macOS system updates via `softwareupdate -l`.
 type SystemChecker struct {
@@ -30,8 +36,14 @@ func (s *SystemChecker) CanCheck(a *app.App) bool {
 
 // Check queries `softwareupdate -l` for available macOS updates.
 func (s *SystemChecker) Check(ctx context.Context, a *app.App) (*UpdateResult, error) {
+	ctx, cancel := context.WithTimeout(ctx, systemCheckTimeout)
+	defer cancel()
+
 	output, err := s.runner.Run(ctx, "softwareupdate", "-l")
 	if err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return nil, fmt.Errorf("system update check timed out after %s", systemCheckTimeout)
+		}
 		return nil, fmt.Errorf("failed to check system updates: %w", err)
 	}
 

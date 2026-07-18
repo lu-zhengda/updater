@@ -216,10 +216,10 @@ func (m *menubarApp) rebuild(updatable []*checker.UpdateResult, status string) {
 		for i, r := range updatable {
 			label := fmt.Sprintf("%s  %s → %s", r.App.Name, r.CurrentVersion, r.LatestVersion)
 			items[i] = systray.AddMenuItem(label, "Update "+r.App.Name)
-			name, item := r.App.Name, items[i]
+			r, item := r, items[i]
 			onClick(gen, item, func() {
 				go func() {
-					m.runUpdate(name, item)
+					m.runUpdate(r.App.Name, r.App.BundleID, item)
 					m.refresh()
 				}()
 			})
@@ -231,7 +231,7 @@ func (m *menubarApp) rebuild(updatable []*checker.UpdateResult, status string) {
 					all.Disable()
 					all.SetTitle("Updating…")
 					for i, r := range updatable {
-						m.runUpdate(r.App.Name, items[i])
+						m.runUpdate(r.App.Name, r.App.BundleID, items[i])
 					}
 					m.refresh()
 				}()
@@ -262,8 +262,9 @@ func onClick(gen context.Context, item *systray.MenuItem, fn func()) {
 }
 
 // runUpdate updates a single app via the updater CLI, reflecting progress in
-// the menu item title.
-func (m *menubarApp) runUpdate(name string, item *systray.MenuItem) {
+// the menu item title. Apps are targeted by bundle ID (exact) with the name
+// used only for display.
+func (m *menubarApp) runUpdate(name, bundleID string, item *systray.MenuItem) {
 	item.Disable()
 	item.SetTitle("Updating " + name + "…")
 
@@ -276,7 +277,7 @@ func (m *menubarApp) runUpdate(name string, item *systray.MenuItem) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, bin, "update", name)
+	cmd := exec.CommandContext(ctx, bin, "update", "--bundle-id", bundleID)
 	cmd.Stdout = os.Stderr // keep CLI output in our log, off the notification path
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {

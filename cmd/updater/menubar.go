@@ -65,7 +65,7 @@ type menubarPlistData struct {
 
 func runMenubar(cmd *cobra.Command, _ []string) error {
 	ctx := cmd.Context()
-	runner := &checker.RealCmdRunner{}
+	runner := newRunner()
 	useJSON := jsonOutputEnabled(flagMenubarJSON)
 
 	if flagMenubarRemove {

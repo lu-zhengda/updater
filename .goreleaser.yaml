@@ -18,6 +18,7 @@ builds:
     goos:
       - darwin
     goarch:
+      - amd64
       - arm64
     env:
       - CGO_ENABLED=1
@@ -27,23 +28,20 @@ builds:
 universal_binaries:
   - id: updater
     replace: true
+  - id: updater-menubar
+    name_template: updater-menubar
+    replace: true
 
 archives:
   - id: updater-archive
-    builds:
+    ids:
       - updater
+      - updater-menubar
     formats:
       - tar.gz
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}"
     files:
       - completions/*
-  - id: menubar-archive
-    builds:
-      - updater-menubar
-    formats:
-      - tar.gz
-    name_template: "{{ .ProjectName }}-menubar_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
-    files: []
 
 checksum:
   name_template: "checksums.txt"
@@ -69,6 +67,7 @@ homebrew_casks:
       - updater-archive
     binaries:
       - updater
+      - updater-menubar
     dependencies:
       - formula: mas
     completions:
@@ -80,4 +79,5 @@ homebrew_casks:
         install: |
           if OS.mac?
             system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/updater"]
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/updater-menubar"]
           end

@@ -43,7 +43,7 @@ func runCheck(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to load config: %w", err)
 	}
 
-	runner := &checker.RealCmdRunner{}
+	runner := newRunner()
 
 	apps, err := discoverAll(ctx, cfg, runner)
 	if err != nil {
@@ -84,6 +84,12 @@ func runCheck(cmd *cobra.Command, args []string) error {
 }
 
 // Thin wrappers delegating to internal/updater for reuse by other binaries.
+// newRunner and discoverAll are vars so tests can inject fakes and drive the
+// full command paths without touching the real system.
+
+var newRunner = func() checker.CmdRunner {
+	return &checker.RealCmdRunner{}
+}
 
 func discoverApps() ([]*app.App, error) {
 	return updater.DiscoverApps()
@@ -91,7 +97,7 @@ func discoverApps() ([]*app.App, error) {
 
 // discoverAll runs the full shared discovery pipeline, printing non-fatal
 // source warnings to stderr.
-func discoverAll(ctx context.Context, cfg *config.Config, runner checker.CmdRunner) ([]*app.App, error) {
+var discoverAll = func(ctx context.Context, cfg *config.Config, runner checker.CmdRunner) ([]*app.App, error) {
 	return updater.DiscoverAll(ctx, cfg, runner, func(source string, err error) {
 		fmt.Fprintf(os.Stderr, "warning: could not discover %s: %v\n", source, err)
 	})

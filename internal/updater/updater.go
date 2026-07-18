@@ -98,6 +98,8 @@ func DiscoverUvTools(ctx context.Context, runner checker.CmdRunner) ([]*app.App,
 		return nil, err
 	}
 
+	nonRegistry := checker.NonRegistryUvTools(ctx, runner, tools)
+
 	names := make([]string, 0, len(tools))
 	for name := range tools {
 		names = append(names, name)
@@ -107,11 +109,12 @@ func DiscoverUvTools(ctx context.Context, runner checker.CmdRunner) ([]*app.App,
 	apps := make([]*app.App, 0, len(tools))
 	for _, name := range names {
 		apps = append(apps, &app.App{
-			Name:     name,
-			BundleID: "uv.tool." + name,
-			Version:  tools[name],
-			Source:   app.SourceUv,
-			UvTool:   name,
+			Name:          name,
+			BundleID:      "uv.tool." + name,
+			Version:       tools[name],
+			Source:        app.SourceUv,
+			UvTool:        name,
+			UvNonRegistry: nonRegistry[name],
 		})
 	}
 	return apps, nil
@@ -455,6 +458,13 @@ func noCheckerResult(a *app.App) *checker.UpdateResult {
 // It uses a semaphore to limit concurrency to maxConcurrency goroutines.
 // If a checker returns a stale result or an error, the next compatible checker is tried.
 func CheckAll(ctx context.Context, apps []*app.App, checkers []checker.Checker, maxConcurrency int) []*checker.UpdateResult {
+	return CheckAllProgress(ctx, apps, checkers, maxConcurrency, nil)
+}
+
+// CheckAllProgress is CheckAll with a progress callback: onResult is invoked
+// once per completed app check, from checker goroutines (calls are serialized,
+// but not on the caller's goroutine). onResult may be nil.
+func CheckAllProgress(ctx context.Context, apps []*app.App, checkers []checker.Checker, maxConcurrency int, onResult func(*checker.UpdateResult)) []*checker.UpdateResult {
 	if maxConcurrency <= 0 {
 		maxConcurrency = 10
 	}
@@ -479,8 +489,12 @@ func CheckAll(ctx context.Context, apps []*app.App, checkers []checker.Checker, 
 		}
 		if !hasChecker {
 			if a != nil && a.SourceOverrideActive {
+				r := noCheckerResult(a)
 				mu.Lock()
-				results = append(results, noCheckerResult(a))
+				results = append(results, r)
+				if onResult != nil {
+					onResult(r)
+				}
 				mu.Unlock()
 			}
 			continue
@@ -497,6 +511,9 @@ func CheckAll(ctx context.Context, apps []*app.App, checkers []checker.Checker, 
 
 			mu.Lock()
 			results = append(results, result)
+			if onResult != nil {
+				onResult(result)
+			}
 			mu.Unlock()
 		}(a)
 	}

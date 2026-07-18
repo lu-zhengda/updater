@@ -41,7 +41,7 @@ func runCleanup(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 
-	runner := &checker.RealCmdRunner{}
+	runner := newRunner()
 	cutoff := time.Now().AddDate(0, 0, -flagCleanupDays)
 
 	var w *tabwriter.Writer

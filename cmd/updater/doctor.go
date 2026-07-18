@@ -44,7 +44,7 @@ type doctorCheck struct {
 
 func runDoctor(cmd *cobra.Command, _ []string) error {
 	ctx := cmd.Context()
-	runner := &checker.RealCmdRunner{}
+	runner := newRunner()
 	var checks []doctorCheck
 
 	// External tools.

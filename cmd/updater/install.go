@@ -29,7 +29,7 @@ func init() {
 func runInstall(cmd *cobra.Command, args []string) error {
 	ctx := cmd.Context()
 	query := args[0]
-	runner := &checker.RealCmdRunner{}
+	runner := newRunner()
 	useJSON := jsonOutputEnabled(flagInstallJSON)
 
 	matches, err := searchCasks(ctx, runner, query)

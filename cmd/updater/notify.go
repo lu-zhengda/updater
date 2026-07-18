@@ -43,7 +43,7 @@ func runNotify(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("failed to load config: %w", err)
 	}
 
-	runner := &checker.RealCmdRunner{}
+	runner := newRunner()
 
 	apps, err := discoverAll(ctx, cfg, runner)
 	if err != nil {
@@ -108,7 +108,7 @@ func runNotify(cmd *cobra.Command, _ []string) error {
 // notification has been sent. It skips pinned, major-update, system/setapp/toolbox/adobe,
 // and manual/notify-only policy apps.
 func autoUpdateAfterNotify(ctx context.Context, cfg *config.Config, updatable []*checker.UpdateResult) ([]string, []string) {
-	runner := &checker.RealCmdRunner{}
+	runner := newRunner()
 	bm := backup.NewManager(backup.DefaultBaseDir(), cfg.MaxBackupsOrDefault(), runner)
 	inst := installer.New(runner, nil)
 

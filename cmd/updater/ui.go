@@ -13,6 +13,7 @@ import (
 	"github.com/lu-zhengda/updater/internal/history"
 	"github.com/lu-zhengda/updater/internal/installer"
 	"github.com/lu-zhengda/updater/internal/tui"
+	"github.com/lu-zhengda/updater/internal/updater"
 	"github.com/spf13/cobra"
 )
 
@@ -44,7 +45,7 @@ func runUI(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("failed to load config: %w", err)
 	}
 
-	runner := &checker.RealCmdRunner{}
+	runner := newRunner()
 	checkers := buildCheckers(runner, cfg.ResolveGitHubToken())
 	maxConc := cfg.MaxConcurrentOrDefault()
 	bm := backup.NewManager(backup.DefaultBaseDir(), cfg.MaxBackupsOrDefault(), runner)
@@ -75,8 +76,8 @@ func runUI(cmd *cobra.Command, _ []string) error {
 		return &tui.LoadResult{Apps: checkable, PinnedIDs: pinnedIDs}, nil
 	}
 
-	checkFn := func(ctx context.Context, apps []*app.App) []*checker.UpdateResult {
-		return checkAll(ctx, apps, checkers, maxConc)
+	checkFn := func(ctx context.Context, apps []*app.App, onResult func(*checker.UpdateResult)) []*checker.UpdateResult {
+		return updater.CheckAllProgress(ctx, apps, checkers, maxConc, onResult)
 	}
 
 	updateFn := func(ctx context.Context, result *checker.UpdateResult) error {
