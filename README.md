@@ -6,7 +6,12 @@
 [![Go Version](https://img.shields.io/github/go-mod/go-version/lu-zhengda/updater)](https://github.com/lu-zhengda/updater/blob/main/go.mod)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/lu-zhengda/updater/blob/main/LICENSE)
 
-`updater` is a macOS CLI/TUI that discovers installed apps, checks for updates across multiple ecosystems, and applies the right update action per app.
+`updater` is a macOS app + CLI/TUI that discovers installed apps, checks for updates across multiple ecosystems, and applies the right update action per app.
+
+Installing gives you both entry points from one binary:
+
+- **Updater.app** (default) — a menu bar app in `/Applications` that checks periodically, shows an update count, notifies about new updates, and updates apps from the dropdown. It launches automatically after install/upgrade.
+- **`updater` CLI/TUI** — the same engine on your PATH for terminal use, scripting, and agents.
 
 ## Requirements
 
@@ -23,7 +28,9 @@ brew install --cask lu-zhengda/tap/updater
 updater --version
 ```
 
-This is the easiest path and includes `mas` automatically as a cask dependency.
+This installs `Updater.app` to `/Applications` (and launches it), puts the
+`updater` CLI on your PATH, and includes `mas` automatically as a cask
+dependency. Upgrades refresh both, since they are the same binary.
 
 Upgrade later:
 
@@ -126,27 +133,33 @@ updater schedule --interval 24
 updater schedule --remove
 ```
 
-## Menu Bar App
+## Menu Bar App (Updater.app)
 
-The same `updater` binary doubles as a macOS menu bar app. It periodically
+`Updater.app` is the default entry point: opening it (Finder, Spotlight, or
+the automatic post-install launch) runs the menu bar app. It periodically
 runs the same discovery/check pipeline as the CLI, shows an update count in
 the menu bar, posts a macOS notification when new updates appear, and lets
 you update a single app or everything from the dropdown (updates go through
 the regular update path, so backups/history behave identically).
 
-```sh
-# Keep it running now and at login (installs a launchd LaunchAgent)
-updater menubar
-# Remove the LaunchAgent
-updater menubar --remove
+The dropdown has a "Start at Login" toggle; the same LaunchAgent can be
+managed from the CLI:
 
-# Or run it in the foreground (debugging)
-updater menubar run
+```sh
+updater menubar           # keep it running now and at login
+updater menubar --remove  # stop and remove the login item
+updater menubar run       # run the menu bar app in the foreground (debugging)
 ```
 
-The dropdown also has a "Start at Login" toggle that manages the same
-LaunchAgent. The check interval follows `schedule_interval` from the config
-(same setting used by `updater schedule`).
+The check interval follows `schedule_interval` from the config (same setting
+used by `updater schedule`).
+
+Building the app bundle from source:
+
+```sh
+make app          # produces ./Updater.app
+make install-app  # copies it to /Applications and launches it
+```
 
 ## Configuration
 

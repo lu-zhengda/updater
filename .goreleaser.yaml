@@ -19,6 +19,10 @@ builds:
 universal_binaries:
   - id: updater
     replace: true
+    hooks:
+      post:
+        # Assemble Updater.app around the universal binary; archived below.
+        - sh scripts/mkapp.sh "{{ .Path }}" "{{ .Version }}" dist
 
 archives:
   - id: updater-archive
@@ -26,9 +30,13 @@ archives:
       - updater
     formats:
       - tar.gz
-    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}"
+    name_template: "{{ .ProjectName }}_{{ .Version }}_darwin"
     files:
       - completions/*
+      # The glob strips the matched files' common prefix (dist/Updater.app/
+      # Contents/), so dst must restore the Contents level.
+      - src: dist/Updater.app/**
+        dst: Updater.app/Contents
 
 checksum:
   name_template: "checksums.txt"
@@ -52,17 +60,21 @@ homebrew_casks:
     license: "MIT"
     ids:
       - updater-archive
-    binaries:
-      - updater
     dependencies:
       - formula: mas
     completions:
       bash: completions/updater.bash
       zsh: completions/updater.zsh
       fish: completions/updater.fish
+    # Install Updater.app as the app. The archive's root binary is linked onto
+    # PATH automatically (goreleaser emits `binary "updater"`), so the CLI/TUI
+    # keeps working standalone.
+    custom_block: |
+      app "Updater.app"
     hooks:
       post:
         install: |
           if OS.mac?
-            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/updater"]
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{appdir}/Updater.app"], sudo: false
+            system_command "/usr/bin/open", args: ["#{appdir}/Updater.app"], sudo: false
           end
