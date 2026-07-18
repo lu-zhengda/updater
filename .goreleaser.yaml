@@ -72,9 +72,19 @@ homebrew_casks:
     custom_block: |
       app "Updater.app"
     hooks:
+      pre:
+        install: |
+          if OS.mac?
+            # Replace a manually-placed copy (e.g. from the release tarball);
+            # Homebrew refuses to overwrite an app it did not install.
+            system_command "/bin/rm", args: ["-rf", "#{appdir}/Updater.app"], sudo: false
+          end
       post:
         install: |
           if OS.mac?
+            # Dequarantine the app AND the staged CLI binary — Gatekeeper
+            # kills the unsigned quarantined binary on first run otherwise.
             system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{appdir}/Updater.app"], sudo: false
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/updater"], sudo: false
             system_command "/usr/bin/open", args: ["#{appdir}/Updater.app"], sudo: false
           end
