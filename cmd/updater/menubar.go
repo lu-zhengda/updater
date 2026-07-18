@@ -19,14 +19,25 @@ var (
 
 var menubarCmd = &cobra.Command{
 	Use:   "menubar",
-	Short: "Install or remove the menu bar agent LaunchAgent",
-	Long:  "Manages a launchd LaunchAgent that keeps the updater-menubar process running.",
-	RunE:  runMenubar,
+	Short: "Install or remove the menu bar app LaunchAgent",
+	Long: "Manages a launchd LaunchAgent that keeps the menu bar app running.\n" +
+		"The agent runs `updater menubar run` from this same binary.",
+	RunE: runMenubar,
+}
+
+var menubarRunCmd = &cobra.Command{
+	Use:   "run",
+	Short: "Run the menu bar app in the foreground",
+	Long:  "Runs the menu bar app. Blocks until Quit is chosen from the menu. Used by the LaunchAgent; also handy for debugging.",
+	RunE: func(_ *cobra.Command, _ []string) error {
+		return runMenubarApp()
+	},
 }
 
 func init() {
 	menubarCmd.Flags().BoolVar(&flagMenubarRemove, "remove", false, "remove the menu bar agent")
 	menubarCmd.Flags().BoolVar(&flagMenubarJSON, "json", false, "output as JSON")
+	menubarCmd.AddCommand(menubarRunCmd)
 	rootCmd.AddCommand(menubarCmd)
 }
 
@@ -41,6 +52,8 @@ const menubarPlistTemplate = `<?xml version="1.0" encoding="UTF-8"?>
 	<key>ProgramArguments</key>
 	<array>
 		<string>{{.Binary}}</string>
+		<string>menubar</string>
+		<string>run</string>
 	</array>
 	<key>KeepAlive</key>
 	<dict>
@@ -115,11 +128,10 @@ func installMenubarAgent(ctx context.Context, runner checker.CmdRunner) error {
 
 	plistPath := filepath.Join(home, "Library", "LaunchAgents", menubarPlistLabel+".plist")
 
-	// Find the updater-menubar binary. Look next to the current executable first,
-	// then fall back to PATH.
-	binary, err := findMenubarBinary()
+	// The agent runs `<this binary> menubar run`.
+	binary, err := os.Executable()
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to locate own executable: %w", err)
 	}
 
 	logPath := filepath.Join(home, "Library", "Logs", "updater-menubar.log")
@@ -174,39 +186,6 @@ func removeMenubarAgent(ctx context.Context, runner checker.CmdRunner) error {
 	}
 
 	return nil
-}
-
-// findMenubarBinary locates the updater-menubar binary.
-// First checks alongside the current executable, then the PATH.
-func findMenubarBinary() (string, error) {
-	execPath, err := os.Executable()
-	if err == nil {
-		dir := filepath.Dir(execPath)
-		candidate := filepath.Join(dir, "updater-menubar")
-		if _, err := os.Stat(candidate); err == nil {
-			return candidate, nil
-		}
-	}
-
-	// Fall back to PATH lookup.
-	path, err := lookPath("updater-menubar")
-	if err != nil {
-		return "", fmt.Errorf("updater-menubar binary not found; build it with: go build ./cmd/updater-menubar/")
-	}
-	return path, nil
-}
-
-// lookPath wraps exec.LookPath for testability.
-var lookPath = func(name string) (string, error) {
-	// Search PATH manually to avoid importing os/exec in production
-	// (os/exec is only needed for LookPath here).
-	for _, dir := range filepath.SplitList(os.Getenv("PATH")) {
-		candidate := filepath.Join(dir, name)
-		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
-			return candidate, nil
-		}
-	}
-	return "", fmt.Errorf("%s not found in PATH", name)
 }
 
 func renderMenubarPlist(data menubarPlistData) (string, error) {

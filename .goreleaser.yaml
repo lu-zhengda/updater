@@ -9,34 +9,21 @@ builds:
     goarch:
       - amd64
       - arm64
-    ldflags:
-      - -s -w
-      - -X main.version={{.Version}}
-  - id: updater-menubar
-    main: ./cmd/updater-menubar
-    binary: updater-menubar
-    goos:
-      - darwin
-    goarch:
-      - amd64
-      - arm64
     env:
+      # The menu bar app (updater menubar run) uses systray, which needs cgo.
       - CGO_ENABLED=1
     ldflags:
       - -s -w
+      - -X main.version={{.Version}}
 
 universal_binaries:
   - id: updater
-    replace: true
-  - id: updater-menubar
-    name_template: updater-menubar
     replace: true
 
 archives:
   - id: updater-archive
     ids:
       - updater
-      - updater-menubar
     formats:
       - tar.gz
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}"
@@ -67,7 +54,6 @@ homebrew_casks:
       - updater-archive
     binaries:
       - updater
-      - updater-menubar
     dependencies:
       - formula: mas
     completions:
@@ -79,5 +65,4 @@ homebrew_casks:
         install: |
           if OS.mac?
             system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/updater"]
-            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/updater-menubar"]
           end

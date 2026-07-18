@@ -1,8 +1,7 @@
-// Command updater-menubar is a macOS menu bar agent for updater.
-//
-// It periodically runs the shared discovery/check pipeline in-process and
-// shows available updates in a menu bar dropdown. Individual updates and
-// "Update All" delegate to the updater CLI so update behavior (backups,
+// The menu bar app, launched with `updater menubar run`. It periodically runs
+// the shared discovery/check pipeline in-process and shows available updates
+// in a menu bar dropdown. Individual updates and "Update All" re-exec this
+// same binary (`updater update --bundle-id ...`) so update behavior (backups,
 // history, per-source actions) stays identical to the terminal experience.
 package main
 
@@ -22,15 +21,15 @@ import (
 	"github.com/lu-zhengda/updater/internal/updater"
 )
 
-const launchAgentPlist = "com.updater.menubar.plist"
-
 // extraPathDirs are prepended to PATH when missing. Under launchd the PATH is
 // /usr/bin:/bin:/usr/sbin:/sbin, which would hide brew, mas, npm, uv, and cargo.
 var extraPathDirs = []string{"/opt/homebrew/bin", "/usr/local/bin"}
 
-func main() {
+// runMenubarApp starts the systray event loop. It blocks until Quit.
+func runMenubarApp() error {
 	ensurePath()
-	systray.Run(onReady, func() {})
+	systray.Run(menubarOnReady, func() {})
+	return nil
 }
 
 // ensurePath prepends well-known tool directories missing from PATH.
@@ -63,7 +62,7 @@ type menubarApp struct {
 	notified   map[string]string // bundleID -> latest version already notified
 }
 
-func onReady() {
+func menubarOnReady() {
 	systray.SetTemplateIcon(generateIcon(), generateIcon())
 	systray.SetTooltip("Updater")
 
@@ -74,14 +73,14 @@ func onReady() {
 	go func() {
 		for {
 			// Re-read the interval each cycle so config changes apply without restart.
-			time.Sleep(checkInterval())
+			time.Sleep(menubarCheckInterval())
 			app.refresh()
 		}
 	}()
 }
 
-// checkInterval reads the configured schedule interval, defaulting sensibly.
-func checkInterval() time.Duration {
+// menubarCheckInterval reads the configured schedule interval, defaulting sensibly.
+func menubarCheckInterval() time.Duration {
 	cfg, err := config.Load(config.DefaultPath())
 	if err != nil {
 		return 6 * time.Hour
@@ -132,10 +131,8 @@ func (m *menubarApp) runCheck(ctx context.Context) ([]*checker.UpdateResult, err
 		return nil, fmt.Errorf("failed to load config: %w", err)
 	}
 
-	runner := &checker.RealCmdRunner{}
-	apps, err := updater.DiscoverAll(ctx, cfg, runner, func(source string, err error) {
-		fmt.Fprintf(os.Stderr, "warning: could not discover %s: %v\n", source, err)
-	})
+	runner := newRunner()
+	apps, err := discoverAll(ctx, cfg, runner)
 	if err != nil {
 		return nil, err
 	}
@@ -240,7 +237,7 @@ func (m *menubarApp) rebuild(updatable []*checker.UpdateResult, status string) {
 	}
 
 	systray.AddSeparator()
-	login := systray.AddMenuItemCheckbox("Start at Login", "Keep the menu bar agent running via launchd", loginItemInstalled())
+	login := systray.AddMenuItemCheckbox("Start at Login", "Keep the menu bar app running via launchd", loginItemInstalled())
 	onClick(gen, login, func() { go toggleLoginItem(login) })
 
 	quit := systray.AddMenuItem("Quit", "Quit Updater")
@@ -261,23 +258,23 @@ func onClick(gen context.Context, item *systray.MenuItem, fn func()) {
 	}()
 }
 
-// runUpdate updates a single app via the updater CLI, reflecting progress in
-// the menu item title. Apps are targeted by bundle ID (exact) with the name
-// used only for display.
+// runUpdate updates a single app by re-executing this binary, reflecting
+// progress in the menu item title. Apps are targeted by bundle ID (exact)
+// with the name used only for display.
 func (m *menubarApp) runUpdate(name, bundleID string, item *systray.MenuItem) {
 	item.Disable()
 	item.SetTitle("Updating " + name + "…")
 
-	bin, err := findUpdaterBinary()
+	self, err := os.Executable()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "%v\n", err)
-		item.SetTitle("✗ " + name + " (updater CLI not found)")
+		fmt.Fprintf(os.Stderr, "cannot locate own executable: %v\n", err)
+		item.SetTitle("✗ " + name + " (failed)")
 		return
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, bin, "update", "--bundle-id", bundleID)
+	cmd := exec.CommandContext(ctx, self, "update", "--bundle-id", bundleID)
 	cmd.Stdout = os.Stderr // keep CLI output in our log, off the notification path
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
@@ -288,51 +285,32 @@ func (m *menubarApp) runUpdate(name, bundleID string, item *systray.MenuItem) {
 	item.SetTitle("✓ " + name + " (updated)")
 }
 
-// findUpdaterBinary locates the updater CLI: next to this executable first,
-// then on PATH (which ensurePath has already augmented).
-func findUpdaterBinary() (string, error) {
-	if execPath, err := os.Executable(); err == nil {
-		candidate := filepath.Join(filepath.Dir(execPath), "updater")
-		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
-			return candidate, nil
-		}
-	}
-	if path, err := exec.LookPath("updater"); err == nil {
-		return path, nil
-	}
-	return "", fmt.Errorf("updater CLI not found next to %s or on PATH", os.Args[0])
-}
-
 // loginItemInstalled reports whether the LaunchAgent plist exists.
 func loginItemInstalled() bool {
-	home, err := os.UserHomeDir()
+	path, err := menubarPlistPath()
 	if err != nil {
 		return false
 	}
-	_, err = os.Stat(filepath.Join(home, "Library", "LaunchAgents", launchAgentPlist))
+	_, err = os.Stat(path)
 	return err == nil
 }
 
-// toggleLoginItem installs or removes the LaunchAgent via the updater CLI,
-// which owns the plist lifecycle.
+// toggleLoginItem installs or removes the LaunchAgent in-process — the agent
+// lifecycle lives in this same binary (see menubar.go).
 func toggleLoginItem(item *systray.MenuItem) {
-	bin, err := findUpdaterBinary()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "%v\n", err)
-		return
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
+	runner := newRunner()
 
 	if loginItemInstalled() {
-		if err := exec.CommandContext(ctx, bin, "menubar", "--remove").Run(); err != nil {
+		if err := removeMenubarAgent(ctx, runner); err != nil {
 			fmt.Fprintf(os.Stderr, "failed to remove login item: %v\n", err)
 			return
 		}
 		item.Uncheck()
 		return
 	}
-	if err := exec.CommandContext(ctx, bin, "menubar").Run(); err != nil {
+	if err := installMenubarAgent(ctx, runner); err != nil {
 		fmt.Fprintf(os.Stderr, "failed to install login item: %v\n", err)
 		return
 	}
