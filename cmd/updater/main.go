@@ -5,6 +5,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/mattn/go-isatty"
 	"github.com/spf13/cobra"
 )
 
@@ -30,9 +31,11 @@ func runningFromAppBundle() bool {
 
 func main() {
 	// Launched as Updater.app (Finder, `open`, login item): run the menu bar
-	// app. The terminal binary keeps its CLI/TUI behavior. LaunchServices may
+	// app. In a terminal (stdin is a TTY) the same bundle binary keeps its
+	// CLI/TUI behavior, so "Open Terminal UI" can exec it. LaunchServices may
 	// pass a legacy -psn_* process serial argument; treat that as no args.
-	if runningFromAppBundle() && (len(os.Args) <= 1 || strings.HasPrefix(os.Args[1], "-psn")) {
+	if runningFromAppBundle() && !isatty.IsTerminal(os.Stdin.Fd()) &&
+		(len(os.Args) <= 1 || strings.HasPrefix(os.Args[1], "-psn")) {
 		if err := runMenubarApp(); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)

@@ -55,11 +55,13 @@ func ensurePath() {
 // via systray.ResetMenu; click-handler goroutines are scoped to a generation
 // context so rebuilds never leak listeners.
 type menubarApp struct {
-	mu         sync.Mutex
-	refreshing bool
-	genCancel  context.CancelFunc
-	lastCheck  time.Time
-	notified   map[string]string // bundleID -> latest version already notified
+	mu           sync.Mutex
+	refreshing   bool
+	genCancel    context.CancelFunc
+	lastCheck    time.Time
+	appCount     int               // apps covered by the last completed check
+	notified     map[string]string // bundleID -> latest version already notified
+	progressItem *systray.MenuItem // live "X of Y checked" line while checking
 }
 
 func menubarOnReady() {
@@ -124,7 +126,8 @@ func (m *menubarApp) refresh() {
 	m.rebuild(updatable, "")
 }
 
-// runCheck executes the shared discovery/check pipeline in-process.
+// runCheck executes the shared discovery/check pipeline in-process,
+// streaming progress into the menu's status line.
 func (m *menubarApp) runCheck(ctx context.Context) ([]*checker.UpdateResult, error) {
 	cfg, err := config.Load(config.DefaultPath())
 	if err != nil {
@@ -138,8 +141,19 @@ func (m *menubarApp) runCheck(ctx context.Context) ([]*checker.UpdateResult, err
 	}
 	apps = updater.FilterIgnored(apps, cfg)
 
+	m.mu.Lock()
+	m.appCount = len(apps)
+	progress := m.progressItem
+	m.mu.Unlock()
+
 	checkers := updater.BuildCheckers(runner, cfg.ResolveGitHubToken())
-	results := updater.CheckAll(ctx, apps, checkers, cfg.MaxConcurrentOrDefault())
+	var done int
+	results := updater.CheckAllProgress(ctx, apps, checkers, cfg.MaxConcurrentOrDefault(), func(*checker.UpdateResult) {
+		done++ // serialized by CheckAllProgress
+		if progress != nil && done%5 == 0 {
+			progress.SetTitle(fmt.Sprintf("%d of %d checked", done, len(apps)))
+		}
+	})
 
 	var updatable []*checker.UpdateResult
 	for _, r := range results {
@@ -176,7 +190,21 @@ func (m *menubarApp) notifyNewUpdates(updatable []*checker.UpdateResult) {
 }
 
 // rebuild replaces the entire menu. updatable is the current update list;
-// status, when non-empty, is shown as a disabled line instead of app items.
+// status, when non-empty, marks the checking/error state shown in the header.
+//
+// Layout (see the "Updater macOS App" Claude Design project):
+//
+//	<header: state>              "3 updates available" / "✓ Everything up to date"
+//	<subline>                    "197 apps · checked 14:32" / live progress
+//	---
+//	<app ▸ Update Now / Pin / Ignore>...
+//	---
+//	Update All (N)
+//	Check Now
+//	---
+//	Open Terminal UI
+//	Preferences ▸ (interval, Start at Login)
+//	Quit Updater
 func (m *menubarApp) rebuild(updatable []*checker.UpdateResult, status string) {
 	m.mu.Lock()
 	if m.genCancel != nil {
@@ -185,63 +213,139 @@ func (m *menubarApp) rebuild(updatable []*checker.UpdateResult, status string) {
 	gen, cancel := context.WithCancel(context.Background())
 	m.genCancel = cancel
 	lastCheck := m.lastCheck
+	appCount := m.appCount
 	m.mu.Unlock()
 
 	systray.ResetMenu()
 
-	checkNow := systray.AddMenuItem("Check Now", "Check for updates now")
-	onClick(gen, checkNow, func() { go m.refresh() })
-
-	if !lastCheck.IsZero() {
-		item := systray.AddMenuItem("Last checked: "+lastCheck.Format("15:04"), "")
-		item.Disable()
-	}
-	systray.AddSeparator()
-
+	// Header + subline.
+	checking := status != ""
+	var progress *systray.MenuItem
 	switch {
-	case status != "":
+	case checking:
 		systray.SetTitle("")
-		item := systray.AddMenuItem(status, "")
-		item.Disable()
+		systray.AddMenuItem(status, "").Disable()
+		progress = systray.AddMenuItem("starting…", "")
+		progress.Disable()
 	case len(updatable) == 0:
 		systray.SetTitle("")
-		item := systray.AddMenuItem("Everything up to date", "")
-		item.Disable()
+		systray.AddMenuItem("✓ Everything up to date", "").Disable()
 	default:
 		systray.SetTitle(fmt.Sprintf("%d", len(updatable)))
+		systray.AddMenuItem(fmt.Sprintf("%d update(s) available", len(updatable)), "").Disable()
+	}
+	if !checking && !lastCheck.IsZero() {
+		sub := fmt.Sprintf("%d apps · checked %s", appCount, lastCheck.Format("15:04"))
+		systray.AddMenuItem(sub, "").Disable()
+	}
+	m.mu.Lock()
+	m.progressItem = progress
+	m.mu.Unlock()
+
+	// Per-app entries with a submenu: Update Now / Pin / Ignore.
+	if len(updatable) > 0 {
+		systray.AddSeparator()
 		items := make([]*systray.MenuItem, len(updatable))
 		for i, r := range updatable {
 			label := fmt.Sprintf("%s  %s → %s", r.App.Name, r.CurrentVersion, r.LatestVersion)
-			items[i] = systray.AddMenuItem(label, "Update "+r.App.Name)
+			items[i] = systray.AddMenuItem(label, "")
 			r, item := r, items[i]
-			onClick(gen, item, func() {
+
+			update := item.AddSubMenuItem("Update Now", "Update "+r.App.Name)
+			onClick(gen, update, func() {
 				go func() {
 					m.runUpdate(r.App.Name, r.App.BundleID, item)
 					m.refresh()
 				}()
 			})
-		}
-		if len(updatable) > 1 {
-			all := systray.AddMenuItem(fmt.Sprintf("Update All (%d)", len(updatable)), "Update all listed apps")
-			onClick(gen, all, func() {
-				go func() {
-					all.Disable()
-					all.SetTitle("Updating…")
-					for i, r := range updatable {
-						m.runUpdate(r.App.Name, r.App.BundleID, items[i])
-					}
-					m.refresh()
-				}()
+			pin := item.AddSubMenuItem("Pin at "+r.CurrentVersion, "Skip updates until unpinned")
+			onClick(gen, pin, func() {
+				go m.mutateConfig(func(cfg *config.Config) { cfg.Pin(r.App.BundleID) })
+			})
+			ignore := item.AddSubMenuItem("Ignore This App", "Hide from update checks")
+			onClick(gen, ignore, func() {
+				go m.mutateConfig(func(cfg *config.Config) { cfg.Ignore(r.App.BundleID) })
 			})
 		}
+
+		systray.AddSeparator()
+		all := systray.AddMenuItem(fmt.Sprintf("Update All (%d)", len(updatable)), "Update all listed apps")
+		onClick(gen, all, func() {
+			go func() {
+				all.Disable()
+				all.SetTitle("Updating…")
+				for i, r := range updatable {
+					m.runUpdate(r.App.Name, r.App.BundleID, items[i])
+				}
+				m.refresh()
+			}()
+		})
+	} else {
+		systray.AddSeparator()
 	}
 
+	checkNow := systray.AddMenuItem("Check Now", "Check for updates now")
+	if checking {
+		checkNow.Disable()
+	}
+	onClick(gen, checkNow, func() { go m.refresh() })
+
 	systray.AddSeparator()
-	login := systray.AddMenuItemCheckbox("Start at Login", "Keep the menu bar app running via launchd", loginItemInstalled())
+
+	terminal := systray.AddMenuItem("Open Terminal UI", "Open the interactive updater TUI in Terminal")
+	onClick(gen, terminal, func() { go openTerminalUI() })
+
+	prefs := systray.AddMenuItem("Preferences", "")
+	interval := menubarCheckInterval()
+	for _, opt := range []struct {
+		label string
+		hours int
+	}{
+		{"Check Every Hour", 1},
+		{"Check Every 6 Hours", 6},
+		{"Check Daily", 24},
+	} {
+		opt := opt
+		item := prefs.AddSubMenuItemCheckbox(opt.label, "", interval == time.Duration(opt.hours)*time.Hour)
+		onClick(gen, item, func() {
+			go m.mutateConfig(func(cfg *config.Config) { cfg.ScheduleInterval = opt.hours })
+		})
+	}
+	login := prefs.AddSubMenuItemCheckbox("Start at Login", "Keep the menu bar app running via launchd", loginItemInstalled())
 	onClick(gen, login, func() { go toggleLoginItem(login) })
 
-	quit := systray.AddMenuItem("Quit", "Quit Updater")
+	quit := systray.AddMenuItem("Quit Updater", "")
 	onClick(gen, quit, systray.Quit)
+}
+
+// mutateConfig applies fn to a freshly loaded config, saves it, and rebuilds
+// the menu so the change is visible immediately.
+func (m *menubarApp) mutateConfig(fn func(*config.Config)) {
+	path := config.DefaultPath()
+	cfg, err := config.Load(path)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to load config: %v\n", err)
+		return
+	}
+	fn(cfg)
+	if err := cfg.Save(path); err != nil {
+		fmt.Fprintf(os.Stderr, "failed to save config: %v\n", err)
+		return
+	}
+	m.refresh()
+}
+
+// openTerminalUI opens the interactive TUI in Terminal using this same
+// binary (a terminal stdin routes the bundle executable to the CLI/TUI).
+func openTerminalUI() {
+	self, err := os.Executable()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "cannot locate own executable: %v\n", err)
+		return
+	}
+	if err := exec.Command("open", "-a", "Terminal", self).Run(); err != nil {
+		fmt.Fprintf(os.Stderr, "failed to open Terminal UI: %v\n", err)
+	}
 }
 
 // onClick invokes fn on every click until the menu generation is replaced.
