@@ -3,11 +3,13 @@ package updater
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/lu-zhengda/updater/internal/app"
 	"github.com/lu-zhengda/updater/internal/checker"
@@ -167,6 +169,43 @@ func DiscoverCargoCrates(ctx context.Context, runner checker.CmdRunner) ([]*app.
 	return apps, nil
 }
 
+// DiscoverAll runs the full discovery pipeline shared by every entry point
+// (CLI commands, TUI, menu bar app): disk apps plus brew formulae, npm
+// globals, uv tools, and cargo crates, followed by enrichment. Failures in
+// individual package-manager sources are non-fatal and reported through warn
+// (which may be nil). The returned apps are enriched but not filtered; apply
+// FilterIgnored as needed.
+func DiscoverAll(ctx context.Context, cfg *config.Config, runner checker.CmdRunner, warn func(source string, err error)) ([]*app.App, error) {
+	if warn == nil {
+		warn = func(string, error) {}
+	}
+
+	apps, err := DiscoverApps()
+	if err != nil {
+		return nil, err
+	}
+
+	sources := []struct {
+		name string
+		fn   func(context.Context, checker.CmdRunner) ([]*app.App, error)
+	}{
+		{"brew formulae", DiscoverBrewFormulae},
+		{"npm packages", DiscoverNpmPackages},
+		{"uv tools", DiscoverUvTools},
+		{"cargo crates", DiscoverCargoCrates},
+	}
+	for _, s := range sources {
+		extra, err := s.fn(ctx, runner)
+		if err != nil {
+			warn(s.name, err)
+			continue
+		}
+		apps = append(apps, extra...)
+	}
+
+	return EnrichApps(ctx, apps, cfg, runner)
+}
+
 // EnrichApps applies explicit source overrides, config mappings, and
 // cross-references with brew casks to enrich app metadata. It sets CaskName and
 // InstalledViaBrew, and probes brew info for eligible apps to discover
@@ -321,14 +360,17 @@ func FilterIgnored(apps []*app.App, cfg *config.Config) []*app.App {
 // BuildCheckers creates all checkers with their dependencies.
 // Order matters for fallthrough: most accurate first, broadest fallback last.
 func BuildCheckers(runner checker.CmdRunner, githubToken string) []checker.Checker {
+	// A shared client with a timeout so one hung feed server cannot stall an
+	// entire check run (http.DefaultClient never times out).
+	httpClient := &http.Client{Timeout: 30 * time.Second}
 	return []checker.Checker{
-		checker.NewSparkleChecker(nil),
+		checker.NewSparkleChecker(httpClient),
 		checker.NewBrewChecker(runner),
 		checker.NewMASChecker(runner),
-		checker.NewGitHubChecker(nil, "", githubToken),
+		checker.NewGitHubChecker(httpClient, "", githubToken),
 		checker.NewSystemChecker(runner),
 		checker.NewBrewFormulaChecker(runner),
-		checker.NewElectronChecker(nil),
+		checker.NewElectronChecker(httpClient),
 		checker.NewNpmChecker(runner),
 		checker.NewUvChecker(nil, ""),
 		checker.NewCargoChecker(nil, ""),

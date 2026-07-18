@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"os"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -58,33 +57,7 @@ func runUI(cmd *cobra.Command, _ []string) error {
 
 	// loadFn runs in the background — TUI launches instantly.
 	loadFn := func(ctx context.Context) (*tui.LoadResult, error) {
-		apps, err := discoverApps()
-		if err != nil {
-			return nil, err
-		}
-
-		formulaApps, fErr := discoverBrewFormulae(ctx, runner)
-		if fErr != nil {
-			fmt.Fprintf(os.Stderr, "warning: could not discover brew formulae: %v\n", fErr)
-		} else {
-			apps = append(apps, formulaApps...)
-		}
-
-		npmApps, nErr := discoverNpmPackages(ctx, runner)
-		if nErr != nil {
-			fmt.Fprintf(os.Stderr, "warning: could not discover npm packages: %v\n", nErr)
-		} else {
-			apps = append(apps, npmApps...)
-		}
-
-		uvApps, uErr := discoverUvTools(ctx, runner)
-		if uErr != nil {
-			fmt.Fprintf(os.Stderr, "warning: could not discover uv tools: %v\n", uErr)
-		} else {
-			apps = append(apps, uvApps...)
-		}
-
-		apps, err = enrichApps(ctx, apps, cfg, runner)
+		apps, err := discoverAll(ctx, cfg, runner)
 		if err != nil {
 			return nil, err
 		}

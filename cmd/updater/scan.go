@@ -34,31 +34,9 @@ func runScan(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to load config: %w", err)
 	}
 
-	apps, err := discoverApps()
-	if err != nil {
-		return err
-	}
-
 	runner := &checker.RealCmdRunner{}
-	var formulaApps []*app.App
-	formulaApps, fErr := discoverBrewFormulae(ctx, runner)
-	if fErr != nil {
-		fmt.Fprintf(os.Stderr, "warning: could not discover brew formulae: %v\n", fErr)
-	}
 
-	var npmApps []*app.App
-	npmApps, nErr := discoverNpmPackages(ctx, runner)
-	if nErr != nil {
-		fmt.Fprintf(os.Stderr, "warning: could not discover npm packages: %v\n", nErr)
-	}
-
-	var uvApps []*app.App
-	uvApps, uErr := discoverUvTools(ctx, runner)
-	if uErr != nil {
-		fmt.Fprintf(os.Stderr, "warning: could not discover uv tools: %v\n", uErr)
-	}
-
-	apps, err = loadScanApps(ctx, cfg, runner, apps, formulaApps, npmApps, uvApps)
+	apps, err := discoverAll(ctx, cfg, runner)
 	if err != nil {
 		return err
 	}

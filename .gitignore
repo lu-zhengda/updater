@@ -19,3 +19,8 @@ completions/
 
 # Plans / docs drafts
 docs/plans/
+plans/
+
+# Local scratch
+.tmp/
+.firecrawl/

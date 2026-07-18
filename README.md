@@ -125,6 +125,31 @@ updater schedule --interval 24
 updater schedule --remove
 ```
 
+## Menu Bar App
+
+`updater-menubar` is a companion menu bar agent. It periodically runs the same
+discovery/check pipeline as the CLI, shows an update count in the menu bar,
+posts a macOS notification when new updates appear, and lets you update a
+single app or everything from the dropdown (updates delegate to the `updater`
+CLI, so backups/history behave identically).
+
+```sh
+# Build both binaries
+make build-menubar
+
+# Run it directly
+./updater-menubar
+
+# Keep it running at login (installs a launchd LaunchAgent)
+updater menubar
+# Remove the LaunchAgent
+updater menubar --remove
+```
+
+The dropdown also has a "Start at Login" toggle that manages the same
+LaunchAgent. The check interval follows `schedule_interval` from the config
+(same setting used by `updater schedule`).
+
 ## Configuration
 
 Config file path:

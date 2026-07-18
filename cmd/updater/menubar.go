@@ -43,7 +43,10 @@ const menubarPlistTemplate = `<?xml version="1.0" encoding="UTF-8"?>
 		<string>{{.Binary}}</string>
 	</array>
 	<key>KeepAlive</key>
-	<true/>
+	<dict>
+		<key>SuccessfulExit</key>
+		<false/>
+	</dict>
 	<key>RunAtLoad</key>
 	<true/>
 	<key>StandardOutPath</key>

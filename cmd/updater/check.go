@@ -43,42 +43,9 @@ func runCheck(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to load config: %w", err)
 	}
 
-	apps, err := discoverApps()
-	if err != nil {
-		return err
-	}
-
 	runner := &checker.RealCmdRunner{}
 
-	formulaApps, err := discoverBrewFormulae(ctx, runner)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "warning: could not discover brew formulae: %v\n", err)
-	} else {
-		apps = append(apps, formulaApps...)
-	}
-
-	npmApps, err := discoverNpmPackages(ctx, runner)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "warning: could not discover npm packages: %v\n", err)
-	} else {
-		apps = append(apps, npmApps...)
-	}
-
-	uvApps, err := discoverUvTools(ctx, runner)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "warning: could not discover uv tools: %v\n", err)
-	} else {
-		apps = append(apps, uvApps...)
-	}
-
-	cargoApps, err := discoverCargoCrates(ctx, runner)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "warning: could not discover cargo crates: %v\n", err)
-	} else {
-		apps = append(apps, cargoApps...)
-	}
-
-	apps, err = enrichApps(ctx, apps, cfg, runner)
+	apps, err := discoverAll(ctx, cfg, runner)
 	if err != nil {
 		return err
 	}
@@ -120,6 +87,14 @@ func runCheck(cmd *cobra.Command, args []string) error {
 
 func discoverApps() ([]*app.App, error) {
 	return updater.DiscoverApps()
+}
+
+// discoverAll runs the full shared discovery pipeline, printing non-fatal
+// source warnings to stderr.
+func discoverAll(ctx context.Context, cfg *config.Config, runner checker.CmdRunner) ([]*app.App, error) {
+	return updater.DiscoverAll(ctx, cfg, runner, func(source string, err error) {
+		fmt.Fprintf(os.Stderr, "warning: could not discover %s: %v\n", source, err)
+	})
 }
 
 func discoverBrewFormulae(ctx context.Context, runner checker.CmdRunner) ([]*app.App, error) {

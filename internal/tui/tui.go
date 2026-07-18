@@ -66,7 +66,7 @@ type row struct {
 }
 
 // sourceFilterCycle defines the order in which the source filter cycles.
-var sourceFilterCycle = []string{"", "sparkle", "brew", "github", "mas", "system", "formula", "electron"}
+var sourceFilterCycle = []string{"", "sparkle", "brew", "github", "mas", "system", "formula", "electron", "npm", "uv", "cargo"}
 
 // Messages sent by background operations.
 type loadDoneMsg struct {
