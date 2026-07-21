@@ -32,5 +32,8 @@ jobs:
           name: coverage
           path: coverage.out
 
-      - name: Build
-        run: go build ./cmd/updater
+      - name: Build and verify app bundle
+        run: |
+          make app
+          codesign --verify --deep --strict --verbose=2 Updater.app
+          codesign -dvv Updater.app 2>&1 | grep -F "Identifier=com.updater.app"

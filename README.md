@@ -167,6 +167,20 @@ make app          # produces ./Updater.app
 make install-app  # copies it to /Applications and launches it
 ```
 
+Local app bundles are ad-hoc signed as a complete bundle. To preserve macOS
+privacy and filesystem grants across rebuilt versions, sign with an
+Apple-issued identity:
+
+```sh
+MACOS_SIGNING_IDENTITY="Apple Development: Your Name (TEAMID)" make app
+```
+
+Release builds require a Developer ID Application certificate. Export it as a
+password-protected `.p12` and configure these GitHub Actions secrets:
+
+- `MACOS_CERTIFICATE_P12_BASE64` — base64-encoded `.p12` contents
+- `MACOS_CERTIFICATE_PASSWORD` — the `.p12` export password
+
 ## Configuration
 
 Config file path:

@@ -34,6 +34,44 @@ jobs:
           go run ./cmd/updater completion zsh > completions/updater.zsh
           go run ./cmd/updater completion fish > completions/updater.fish
 
+      - name: Import Developer ID certificate
+        env:
+          MACOS_CERTIFICATE_P12_BASE64: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          if [[ -z "$MACOS_CERTIFICATE_P12_BASE64" || -z "$MACOS_CERTIFICATE_PASSWORD" ]]; then
+            echo "Developer ID signing secrets are required for release builds" >&2
+            exit 1
+          fi
+
+          certificate_path="$RUNNER_TEMP/developer-id.p12"
+          keychain_path="$RUNNER_TEMP/updater-signing.keychain-db"
+          keychain_password="updater-ci-temporary-keychain"
+
+          printf '%s' "$MACOS_CERTIFICATE_P12_BASE64" | base64 --decode > "$certificate_path"
+          security create-keychain -p "$keychain_password" "$keychain_path"
+          security set-keychain-settings -lut 21600 "$keychain_path"
+          security unlock-keychain -p "$keychain_password" "$keychain_path"
+          security import "$certificate_path" \
+            -k "$keychain_path" \
+            -P "$MACOS_CERTIFICATE_PASSWORD" \
+            -T /usr/bin/codesign
+          security set-key-partition-list \
+            -S apple-tool:,apple:,codesign: \
+            -s \
+            -k "$keychain_password" \
+            "$keychain_path"
+          security list-keychains -d user -s "$keychain_path"
+
+          signing_identity="$(security find-identity -v -p codesigning "$keychain_path" | grep -m1 -o 'Developer ID Application: [^"]*')" || true
+          if [[ -z "$signing_identity" ]]; then
+            echo "The imported certificate does not contain a Developer ID Application identity" >&2
+            exit 1
+          fi
+          echo "MACOS_SIGNING_IDENTITY=$signing_identity" >> "$GITHUB_ENV"
+
       - uses: goreleaser/goreleaser-action@v6
         with:
           version: "~> v2"
