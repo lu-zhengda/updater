@@ -24,3 +24,4 @@ plans/
 # Local scratch
 .tmp/
 .firecrawl/
+/AGENTS.local.md
