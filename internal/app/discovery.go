@@ -200,7 +200,7 @@ func enrichElectronApp(contentsDir string, a *App) {
 			a.Source = SourceGitHub
 		}
 	case "generic":
-		if cfg.URL != "" && (strings.HasPrefix(cfg.URL, "http://") || strings.HasPrefix(cfg.URL, "https://")) {
+		if strings.HasPrefix(cfg.URL, "https://") {
 			a.ElectronUpdateURL = cfg.URL
 		}
 	}

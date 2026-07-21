@@ -87,7 +87,8 @@ func runNotify(cmd *cobra.Command, _ []string) error {
 	}
 
 	updated, failed := []string{}, []string{}
-	if flagAutoUpdate {
+	autoUpdateEnabled := flagAutoUpdate && cfg.ScheduledAutoUpdate
+	if autoUpdateEnabled {
 		updated, failed = autoUpdateAfterNotify(ctx, cfg, updatable)
 	}
 
@@ -95,7 +96,7 @@ func runNotify(cmd *cobra.Command, _ []string) error {
 		return writeJSON(cmd, map[string]any{
 			"updates_available": len(updatable),
 			"interactive":       flagInteractive || cfg.InteractiveNotifications,
-			"auto_update":       flagAutoUpdate,
+			"auto_update":       autoUpdateEnabled,
 			"updated":           updated,
 			"failed":            failed,
 			"notified":          true,

@@ -1,10 +1,13 @@
 package main
 
 import (
+	"archive/tar"
+	"compress/gzip"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -30,6 +33,62 @@ func TestIsBrewInstall(t *testing.T) {
 				t.Errorf("isBrewInstall(%q) = %v, want %v", tt.path, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestChecksumForAsset(t *testing.T) {
+	want := strings.Repeat("a", 64)
+	data := []byte(want + "  updater_1.2.3_darwin.tar.gz\n")
+	got, err := checksumForAsset(data, "updater_1.2.3_darwin.tar.gz")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Fatalf("checksum = %q, want %q", got, want)
+	}
+}
+
+func TestExtractUpdaterBinary(t *testing.T) {
+	archivePath := filepath.Join(t.TempDir(), "release.tar.gz")
+	archive, err := os.Create(archivePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gz := gzip.NewWriter(archive)
+	tw := tar.NewWriter(gz)
+	payload := []byte("signed updater")
+	if err := tw.WriteHeader(&tar.Header{Name: "updater", Mode: 0o755, Size: int64(len(payload)), Typeflag: tar.TypeReg}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tw.Write(payload); err != nil {
+		t.Fatal(err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := archive.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	dst, err := os.CreateTemp(t.TempDir(), "candidate-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := extractUpdaterBinary(archivePath, dst); err != nil {
+		t.Fatal(err)
+	}
+	if err := dst.Close(); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(dst.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(payload) {
+		t.Fatalf("extracted payload = %q", got)
 	}
 }
 

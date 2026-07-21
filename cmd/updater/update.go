@@ -330,7 +330,7 @@ func executeUpdate(ctx context.Context, r *checker.UpdateResult, runner checker.
 		// Try direct install if installer is available.
 		if inst != nil && r.App.Path != "" {
 			wasRunning := quitAppIfRunning(ctx, r.App, runner)
-			err := inst.Install(ctx, r.DownloadURL, r.App.Path, r.App.Name)
+			err := inst.Install(ctx, r.DownloadURL, r.App.Path, r.App.Name, r.DownloadDigest)
 			if err == nil {
 				if wasRunning {
 					fmt.Printf("  Reopening %s...\n", r.App.Name)
@@ -339,7 +339,14 @@ func executeUpdate(ctx context.Context, r *checker.UpdateResult, runner checker.
 				return nil, false
 			}
 			// Attempt rollback on failed direct install.
-			rolledBack := rollbackAfterFailedInstall(ctx, bm, r.App.Name)
+			rolledBack := false
+			mayRequireRollback := installer.MayRequireRollback(err)
+			if mayRequireRollback {
+				rolledBack = rollbackAfterFailedInstall(ctx, bm, r.App.Name)
+			}
+			if wasRunning && (!mayRequireRollback || rolledBack) {
+				_, _ = runner.Run(ctx, "open", "-a", r.App.Path)
+			}
 			fmt.Fprintf(os.Stderr, "  direct install failed, falling back to browser: %v\n", err)
 			if rolledBack {
 				return err, true
@@ -357,7 +364,7 @@ func executeUpdate(ctx context.Context, r *checker.UpdateResult, runner checker.
 		// Try direct install from ElectronUpdateURL if available.
 		if r.DownloadURL != "" && inst != nil && r.App.Path != "" {
 			wasRunning := quitAppIfRunning(ctx, r.App, runner)
-			err := inst.Install(ctx, r.DownloadURL, r.App.Path, r.App.Name)
+			err := inst.Install(ctx, r.DownloadURL, r.App.Path, r.App.Name, r.DownloadDigest)
 			if err == nil {
 				if wasRunning {
 					fmt.Printf("  Reopening %s...\n", r.App.Name)
@@ -366,7 +373,14 @@ func executeUpdate(ctx context.Context, r *checker.UpdateResult, runner checker.
 				return nil, false
 			}
 			// Attempt rollback on failed direct install.
-			rolledBack := rollbackAfterFailedInstall(ctx, bm, r.App.Name)
+			rolledBack := false
+			mayRequireRollback := installer.MayRequireRollback(err)
+			if mayRequireRollback {
+				rolledBack = rollbackAfterFailedInstall(ctx, bm, r.App.Name)
+			}
+			if wasRunning && (!mayRequireRollback || rolledBack) {
+				_, _ = runner.Run(ctx, "open", "-a", r.App.Path)
+			}
 			fmt.Fprintf(os.Stderr, "  direct install failed, opening app for self-update: %v\n", err)
 			if rolledBack {
 				return err, true

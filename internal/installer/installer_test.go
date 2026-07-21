@@ -2,6 +2,7 @@ package installer
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -58,11 +59,22 @@ func TestFilenameFromResponse(t *testing.T) {
 			if tt.contentDisp != "" {
 				resp.Header.Set("Content-Disposition", tt.contentDisp)
 			}
-			got := filenameFromResponse(resp, tt.url)
+			got, err := filenameFromResponse(resp, tt.url)
+			if err != nil {
+				t.Fatalf("filenameFromResponse() error: %v", err)
+			}
 			if got != tt.want {
 				t.Errorf("filenameFromResponse() = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestFilenameFromResponseRejectsTraversal(t *testing.T) {
+	resp := &http.Response{Header: http.Header{}}
+	resp.Header.Set("Content-Disposition", `attachment; filename="../../outside.dmg"`)
+	if _, err := filenameFromResponse(resp, "https://example.com/download"); err == nil {
+		t.Fatal("expected traversal filename to be rejected")
 	}
 }
 
@@ -159,7 +171,7 @@ func TestDownload(t *testing.T) {
 	inst := New(runner, ts.Client())
 
 	tmpDir := t.TempDir()
-	path, err := inst.download(context.Background(), ts.URL+"/download", tmpDir)
+	path, err := inst.download(context.Background(), ts.URL+"/download", tmpDir, "")
 	if err != nil {
 		t.Fatalf("download failed: %v", err)
 	}
@@ -185,9 +197,40 @@ func TestDownload_HTTPError(t *testing.T) {
 	defer ts.Close()
 
 	inst := New(&checker.MockCmdRunner{}, ts.Client())
-	_, err := inst.download(context.Background(), ts.URL+"/missing", t.TempDir())
+	_, err := inst.download(context.Background(), ts.URL+"/missing", t.TempDir(), "")
 	if err == nil {
 		t.Fatal("expected error for 404")
+	}
+}
+
+func TestDownloadRejectsInsecureRedirect(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "http://example.com/update.dmg", http.StatusFound)
+	}))
+	defer ts.Close()
+
+	inst := New(&checker.MockCmdRunner{}, ts.Client())
+	_, err := inst.download(context.Background(), ts.URL, t.TempDir(), "")
+	if err == nil || !strings.Contains(err.Error(), "URL must use HTTPS") {
+		t.Fatalf("expected insecure redirect rejection, got %v", err)
+	}
+}
+
+func TestDownload_VerifiesDigest(t *testing.T) {
+	payload := []byte("verified payload")
+	sum := sha256.Sum256(payload)
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Disposition", `attachment; filename="test.zip"`)
+		_, _ = w.Write(payload)
+	}))
+	defer ts.Close()
+
+	inst := New(&checker.MockCmdRunner{}, ts.Client())
+	if _, err := inst.download(context.Background(), ts.URL, t.TempDir(), fmt.Sprintf("sha256:%x", sum)); err != nil {
+		t.Fatalf("expected matching digest: %v", err)
+	}
+	if _, err := inst.download(context.Background(), ts.URL, t.TempDir(), "sha256:"+strings.Repeat("0", 64)); err == nil {
+		t.Fatal("expected digest mismatch")
 	}
 }
 
@@ -214,7 +257,7 @@ func TestInstallFormatDetection(t *testing.T) {
 	inst := New(runner, ts.Client())
 
 	// Unsupported format should error.
-	err := inst.Install(context.Background(), ts.URL+"/app.exe", "/Applications/Test.app", "Test")
+	err := inst.Install(context.Background(), ts.URL+"/app.exe", "/Applications/Test.app", "Test", "")
 	if err == nil {
 		t.Fatal("expected error for unsupported format")
 	}
@@ -238,13 +281,13 @@ func TestInstallDMG_Success(t *testing.T) {
 			"ls " + mountPoint: {
 				Output: []byte("TestApp.app\nREADME.txt\n"),
 			},
-			fmt.Sprintf("xattr -rd com.apple.quarantine %s", filepath.Join(mountPoint, "TestApp.app")): {},
 			fmt.Sprintf("cp -a %s %s", filepath.Join(mountPoint, "TestApp.app"), "/Applications/TestApp.app"): {},
-			"hdiutil detach " + mountPoint + " -quiet": {},
+			"hdiutil detach " + mountPoint + " -quiet":                                                        {},
 		},
 	}
 
 	inst := New(runner, nil)
+	inst.verifier = allowVerifier{}
 	err := inst.installDMG(context.Background(), dmgPath, "/Applications/TestApp.app", "TestApp")
 	if err != nil {
 		t.Fatalf("installDMG failed: %v", err)
@@ -341,6 +384,7 @@ func TestInstallZIP_Success(t *testing.T) {
 	runner := &installZIPMockRunner{appName: "TestApp"}
 
 	inst := New(runner, nil)
+	inst.verifier = allowVerifier{}
 	err := inst.installZIP(context.Background(), zipPath, "/Applications/TestApp.app", "TestApp")
 	if err != nil {
 		t.Fatalf("installZIP failed: %v", err)
@@ -394,7 +438,8 @@ func TestInstallPKG_Success(t *testing.T) {
 	}
 
 	inst := New(runner, nil)
-	err := inst.installPKG(context.Background(), pkgPath)
+	inst.verifier = allowVerifier{}
+	err := inst.installPKG(context.Background(), pkgPath, "/Applications/Test.app")
 	if err != nil {
 		t.Fatalf("installPKG failed: %v", err)
 	}
@@ -415,7 +460,8 @@ func TestInstallPKG_Fails(t *testing.T) {
 	}
 
 	inst := New(runner, nil)
-	err := inst.installPKG(context.Background(), pkgPath)
+	inst.verifier = allowVerifier{}
+	err := inst.installPKG(context.Background(), pkgPath, "/Applications/Test.app")
 	if err == nil {
 		t.Fatal("expected error when PKG install fails")
 	}
@@ -425,9 +471,23 @@ func TestInstallPKG_Fails(t *testing.T) {
 }
 
 // installZIPMockRunner handles the dynamic tmpDir that installZIP creates internally.
-// It responds to ditto (no-op success), ls (returns appName.app), and cp/xattr (no-op).
+// It responds to ditto (no-op success), ls (returns appName.app), and cp (no-op).
 type installZIPMockRunner struct {
 	appName string
+}
+
+type allowVerifier struct{}
+
+func (allowVerifier) VerifyReplacementApp(context.Context, string, string) error   { return nil }
+func (allowVerifier) VerifyInstallerPackage(context.Context, string, string) error { return nil }
+
+type rejectVerifier struct{}
+
+func (rejectVerifier) VerifyReplacementApp(context.Context, string, string) error {
+	return fmt.Errorf("identity mismatch")
+}
+func (rejectVerifier) VerifyInstallerPackage(context.Context, string, string) error {
+	return fmt.Errorf("identity mismatch")
 }
 
 func (r *installZIPMockRunner) Run(_ context.Context, name string, args ...string) ([]byte, error) {
@@ -436,7 +496,7 @@ func (r *installZIPMockRunner) Run(_ context.Context, name string, args ...strin
 		return nil, nil
 	case "ls":
 		return []byte(r.appName + ".app\n"), nil
-	case "cp", "xattr":
+	case "cp":
 		return nil, nil
 	}
 	return nil, nil
@@ -503,5 +563,36 @@ func TestReplaceAppReplacesExistingBundle(t *testing.T) {
 	}
 	if _, err := os.Stat(dst + ".updater-staging"); !os.IsNotExist(err) {
 		t.Error("staging directory was left behind")
+	}
+}
+
+func TestVerificationFailureDoesNotRequireRollback(t *testing.T) {
+	dmgPath := filepath.Join(t.TempDir(), "test.dmg")
+	if err := os.WriteFile(dmgPath, []byte("fake"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	mountPoint := "/Volumes/TestApp"
+	runner := &checker.MultiMockCmdRunner{Responses: map[string]checker.MockResponse{
+		fmt.Sprintf("hdiutil attach -nobrowse -plist %s", dmgPath): {Output: []byte(mountPoint + "\n")},
+		"ls " + mountPoint: {Output: []byte("TestApp.app\n")},
+	}}
+	inst := New(runner, nil)
+	inst.verifier = rejectVerifier{}
+	err := inst.installDMG(context.Background(), dmgPath, "/Applications/TestApp.app", "TestApp")
+	if err == nil || !strings.Contains(err.Error(), "security verification") {
+		t.Fatalf("expected security verification error, got %v", err)
+	}
+	if MayRequireRollback(err) {
+		t.Fatal("verification failure must not trigger rollback of the healthy installed app")
+	}
+}
+
+func TestMayRequireRollback(t *testing.T) {
+	if MayRequireRollback(fmt.Errorf("download failed")) {
+		t.Fatal("ordinary pre-install errors must not request rollback")
+	}
+	err := &installError{err: fmt.Errorf("move failed"), mayHaveModified: true}
+	if !MayRequireRollback(err) {
+		t.Fatal("post-mutation install error must request rollback")
 	}
 }

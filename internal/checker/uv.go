@@ -32,9 +32,7 @@ type UvChecker struct {
 // If client is nil, a client with a 10s timeout is used.
 // If pypiBaseURL is empty, DefaultPyPIBaseURL is used.
 func NewUvChecker(client *http.Client, pypiBaseURL string) *UvChecker {
-	if client == nil {
-		client = &http.Client{Timeout: 10 * time.Second}
-	}
+	client = hardenedHTTPClient(client, 10*time.Second)
 	if pypiBaseURL == "" {
 		pypiBaseURL = DefaultPyPIBaseURL
 	}
@@ -74,6 +72,9 @@ func (u *UvChecker) fetchLatestVersion(ctx context.Context, pkg string) (string,
 	u.mu.Unlock()
 
 	url := fmt.Sprintf("%s/%s/json", strings.TrimRight(u.pypiBaseURL, "/"), pkg)
+	if err := validateHTTPSURL(url); err != nil {
+		return "", fmt.Errorf("refusing insecure PyPI URL for %s: %w", pkg, err)
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return "", fmt.Errorf("failed to create PyPI request for %s: %w", pkg, err)
@@ -85,13 +86,20 @@ func (u *UvChecker) fetchLatestVersion(ctx context.Context, pkg string) (string,
 		return "", fmt.Errorf("failed to fetch PyPI metadata for %s: %w", pkg, err)
 	}
 	defer resp.Body.Close()
+	if err := validateHTTPSURL(resp.Request.URL.String()); err != nil {
+		return "", fmt.Errorf("PyPI metadata redirected to an insecure URL for %s: %w", pkg, err)
+	}
 
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("failed to fetch PyPI metadata for %s: status %d", pkg, resp.StatusCode)
 	}
 
+	data, err := readMetadataResponse(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("failed to read PyPI metadata for %s: %w", pkg, err)
+	}
 	var body pypiResponse
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+	if err := json.Unmarshal(data, &body); err != nil {
 		return "", fmt.Errorf("failed to parse PyPI metadata for %s: %w", pkg, err)
 	}
 	if body.Info.Version == "" {

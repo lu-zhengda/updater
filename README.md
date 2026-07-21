@@ -67,12 +67,12 @@ updater
 
 | Source | How updates are checked | Update behavior |
 | --- | --- | --- |
-| Sparkle | Appcast feed from app metadata | Direct DMG/ZIP/PKG install when possible, otherwise opens download URL |
+| Sparkle | HTTPS appcast feed from app metadata | Installs only notarized updates matching the installed app's bundle and Developer Team identity; otherwise opens download URL |
 | Homebrew cask | `brew outdated --cask --greedy --json` | `brew upgrade --cask <token>` |
 | Homebrew formula | `brew outdated --formula --json` | `brew upgrade <formula>` |
 | Mac App Store | `mas outdated` | `mas upgrade <id>` or opens App Store updates |
-| GitHub Releases | GitHub Releases API | Direct install when possible, otherwise opens release asset URL |
-| Electron generic | `latest-mac.yml` from update server | Direct install when possible, otherwise opens app |
+| GitHub Releases | GitHub Releases API | Verifies release digest and Apple identity before direct install; otherwise opens release asset URL |
+| Electron generic | HTTPS `latest-mac.yml` from update server | Verifies SHA-512 and Apple identity before direct install; otherwise opens app |
 | Brew-info fallback | `brew info --cask --json=v2` | If brew-installed: `brew upgrade --cask`; otherwise opens app |
 | npm globals | `npm outdated -g --json` | `npm install -g <pkg>@latest` |
 | uv tools | `uv tool list` + PyPI JSON | `uv tool upgrade <tool>` |
@@ -130,6 +130,7 @@ Automation:
 
 ```sh
 updater schedule --interval 24
+updater schedule --interval 24 --auto-update  # explicit opt-in
 updater schedule --remove
 ```
 
@@ -175,12 +176,6 @@ Apple-issued identity:
 MACOS_SIGNING_IDENTITY="Apple Development: Your Name (TEAMID)" make app
 ```
 
-Release builds require a Developer ID Application certificate. Export it as a
-password-protected `.p12` and configure these GitHub Actions secrets:
-
-- `MACOS_CERTIFICATE_P12_BASE64` — base64-encoded `.p12` contents
-- `MACOS_CERTIFICATE_PASSWORD` — the `.p12` export password
-
 ## Configuration
 
 Config file path:
@@ -209,7 +204,6 @@ github_mappings:
 cask_mappings:
   com.readdle.PDFExpert-Mac: "pdf-expert"
 
-github_token: "ghp_..."
 max_concurrent: 10
 max_backups: 1
 interactive_notifications: true
@@ -217,7 +211,7 @@ interactive_notifications: true
 
 Notes:
 
-- `GITHUB_TOKEN` environment variable overrides `github_token`.
+- Set `GITHUB_TOKEN` in the environment when authenticated GitHub API access is needed. A legacy `github_token` config value is still accepted, but the config is stored with owner-only permissions.
 - `cask_mappings` are only needed when automatic cask token detection is wrong.
 - Use `updater config export` and `updater config import <file>` to move config between machines.
 
@@ -226,6 +220,8 @@ Notes:
 - `--dry-run` prints the exact planned actions without making changes.
 - Backups are created before install-based updates when app paths are available.
 - Failed direct installs attempt automatic rollback from backup.
+- Downloaded apps must be valid, notarized, and match the installed bundle ID and Developer Team ID. Installer packages must be notarized and signed by that same team.
+- Scheduled checks notify only; unattended installation requires `schedule --auto-update`.
 - Pinned apps are skipped in `update --all`.
 - `policy` lets you force per-app behavior (`auto`, `manual`, `notify-only`).
 

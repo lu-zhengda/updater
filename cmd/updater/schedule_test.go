@@ -1,8 +1,11 @@
 package main
 
 import (
+	"context"
 	"strings"
 	"testing"
+
+	"github.com/lu-zhengda/updater/internal/checker"
 )
 
 func TestSchedulePlistPath(t *testing.T) {
@@ -70,5 +73,53 @@ func TestRenderPlist_DifferentInterval(t *testing.T) {
 
 	if !strings.Contains(content, "<integer>3600</integer>") {
 		t.Error("expected 3600 second interval")
+	}
+}
+
+func TestRenderPlist_AutoUpdateIsOptIn(t *testing.T) {
+	base := plistData{
+		Label:           "com.updater.check",
+		Binary:          "/opt/updater",
+		IntervalSeconds: 3600,
+		LogPath:         "/tmp/log",
+	}
+	content, err := renderPlist(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(content, "--auto-update") {
+		t.Fatal("scheduled checks must not auto-update unless explicitly enabled")
+	}
+
+	base.AutoUpdate = true
+	content, err = renderPlist(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(content, "--auto-update") {
+		t.Fatal("expected --auto-update for explicit opt-in")
+	}
+}
+
+func TestRenderPlistEscapesPaths(t *testing.T) {
+	content, err := renderPlist(plistData{
+		Label:           plistLabel,
+		Binary:          "/Applications/A&B/updater",
+		IntervalSeconds: 3600,
+		LogPath:         "/tmp/<updater>.log",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(content, "A&amp;B") || !strings.Contains(content, "&lt;updater&gt;") {
+		t.Fatalf("expected XML-escaped paths, got %s", content)
+	}
+}
+
+func TestInstallScheduleRejectsInvalidInterval(t *testing.T) {
+	for _, hours := range []int{0, -1, 8761} {
+		if err := installScheduleCore(context.Background(), &checker.MockCmdRunner{}, hours, false); err == nil {
+			t.Fatalf("expected interval %d to be rejected", hours)
+		}
 	}
 }

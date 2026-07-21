@@ -273,7 +273,7 @@ func TestGitHubChecker_FindMacAsset(t *testing.T) {
 			want: "https://example.com/macos.zip",
 		},
 		{
-			name:   "no mac asset",
+			name: "no mac asset",
 			assets: []GitHubAsset{
 				{Name: "app-linux.tar.gz", DownloadURL: "https://example.com/linux.tar.gz"},
 			},
@@ -289,8 +289,8 @@ func TestGitHubChecker_FindMacAsset(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := findMacAsset(tt.assets)
-			if got != tt.want {
-				t.Errorf("findMacAsset() = %s, want %s", got, tt.want)
+			if got.DownloadURL != tt.want {
+				t.Errorf("findMacAsset() = %s, want %s", got.DownloadURL, tt.want)
 			}
 		})
 	}

@@ -2,40 +2,74 @@ package installer
 
 import (
 	"context"
+	"crypto/sha256"
+	"crypto/sha512"
+	"crypto/subtle"
+	"encoding/base64"
+	"encoding/hex"
+	"errors"
 	"fmt"
+	"hash"
 	"io"
+	"mime"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/lu-zhengda/updater/internal/checker"
+	"github.com/lu-zhengda/updater/internal/signing"
 )
+
+const maxDownloadSize int64 = 4 << 30 // 4 GiB
+
+type artifactVerifier interface {
+	VerifyReplacementApp(context.Context, string, string) error
+	VerifyInstallerPackage(context.Context, string, string) error
+}
+
+type installError struct {
+	err             error
+	mayHaveModified bool
+}
+
+func (e *installError) Error() string { return e.err.Error() }
+func (e *installError) Unwrap() error { return e.err }
+
+// MayRequireRollback reports whether a failed install reached a point where
+// the existing app may have been modified. Download, extraction, and security
+// verification failures return false and must not touch a healthy app.
+func MayRequireRollback(err error) bool {
+	var installErr *installError
+	return errors.As(err, &installErr) && installErr.mayHaveModified
+}
 
 // Installer downloads and installs macOS app updates.
 type Installer struct {
-	runner checker.CmdRunner
-	client *http.Client
+	runner   checker.CmdRunner
+	client   *http.Client
+	verifier artifactVerifier
 }
 
 // New creates a new Installer.
 func New(runner checker.CmdRunner, client *http.Client) *Installer {
-	if client == nil {
-		client = http.DefaultClient
-	}
-	return &Installer{runner: runner, client: client}
+	client = secureDownloadClientWith(client)
+	return &Installer{runner: runner, client: client, verifier: signing.NewVerifier()}
 }
 
 // Install downloads the update from downloadURL and installs it, replacing the
 // app at appPath. The format is detected from the URL or Content-Disposition header.
-func (inst *Installer) Install(ctx context.Context, downloadURL, appPath, appName string) error {
+func (inst *Installer) Install(ctx context.Context, downloadURL, appPath, appName, expectedDigest string) error {
 	tmpDir, err := os.MkdirTemp("", "updater-install-*")
 	if err != nil {
 		return fmt.Errorf("failed to create temp dir: %w", err)
 	}
 	defer os.RemoveAll(tmpDir)
 
-	localPath, err := inst.download(ctx, downloadURL, tmpDir)
+	localPath, err := inst.download(ctx, downloadURL, tmpDir, expectedDigest)
 	if err != nil {
 		return err
 	}
@@ -47,7 +81,7 @@ func (inst *Installer) Install(ctx context.Context, downloadURL, appPath, appNam
 	case ".zip":
 		return inst.installZIP(ctx, localPath, appPath, appName)
 	case ".pkg":
-		return inst.installPKG(ctx, localPath)
+		return inst.installPKG(ctx, localPath, appPath)
 	default:
 		return fmt.Errorf("unsupported file format: %s", ext)
 	}
@@ -55,8 +89,11 @@ func (inst *Installer) Install(ctx context.Context, downloadURL, appPath, appNam
 
 // download fetches a URL to a local file in destDir.
 // Returns the local file path. Uses Content-Disposition for filename if available.
-func (inst *Installer) download(ctx context.Context, url, destDir string) (string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+func (inst *Installer) download(ctx context.Context, rawURL, destDir, expectedDigest string) (string, error) {
+	if err := validateSecureURL(rawURL); err != nil {
+		return "", err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
 		return "", fmt.Errorf("failed to create download request: %w", err)
 	}
@@ -70,52 +107,86 @@ func (inst *Installer) download(ctx context.Context, url, destDir string) (strin
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("download failed: status %d", resp.StatusCode)
 	}
+	if err := validateSecureURL(resp.Request.URL.String()); err != nil {
+		return "", fmt.Errorf("download redirected to an insecure URL: %w", err)
+	}
+	if resp.ContentLength > maxDownloadSize {
+		return "", fmt.Errorf("download is too large: %d bytes exceeds %d-byte limit", resp.ContentLength, maxDownloadSize)
+	}
 
 	// Determine filename from Content-Disposition or URL path.
-	filename := filenameFromResponse(resp, url)
+	filename, err := filenameFromResponse(resp, rawURL)
+	if err != nil {
+		return "", err
+	}
 	localPath := filepath.Join(destDir, filename)
+	if err := ensureContainedPath(destDir, localPath); err != nil {
+		return "", err
+	}
 
-	f, err := os.Create(localPath)
+	f, err := os.OpenFile(localPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		return "", fmt.Errorf("failed to create file: %w", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
-	if _, err := io.Copy(f, resp.Body); err != nil {
+	hasher, err := digestHasher(expectedDigest)
+	if err != nil {
+		_ = os.Remove(localPath)
+		return "", err
+	}
+	var writer io.Writer = f
+	if hasher != nil {
+		writer = io.MultiWriter(f, hasher)
+	}
+	written, err := io.Copy(writer, io.LimitReader(resp.Body, maxDownloadSize+1))
+	if err != nil {
+		_ = os.Remove(localPath)
 		return "", fmt.Errorf("failed to write download: %w", err)
+	}
+	if written > maxDownloadSize {
+		_ = os.Remove(localPath)
+		return "", fmt.Errorf("download exceeds %d-byte limit", maxDownloadSize)
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(localPath)
+		return "", fmt.Errorf("failed to close download: %w", err)
+	}
+	if err := verifyDigest(expectedDigest, hasher); err != nil {
+		_ = os.Remove(localPath)
+		return "", err
 	}
 
 	return localPath, nil
 }
 
 // filenameFromResponse extracts the filename from the response headers or URL.
-func filenameFromResponse(resp *http.Response, url string) string {
+func filenameFromResponse(resp *http.Response, rawURL string) (string, error) {
 	if cd := resp.Header.Get("Content-Disposition"); cd != "" {
-		// Parse: attachment; filename="App-1.0.dmg"
-		for _, part := range strings.Split(cd, ";") {
-			part = strings.TrimSpace(part)
-			if strings.HasPrefix(part, "filename=") {
-				name := strings.TrimPrefix(part, "filename=")
-				name = strings.Trim(name, `"`)
-				if name != "" {
-					return name
-				}
+		_, params, err := mime.ParseMediaType(cd)
+		if err != nil {
+			return "", fmt.Errorf("invalid Content-Disposition header: %w", err)
+		}
+		if name := params["filename"]; name != "" {
+			if err := validateFilename(name); err != nil {
+				return "", err
 			}
+			return name, nil
 		}
 	}
 	// Fallback to URL path.
-	parts := strings.Split(url, "/")
-	if len(parts) > 0 {
-		name := parts[len(parts)-1]
-		// Strip query parameters.
-		if idx := strings.Index(name, "?"); idx >= 0 {
-			name = name[:idx]
-		}
-		if name != "" {
-			return name
-		}
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return "", fmt.Errorf("invalid download URL: %w", err)
 	}
-	return "download"
+	name := filepath.Base(parsed.Path)
+	if name != "." && name != "/" && name != "" {
+		if err := validateFilename(name); err != nil {
+			return "", err
+		}
+		return name, nil
+	}
+	return "download", nil
 }
 
 // installDMG mounts a DMG, copies the .app to the target location, and detaches.
@@ -141,8 +212,9 @@ func (inst *Installer) installDMG(ctx context.Context, dmgPath, appPath, appName
 		return fmt.Errorf("no .app bundle found in DMG for %s", appName)
 	}
 
-	// Remove quarantine attribute.
-	_, _ = inst.runner.Run(ctx, "xattr", "-rd", "com.apple.quarantine", appBundle)
+	if err := inst.verifier.VerifyReplacementApp(ctx, appPath, appBundle); err != nil {
+		return fmt.Errorf("downloaded app failed security verification: %w", err)
+	}
 
 	return inst.replaceApp(ctx, appBundle, appPath)
 }
@@ -161,10 +233,10 @@ func (inst *Installer) replaceApp(ctx context.Context, srcBundle, appPath string
 	}
 	if _, err := inst.runner.Run(ctx, "rm", "-rf", appPath); err != nil {
 		_, _ = inst.runner.Run(ctx, "rm", "-rf", staging)
-		return fmt.Errorf("failed to remove old app: %w", err)
+		return &installError{err: fmt.Errorf("failed to remove old app: %w", err), mayHaveModified: true}
 	}
 	if _, err := inst.runner.Run(ctx, "mv", staging, appPath); err != nil {
-		return fmt.Errorf("failed to move new app into place: %w", err)
+		return &installError{err: fmt.Errorf("failed to move new app into place: %w", err), mayHaveModified: true}
 	}
 	return nil
 }
@@ -236,17 +308,125 @@ func (inst *Installer) installZIP(ctx context.Context, zipPath, appPath, appName
 		return fmt.Errorf("no .app bundle found in ZIP for %s", appName)
 	}
 
-	// Remove quarantine attribute.
-	_, _ = inst.runner.Run(ctx, "xattr", "-rd", "com.apple.quarantine", appBundle)
+	if err := inst.verifier.VerifyReplacementApp(ctx, appPath, appBundle); err != nil {
+		return fmt.Errorf("downloaded app failed security verification: %w", err)
+	}
 
 	return inst.replaceApp(ctx, appBundle, appPath)
 }
 
 // installPKG runs the macOS package installer (requires sudo).
-func (inst *Installer) installPKG(ctx context.Context, pkgPath string) error {
+func (inst *Installer) installPKG(ctx context.Context, pkgPath, appPath string) error {
+	if err := inst.verifier.VerifyInstallerPackage(ctx, appPath, pkgPath); err != nil {
+		return fmt.Errorf("downloaded package failed security verification: %w", err)
+	}
 	_, err := inst.runner.Run(ctx, "sudo", "installer", "-pkg", pkgPath, "-target", "/")
 	if err != nil {
-		return fmt.Errorf("failed to install PKG: %w", err)
+		return &installError{err: fmt.Errorf("failed to install PKG: %w", err), mayHaveModified: true}
+	}
+	return nil
+}
+
+func secureDownloadClientWith(client *http.Client) *http.Client {
+	if client == nil {
+		client = &http.Client{}
+	}
+	clone := *client
+	if clone.Timeout <= 0 {
+		clone.Timeout = 30 * time.Minute
+	}
+	previousRedirectPolicy := clone.CheckRedirect
+	clone.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if previousRedirectPolicy != nil {
+			if err := previousRedirectPolicy(req, via); err != nil {
+				return err
+			}
+		}
+		if len(via) >= 10 {
+			return fmt.Errorf("too many redirects")
+		}
+		return validateSecureURL(req.URL.String())
+	}
+	return &clone
+}
+
+func validateSecureURL(rawURL string) error {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return fmt.Errorf("invalid URL: %w", err)
+	}
+	if parsed.Scheme == "https" && parsed.Hostname() != "" {
+		return nil
+	}
+	if parsed.Scheme == "http" && isLoopbackHost(parsed.Hostname()) {
+		return nil
+	}
+	return fmt.Errorf("URL must use HTTPS")
+}
+
+func isLoopbackHost(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+func validateFilename(name string) error {
+	if name == "" || name == "." || name == ".." || filepath.Base(name) != name || strings.ContainsAny(name, `/\\`) {
+		return fmt.Errorf("unsafe download filename %q", name)
+	}
+	return nil
+}
+
+func ensureContainedPath(parent, child string) error {
+	parentAbs, err := filepath.Abs(parent)
+	if err != nil {
+		return fmt.Errorf("failed to resolve download directory: %w", err)
+	}
+	childAbs, err := filepath.Abs(child)
+	if err != nil {
+		return fmt.Errorf("failed to resolve download path: %w", err)
+	}
+	rel, err := filepath.Rel(parentAbs, childAbs)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+		return fmt.Errorf("download path escapes temporary directory")
+	}
+	return nil
+}
+
+func digestHasher(expected string) (hash.Hash, error) {
+	if expected == "" {
+		return nil, nil
+	}
+	algorithm, _, ok := strings.Cut(expected, ":")
+	if !ok {
+		return nil, fmt.Errorf("invalid expected digest format")
+	}
+	switch strings.ToLower(algorithm) {
+	case "sha256":
+		return sha256.New(), nil
+	case "sha512":
+		return sha512.New(), nil
+	default:
+		return nil, fmt.Errorf("unsupported digest algorithm %q", algorithm)
+	}
+}
+
+func verifyDigest(expected string, hasher hash.Hash) error {
+	if expected == "" {
+		return nil
+	}
+	algorithm, value, _ := strings.Cut(expected, ":")
+	var actual string
+	switch strings.ToLower(algorithm) {
+	case "sha256":
+		actual = hex.EncodeToString(hasher.Sum(nil))
+	case "sha512":
+		actual = base64.StdEncoding.EncodeToString(hasher.Sum(nil))
+	}
+	if subtle.ConstantTimeCompare([]byte(actual), []byte(value)) != 1 {
+		return fmt.Errorf("download digest mismatch")
 	}
 	return nil
 }

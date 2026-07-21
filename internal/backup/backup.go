@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/lu-zhengda/updater/internal/checker"
 )
@@ -106,10 +107,19 @@ func (m *Manager) Restore(ctx context.Context, appName string) error {
 		return fmt.Errorf("backup file missing: %s", meta.BackupPath)
 	}
 
-	// Copy backup to original location.
-	_, err = m.runner.Run(ctx, "cp", "-a", meta.BackupPath, meta.OrigPath)
-	if err != nil {
+	// Stage beside the original so cp cannot nest the backup inside an existing
+	// bundle. The original is removed only after the complete backup is staged.
+	staging := meta.OrigPath + ".updater-rollback-staging"
+	_, _ = m.runner.Run(ctx, "rm", "-rf", staging)
+	if _, err = m.runner.Run(ctx, "cp", "-a", meta.BackupPath, staging); err != nil {
 		return fmt.Errorf("failed to restore backup: %w", err)
+	}
+	if _, err = m.runner.Run(ctx, "rm", "-rf", meta.OrigPath); err != nil {
+		_, _ = m.runner.Run(ctx, "rm", "-rf", staging)
+		return fmt.Errorf("failed to remove damaged app during rollback: %w", err)
+	}
+	if _, err = m.runner.Run(ctx, "mv", staging, meta.OrigPath); err != nil {
+		return fmt.Errorf("failed to move restored app into place: %w", err)
 	}
 
 	return nil
@@ -201,8 +211,17 @@ func (m *Manager) pruneOldBackups(safeName string) {
 
 // sanitizeName converts an app name to a safe directory name.
 func sanitizeName(name string) string {
-	name = strings.ToLower(name)
-	name = strings.ReplaceAll(name, " ", "-")
-	name = strings.ReplaceAll(name, "/", "-")
+	name = strings.Map(func(r rune) rune {
+		switch {
+		case unicode.IsLetter(r), unicode.IsDigit(r), r == '-', r == '_', r == '.':
+			return unicode.ToLower(r)
+		default:
+			return '-'
+		}
+	}, name)
+	name = strings.Trim(name, ".-")
+	if name == "" || name == "." || name == ".." {
+		return "app"
+	}
 	return name
 }

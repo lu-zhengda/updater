@@ -28,6 +28,7 @@ type Config struct {
 	MaxBackups               int                              `yaml:"max_backups"`
 	ScheduleOffered          bool                             `yaml:"schedule_offered"`
 	ScheduleInterval         int                              `yaml:"schedule_interval"`
+	ScheduledAutoUpdate      bool                             `yaml:"scheduled_auto_update"`
 	LastChecked              time.Time                        `yaml:"last_checked,omitempty"`
 	Policies                 map[string]string                `yaml:"policies,omitempty"` // bundleID → "auto"|"manual"|"notify-only"
 	InteractiveNotifications bool                             `yaml:"interactive_notifications"`
@@ -69,6 +70,12 @@ func Load(path string) (*Config, error) {
 		}
 		return nil, fmt.Errorf("failed to read config file: %w", err)
 	}
+	if err := os.Chmod(filepath.Dir(path), 0o700); err != nil {
+		return nil, fmt.Errorf("failed to secure config directory: %w", err)
+	}
+	if err := os.Chmod(path, 0o600); err != nil {
+		return nil, fmt.Errorf("failed to secure config file: %w", err)
+	}
 
 	return Parse(data)
 }
@@ -76,15 +83,52 @@ func Load(path string) (*Config, error) {
 // Save writes the config to a YAML file at path.
 func (c *Config) Save(path string) error {
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("failed to create config directory: %w", err)
+	}
+	if err := os.Chmod(dir, 0o700); err != nil {
+		return fmt.Errorf("failed to secure config directory: %w", err)
 	}
 	data, err := yaml.Marshal(c)
 	if err != nil {
 		return fmt.Errorf("failed to marshal config: %w", err)
 	}
-	if err := os.WriteFile(path, data, 0o644); err != nil {
+	if err := WritePrivateFile(path, data); err != nil {
 		return fmt.Errorf("failed to write config file: %w", err)
+	}
+	return nil
+}
+
+// WritePrivateFile atomically writes credential-bearing data with owner-only
+// permissions. The temporary file is created beside the destination so rename
+// remains atomic and replaces a destination symlink rather than following it.
+func WritePrivateFile(path string, data []byte) (err error) {
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, ".updater-private-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	defer func() {
+		_ = tmp.Close()
+		if err != nil {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+	if err = tmp.Chmod(0o600); err != nil {
+		return err
+	}
+	if _, err = tmp.Write(data); err != nil {
+		return err
+	}
+	if err = tmp.Sync(); err != nil {
+		return err
+	}
+	if err = tmp.Close(); err != nil {
+		return err
+	}
+	if err = os.Rename(tmpPath, path); err != nil {
+		return err
 	}
 	return nil
 }

@@ -57,6 +57,25 @@ func TestBackupAndRestore(t *testing.T) {
 	if backups[0].AppName != "Test" {
 		t.Errorf("app name = %q, want %q", backups[0].AppName, "Test")
 	}
+
+	// Damage the installed app, then verify rollback restores the backup rather
+	// than nesting it inside the existing bundle.
+	if err := os.WriteFile(filepath.Join(appPath, "Info.plist"), []byte("damaged"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := mgr.Restore(context.Background(), "Test"); err != nil {
+		t.Fatalf("Restore failed: %v", err)
+	}
+	restored, err := os.ReadFile(filepath.Join(appPath, "Info.plist"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(restored) != "v1" {
+		t.Fatalf("restored content = %q, want v1", restored)
+	}
+	if _, err := os.Stat(filepath.Join(appPath, "Test.app")); !os.IsNotExist(err) {
+		t.Fatal("rollback nested the app bundle inside the existing bundle")
+	}
 }
 
 func TestHasBackup_NoBackups(t *testing.T) {
@@ -110,6 +129,10 @@ func TestSanitizeName(t *testing.T) {
 		{"PDF Expert", "pdf-expert"},
 		{"App/Name", "app-name"},
 		{"simple", "simple"},
+		{"..", "app"},
+		{"../../escape", "escape"},
+		{"App\\Name", "app-name"},
+		{"\x00control", "control"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
@@ -345,18 +368,23 @@ func TestNewManager_DefaultMaxBackups(t *testing.T) {
 	}
 }
 
-// testCpRunner simulates cp -a for tests. Other commands are no-ops.
+// testCpRunner simulates the filesystem commands used by backup and restore.
 type testCpRunner struct {
 	t *testing.T
 }
 
 func (r *testCpRunner) Run(_ context.Context, name string, args ...string) ([]byte, error) {
-	// We only need to handle the cp command for backup tests.
 	if name == "cp" && len(args) >= 2 {
 		// Simple directory copy for testing.
 		src := args[len(args)-2]
 		dst := args[len(args)-1]
 		return nil, copyDir(src, dst)
+	}
+	if name == "rm" && len(args) >= 1 {
+		return nil, os.RemoveAll(args[len(args)-1])
+	}
+	if name == "mv" && len(args) == 2 {
+		return nil, os.Rename(args[0], args[1])
 	}
 	return nil, nil
 }

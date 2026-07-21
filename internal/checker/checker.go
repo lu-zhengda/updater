@@ -21,6 +21,7 @@ type UpdateResult struct {
 	CurrentVersion string
 	LatestVersion  string
 	DownloadURL    string
+	DownloadDigest string // optional "sha256:<hex>" or "sha512:<base64>"
 	ReleaseNotes   string
 	HasUpdate      bool
 	IsMajorUpdate  bool // true when latest has a higher major version

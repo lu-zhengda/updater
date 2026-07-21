@@ -3,17 +3,20 @@ package main
 import (
 	"context"
 	"fmt"
+	"html"
 	"os"
 	"path/filepath"
 	"strings"
 	"text/template"
 
 	"github.com/lu-zhengda/updater/internal/checker"
+	"github.com/lu-zhengda/updater/internal/config"
 	"github.com/spf13/cobra"
 )
 
 var (
 	flagScheduleInterval int
+	flagScheduleAuto     bool
 	flagScheduleRemove   bool
 	flagScheduleJSON     bool
 )
@@ -26,6 +29,7 @@ var scheduleCmd = &cobra.Command{
 
 func init() {
 	scheduleCmd.Flags().IntVar(&flagScheduleInterval, "interval", 24, "check interval in hours")
+	scheduleCmd.Flags().BoolVar(&flagScheduleAuto, "auto-update", false, "install verified non-major updates automatically")
 	scheduleCmd.Flags().BoolVar(&flagScheduleRemove, "remove", false, "remove scheduled checks")
 	scheduleCmd.Flags().BoolVar(&flagScheduleJSON, "json", false, "output as JSON")
 	rootCmd.AddCommand(scheduleCmd)
@@ -42,8 +46,10 @@ const plistTemplate = `<?xml version="1.0" encoding="UTF-8"?>
 	<key>ProgramArguments</key>
 	<array>
 		<string>{{.Binary}}</string>
-		<string>notify</string>
-		<string>--auto-update</string>
+			<string>notify</string>
+		{{if .AutoUpdate}}
+			<string>--auto-update</string>
+		{{end}}
 	</array>
 	<key>StartInterval</key>
 	<integer>{{.IntervalSeconds}}</integer>
@@ -62,6 +68,7 @@ type plistData struct {
 	Binary          string
 	IntervalSeconds int
 	LogPath         string
+	AutoUpdate      bool
 }
 
 // schedulePlistPath returns the path to the launchd plist file.
@@ -84,7 +91,10 @@ func scheduleExists() bool {
 }
 
 // installScheduleCore writes the launchd plist and loads it.
-func installScheduleCore(ctx context.Context, runner checker.CmdRunner, hours int) error {
+func installScheduleCore(ctx context.Context, runner checker.CmdRunner, hours int, autoUpdate bool) error {
+	if hours < 1 || hours > 24*365 {
+		return fmt.Errorf("schedule interval must be between 1 and 8760 hours")
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return fmt.Errorf("failed to get home directory: %w", err)
@@ -104,6 +114,7 @@ func installScheduleCore(ctx context.Context, runner checker.CmdRunner, hours in
 		Binary:          binary,
 		IntervalSeconds: hours * 3600,
 		LogPath:         logPath,
+		AutoUpdate:      autoUpdate,
 	}
 
 	content, err := renderPlist(data)
@@ -162,6 +173,9 @@ func runSchedule(cmd *cobra.Command, _ []string) error {
 		if err := removeScheduleCore(ctx, runner); err != nil {
 			return err
 		}
+		if err := saveScheduledAutoUpdateConsent(false); err != nil {
+			return err
+		}
 		if useJSON {
 			return writeJSON(cmd, map[string]any{
 				"action": "remove",
@@ -172,7 +186,10 @@ func runSchedule(cmd *cobra.Command, _ []string) error {
 		return nil
 	}
 
-	if err := installScheduleCore(ctx, runner, flagScheduleInterval); err != nil {
+	if err := installScheduleCore(ctx, runner, flagScheduleInterval, flagScheduleAuto); err != nil {
+		return err
+	}
+	if err := saveScheduledAutoUpdateConsent(flagScheduleAuto); err != nil {
 		return err
 	}
 
@@ -186,19 +203,42 @@ func runSchedule(cmd *cobra.Command, _ []string) error {
 			"action":         "install",
 			"status":         "ok",
 			"interval_hours": flagScheduleInterval,
+			"auto_update":    flagScheduleAuto,
 			"plist":          plistPath,
 			"log":            logPath,
 		})
 	}
 
 	fmt.Fprintf(cmd.OutOrStdout(), "Scheduled update checks every %d hours\n", flagScheduleInterval)
+	if flagScheduleAuto {
+		fmt.Fprintln(cmd.OutOrStdout(), "Verified non-major updates will be installed automatically")
+	}
 	fmt.Fprintf(cmd.OutOrStdout(), "Plist: %s\n", plistPath)
 	fmt.Fprintf(cmd.OutOrStdout(), "Log: %s\n", logPath)
 	return nil
 }
 
+// saveScheduledAutoUpdateConsent records an independent opt-in in addition to
+// the launchd argument. This safely disables unattended installs from legacy
+// plists that may still contain --auto-update after upgrading the binary.
+func saveScheduledAutoUpdateConsent(enabled bool) error {
+	path := config.DefaultPath()
+	cfg, err := config.Load(path)
+	if err != nil {
+		return fmt.Errorf("failed to load config: %w", err)
+	}
+	cfg.ScheduledAutoUpdate = enabled
+	if err := cfg.Save(path); err != nil {
+		return fmt.Errorf("failed to save schedule consent: %w", err)
+	}
+	return nil
+}
+
 // renderPlist renders the launchd plist from the template.
 func renderPlist(data plistData) (string, error) {
+	data.Label = html.EscapeString(data.Label)
+	data.Binary = html.EscapeString(data.Binary)
+	data.LogPath = html.EscapeString(data.LogPath)
 	tmpl, err := template.New("plist").Parse(plistTemplate)
 	if err != nil {
 		return "", fmt.Errorf("failed to parse plist template: %w", err)

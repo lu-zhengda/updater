@@ -178,6 +178,23 @@ func TestElectronChecker_DownloadURL(t *testing.T) {
 	}
 }
 
+func TestElectronChecker_PropagatesSHA512(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("version: 2.0.0\npath: TestApp.zip\nsha512: c2lnbmF0dXJl\n"))
+	}))
+	defer ts.Close()
+
+	result, err := NewElectronChecker(ts.Client()).Check(context.Background(), &app.App{
+		Name: "TestApp", Version: "1.0.0", Source: app.SourceElectron, ElectronUpdateURL: ts.URL,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.DownloadDigest != "sha512:c2lnbmF0dXJl" {
+		t.Fatalf("DownloadDigest = %q", result.DownloadDigest)
+	}
+}
+
 func TestElectronChecker_Name(t *testing.T) {
 	c := NewElectronChecker(nil)
 	if c.Name() != "electron" {

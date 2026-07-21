@@ -35,9 +35,7 @@ type CargoChecker struct {
 // If client is nil, a client with a 10s timeout is used.
 // If cratesBaseURL is empty, DefaultCratesIOBaseURL is used.
 func NewCargoChecker(client *http.Client, cratesBaseURL string) *CargoChecker {
-	if client == nil {
-		client = &http.Client{Timeout: 10 * time.Second}
-	}
+	client = hardenedHTTPClient(client, 10*time.Second)
 	if cratesBaseURL == "" {
 		cratesBaseURL = DefaultCratesIOBaseURL
 	}
@@ -79,6 +77,9 @@ func (c *CargoChecker) fetchLatestVersion(ctx context.Context, crate string) (st
 	c.mu.Unlock()
 
 	url := fmt.Sprintf("%s/%s", strings.TrimRight(c.cratesBase, "/"), crate)
+	if err := validateHTTPSURL(url); err != nil {
+		return "", fmt.Errorf("refusing insecure crates.io URL for %s: %w", crate, err)
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return "", fmt.Errorf("failed to create crates.io request for %s: %w", crate, err)
@@ -91,13 +92,20 @@ func (c *CargoChecker) fetchLatestVersion(ctx context.Context, crate string) (st
 		return "", fmt.Errorf("failed to fetch crates.io metadata for %s: %w", crate, err)
 	}
 	defer resp.Body.Close()
+	if err := validateHTTPSURL(resp.Request.URL.String()); err != nil {
+		return "", fmt.Errorf("crates.io metadata redirected to an insecure URL for %s: %w", crate, err)
+	}
 
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("failed to fetch crates.io metadata for %s: status %d", crate, resp.StatusCode)
 	}
 
+	data, err := readMetadataResponse(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("failed to read crates.io metadata for %s: %w", crate, err)
+	}
 	var body cratesIOResponse
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+	if err := json.Unmarshal(data, &body); err != nil {
 		return "", fmt.Errorf("failed to parse crates.io metadata for %s: %w", crate, err)
 	}
 

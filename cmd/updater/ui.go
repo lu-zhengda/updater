@@ -93,15 +93,20 @@ func runUI(cmd *cobra.Command, _ []string) error {
 			}
 		},
 		Install: func(ctx context.Context, hours int) error {
-			if err := installScheduleCore(ctx, runner, hours); err != nil {
+			if err := installScheduleCore(ctx, runner, hours, false); err != nil {
 				return err
 			}
 			cfg.ScheduleInterval = hours
+			cfg.ScheduledAutoUpdate = false
 			_ = cfg.Save(cfgPath)
 			return nil
 		},
 		Remove: func(ctx context.Context) error {
-			return removeScheduleCore(ctx, runner)
+			if err := removeScheduleCore(ctx, runner); err != nil {
+				return err
+			}
+			cfg.ScheduledAutoUpdate = false
+			return cfg.Save(cfgPath)
 		},
 	}
 

@@ -58,7 +58,7 @@ func runConfigExport(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("failed to marshal config: %w", err)
 		}
 
-		if err := os.WriteFile(args[0], data, 0o644); err != nil {
+		if err := config.WritePrivateFile(args[0], data); err != nil {
 			return fmt.Errorf("failed to write file: %w", err)
 		}
 

@@ -51,7 +51,7 @@ func (s *SourceOverrideConfig) UnmarshalYAML(node *yaml.Node) error {
 		}
 	case SourceOverrideKindSparkle:
 		if !validSparkleAppcastURL(raw.AppcastURL) {
-			return fmt.Errorf("sparkle appcast_url must start with http:// or https://")
+			return fmt.Errorf("sparkle appcast_url must start with https://")
 		}
 	case SourceOverrideKindBrew:
 		if strings.TrimSpace(raw.Cask) == "" {
@@ -105,7 +105,7 @@ func validGitHubRepo(repo string) bool {
 }
 
 func validSparkleAppcastURL(appcastURL string) bool {
-	return strings.HasPrefix(appcastURL, "http://") || strings.HasPrefix(appcastURL, "https://")
+	return strings.HasPrefix(appcastURL, "https://")
 }
 
 func validateSourceOverrides(overrides map[string]*SourceOverrideConfig) error {

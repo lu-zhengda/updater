@@ -84,7 +84,7 @@ func TestLoadConfig_SourceOverrides(t *testing.T) {
     kind: sparkle
     appcast_url: ftp://example.com/appcast.xml
 `,
-			wantMessage: "sparkle appcast_url must start with http:// or https://",
+			wantMessage: "sparkle appcast_url must start with https://",
 		},
 		{
 			name: "empty brew cask fails",

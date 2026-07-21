@@ -101,6 +101,47 @@ func TestLoadConfig_Missing(t *testing.T) {
 	}
 }
 
+func TestSaveUsesPrivatePermissions(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "config")
+	path := filepath.Join(dir, "config.yaml")
+	if err := (&Config{GitHubToken: "secret"}).Save(path); err != nil {
+		t.Fatal(err)
+	}
+	dirInfo, err := os.Stat(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := dirInfo.Mode().Perm(); got != 0o700 {
+		t.Fatalf("config directory mode = %o, want 700", got)
+	}
+	fileInfo, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := fileInfo.Mode().Perm(); got != 0o600 {
+		t.Fatalf("config file mode = %o, want 600", got)
+	}
+}
+
+func TestLoadRepairsPrivatePermissions(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "config")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(path, []byte("github_token: secret\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path); err != nil {
+		t.Fatal(err)
+	}
+	dirInfo, _ := os.Stat(dir)
+	fileInfo, _ := os.Stat(path)
+	if dirInfo.Mode().Perm() != 0o700 || fileInfo.Mode().Perm() != 0o600 {
+		t.Fatalf("permissions not repaired: dir=%o file=%o", dirInfo.Mode().Perm(), fileInfo.Mode().Perm())
+	}
+}
+
 func TestLoadConfig_EmptyFile(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.yaml")
@@ -499,7 +540,7 @@ func TestMerge_MapsOverride(t *testing.T) {
 	imported := &Config{
 		GitHubMappings: map[string]string{
 			"com.a": "new/repo", // override
-			"com.c": "add/new", // new entry
+			"com.c": "add/new",  // new entry
 		},
 		CaskMappings: map[string]string{
 			"com.y": "cask-y", // new entry
@@ -554,6 +595,22 @@ func TestMerge_ScalarOverride(t *testing.T) {
 	}
 	if result.ScheduleInterval != 24 {
 		t.Errorf("ScheduleInterval = %d, want 24 (zero import should not override)", result.ScheduleInterval)
+	}
+}
+
+func TestScheduledAutoUpdateRoundTrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	cfg := defaultConfig()
+	cfg.ScheduledAutoUpdate = true
+	if err := cfg.Save(path); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !loaded.ScheduledAutoUpdate {
+		t.Fatal("expected scheduled auto-update consent to round trip")
 	}
 }
 

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/lu-zhengda/updater/internal/app"
 	"github.com/lu-zhengda/updater/internal/version"
@@ -48,11 +49,9 @@ type SparkleChecker struct {
 }
 
 // NewSparkleChecker creates a new SparkleChecker with the given HTTP client.
-// If client is nil, http.DefaultClient is used.
+// If client is nil, a hardened client with a 30-second timeout is used.
 func NewSparkleChecker(client *http.Client) *SparkleChecker {
-	if client == nil {
-		client = http.DefaultClient
-	}
+	client = hardenedHTTPClient(client, 30*time.Second)
 	return &SparkleChecker{client: client}
 }
 
@@ -71,6 +70,9 @@ func (s *SparkleChecker) Check(ctx context.Context, a *app.App) (*UpdateResult, 
 	if a.FeedURL == "" {
 		return nil, fmt.Errorf("failed to check sparkle update: no feed URL for %s", a.Name)
 	}
+	if err := validateHTTPSURL(a.FeedURL); err != nil {
+		return nil, fmt.Errorf("refusing insecure Sparkle feed for %s: %w", a.Name, err)
+	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, a.FeedURL, nil)
 	if err != nil {
@@ -82,13 +84,20 @@ func (s *SparkleChecker) Check(ctx context.Context, a *app.App) (*UpdateResult, 
 		return nil, fmt.Errorf("failed to fetch appcast for %s: %w", a.Name, err)
 	}
 	defer resp.Body.Close()
+	if err := validateHTTPSURL(resp.Request.URL.String()); err != nil {
+		return nil, fmt.Errorf("Sparkle feed redirected to an insecure URL for %s: %w", a.Name, err)
+	}
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("failed to fetch appcast for %s: status %d", a.Name, resp.StatusCode)
 	}
 
+	body, err := readMetadataResponse(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read appcast for %s: %w", a.Name, err)
+	}
 	var rss sparkleRSS
-	if err := xml.NewDecoder(resp.Body).Decode(&rss); err != nil {
+	if err := xml.Unmarshal(body, &rss); err != nil {
 		return nil, fmt.Errorf("failed to parse appcast for %s: %w", a.Name, err)
 	}
 

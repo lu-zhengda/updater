@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/lu-zhengda/updater/internal/app"
 	"github.com/lu-zhengda/updater/internal/version"
@@ -25,6 +26,7 @@ type GitHubRelease struct {
 type GitHubAsset struct {
 	Name        string `json:"name"`
 	DownloadURL string `json:"browser_download_url"`
+	Digest      string `json:"digest"`
 }
 
 // GitHubChecker checks for updates via GitHub Releases API.
@@ -35,13 +37,11 @@ type GitHubChecker struct {
 }
 
 // NewGitHubChecker creates a new GitHubChecker.
-// If client is nil, http.DefaultClient is used.
+// If client is nil, a hardened client with a 30-second timeout is used.
 // If baseURL is empty, the default GitHub API URL is used.
 // If token is non-empty, it is sent as a Bearer token in requests.
 func NewGitHubChecker(client *http.Client, baseURL, token string) *GitHubChecker {
-	if client == nil {
-		client = http.DefaultClient
-	}
+	client = hardenedHTTPClient(client, 30*time.Second)
 	if baseURL == "" {
 		baseURL = defaultGitHubAPI
 	}
@@ -65,6 +65,9 @@ func (g *GitHubChecker) Check(ctx context.Context, a *app.App) (*UpdateResult, e
 	}
 
 	url := fmt.Sprintf("%s/repos/%s/releases/latest", g.baseURL, a.GitHubRepo)
+	if err := validateHTTPSURL(url); err != nil {
+		return nil, fmt.Errorf("refusing insecure GitHub API URL for %s: %w", a.Name, err)
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request for %s: %w", a.Name, err)
@@ -79,25 +82,33 @@ func (g *GitHubChecker) Check(ctx context.Context, a *app.App) (*UpdateResult, e
 		return nil, fmt.Errorf("failed to fetch release for %s: %w", a.Name, err)
 	}
 	defer resp.Body.Close()
+	if err := validateHTTPSURL(resp.Request.URL.String()); err != nil {
+		return nil, fmt.Errorf("GitHub API redirected to an insecure URL for %s: %w", a.Name, err)
+	}
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("failed to fetch release for %s: status %d", a.Name, resp.StatusCode)
 	}
 
+	body, err := readMetadataResponse(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read release for %s: %w", a.Name, err)
+	}
 	var release GitHubRelease
-	if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
+	if err := json.Unmarshal(body, &release); err != nil {
 		return nil, fmt.Errorf("failed to parse release for %s: %w", a.Name, err)
 	}
 
 	latestVersion := CleanTagVersion(release.TagName)
-	downloadURL := findMacAsset(release.Assets)
+	asset := findMacAsset(release.Assets)
 
 	return &UpdateResult{
 		App:            a,
 		Source:         "github",
 		CurrentVersion: a.Version,
 		LatestVersion:  latestVersion,
-		DownloadURL:    downloadURL,
+		DownloadURL:    asset.DownloadURL,
+		DownloadDigest: asset.Digest,
 		ReleaseNotes:   release.Body,
 		HasUpdate:      version.IsNewer(a.Version, latestVersion),
 		IsMajorUpdate:  version.IsMajorUpgrade(a.Version, latestVersion),
@@ -124,14 +135,14 @@ var macKeywords = []string{"mac", "darwin", "macos", "osx"}
 // findMacAsset searches the release assets for a macOS download.
 // It looks for assets with macOS file extensions (.dmg, .pkg, .zip) that
 // also contain a macOS keyword (mac, darwin, macos, osx) in their name.
-func findMacAsset(assets []GitHubAsset) string {
+func findMacAsset(assets []GitHubAsset) GitHubAsset {
 	for _, asset := range assets {
 		nameLower := strings.ToLower(asset.Name)
 		if hasMacExtension(nameLower) && hasMacKeyword(nameLower) {
-			return asset.DownloadURL
+			return asset
 		}
 	}
-	return ""
+	return GitHubAsset{}
 }
 
 func hasMacExtension(name string) bool {

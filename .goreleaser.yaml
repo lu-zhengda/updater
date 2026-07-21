@@ -82,9 +82,7 @@ homebrew_casks:
       post:
         install: |
           if OS.mac?
-            # Dequarantine the app AND the staged CLI binary — Gatekeeper
-            # kills the unsigned quarantined binary on first run otherwise.
-            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{appdir}/Updater.app"], sudo: false
-            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/updater"], sudo: false
+            # The release is Developer ID signed and notarized; preserve
+            # quarantine so Gatekeeper can enforce that trust decision.
             system_command "/usr/bin/open", args: ["#{appdir}/Updater.app"], sudo: false
           end
