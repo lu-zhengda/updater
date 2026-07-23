@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -134,6 +135,81 @@ func TestRollback_NilManager(t *testing.T) {
 	}
 }
 
+func TestExecuteUpdate_BrewInfoFallsBackToSelfUpdateWithoutInstaller(t *testing.T) {
+	runner := &checker.MockCmdRunner{}
+	result := &checker.UpdateResult{
+		App: &app.App{
+			Name:     "Visual Studio Code",
+			CaskName: "visual-studio-code",
+			Path:     "/Applications/Visual Studio Code.app",
+		},
+		Source:         "brew-info",
+		CurrentVersion: "1.129.0",
+		LatestVersion:  "1.130.0",
+		DownloadURL:    "https://example.com/vscode.zip",
+	}
+
+	err, rolledBack := executeUpdate(context.Background(), result, runner, nil, nil)
+	if !errors.Is(err, checker.ErrOpenedExternally) {
+		t.Errorf("expected ErrOpenedExternally fallback, got %v", err)
+	}
+	if rolledBack {
+		t.Error("fallback to self-update should not report a rollback")
+	}
+}
+
+func TestCaskDirectInstall(t *testing.T) {
+	tests := []struct {
+		name   string
+		result *checker.UpdateResult
+		want   bool
+	}{
+		{
+			name: "brew-info app not managed by brew with URL and path",
+			result: &checker.UpdateResult{
+				App:         &app.App{CaskName: "vscode", Path: "/Applications/Code.app"},
+				Source:      "brew-info",
+				DownloadURL: "https://example.com/code.zip",
+			},
+			want: true,
+		},
+		{
+			name: "brew-managed app uses brew upgrade",
+			result: &checker.UpdateResult{
+				App:         &app.App{CaskName: "vscode", InstalledViaBrew: true, Path: "/Applications/Code.app"},
+				Source:      "brew-info",
+				DownloadURL: "https://example.com/code.zip",
+			},
+			want: false,
+		},
+		{
+			name: "no download URL",
+			result: &checker.UpdateResult{
+				App:    &app.App{CaskName: "vscode", Path: "/Applications/Code.app"},
+				Source: "brew-info",
+			},
+			want: false,
+		},
+		{
+			name: "other source",
+			result: &checker.UpdateResult{
+				App:         &app.App{Path: "/Applications/Code.app"},
+				Source:      "sparkle",
+				DownloadURL: "https://example.com/code.zip",
+			},
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := caskDirectInstall(tt.result); got != tt.want {
+				t.Errorf("caskDirectInstall() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestDescribeAction(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -171,6 +247,15 @@ func TestDescribeAction(t *testing.T) {
 				Source: "brew-info",
 			},
 			want: "open app for self-update",
+		},
+		{
+			name: "brew-info not installed via brew with download URL",
+			result: &checker.UpdateResult{
+				App:         &app.App{CaskName: "visual-studio-code", InstalledViaBrew: false, Path: "/Applications/Visual Studio Code.app"},
+				Source:      "brew-info",
+				DownloadURL: "https://example.com/vscode.zip",
+			},
+			want: "direct install",
 		},
 		{
 			name: "mas with MASID",

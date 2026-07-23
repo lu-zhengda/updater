@@ -179,7 +179,9 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 			continue
 		}
 		switch {
-		case sequentialSources[r.Source]:
+		// Direct cask installs never invoke brew, so they don't need the
+		// sequential phase that guards brew's shared locks.
+		case sequentialSources[r.Source] && !caskDirectInstall(r):
 			sequential = append(sequential, r)
 		case instantSources[r.Source]:
 			instant = append(instant, r)
@@ -244,6 +246,14 @@ func executeUpdate(ctx context.Context, r *checker.UpdateResult, runner checker.
 	case "brew-info":
 		if r.App.InstalledViaBrew && r.App.CaskName != "" {
 			return brewUpgrade(ctx, r.App, runner), false
+		}
+		// Not brew-managed: install the cask's artifact directly instead of
+		// relying on the app's own updater.
+		if r.DownloadURL != "" && inst != nil && r.App.Path != "" {
+			err, rolledBack, done := tryDirectInstall(ctx, r, runner, bm, inst, "opening app for self-update")
+			if done {
+				return err, rolledBack
+			}
 		}
 		openForSelfUpdate(ctx, r.App, runner)
 		return checker.ErrOpenedExternally, false
@@ -329,27 +339,9 @@ func executeUpdate(ctx context.Context, r *checker.UpdateResult, runner checker.
 
 		// Try direct install if installer is available.
 		if inst != nil && r.App.Path != "" {
-			wasRunning := quitAppIfRunning(ctx, r.App, runner)
-			err := inst.Install(ctx, r.DownloadURL, r.App.Path, r.App.Name, r.DownloadDigest)
-			if err == nil {
-				if wasRunning {
-					fmt.Printf("  Reopening %s...\n", r.App.Name)
-					_, _ = runner.Run(ctx, "open", "-a", r.App.Path)
-				}
-				return nil, false
-			}
-			// Attempt rollback on failed direct install.
-			rolledBack := false
-			mayRequireRollback := installer.MayRequireRollback(err)
-			if mayRequireRollback {
-				rolledBack = rollbackAfterFailedInstall(ctx, bm, r.App.Name)
-			}
-			if wasRunning && (!mayRequireRollback || rolledBack) {
-				_, _ = runner.Run(ctx, "open", "-a", r.App.Path)
-			}
-			fmt.Fprintf(os.Stderr, "  direct install failed, falling back to browser: %v\n", err)
-			if rolledBack {
-				return err, true
+			err, rolledBack, done := tryDirectInstall(ctx, r, runner, bm, inst, "falling back to browser")
+			if done {
+				return err, rolledBack
 			}
 		}
 
@@ -363,27 +355,9 @@ func executeUpdate(ctx context.Context, r *checker.UpdateResult, runner checker.
 	case "electron":
 		// Try direct install from ElectronUpdateURL if available.
 		if r.DownloadURL != "" && inst != nil && r.App.Path != "" {
-			wasRunning := quitAppIfRunning(ctx, r.App, runner)
-			err := inst.Install(ctx, r.DownloadURL, r.App.Path, r.App.Name, r.DownloadDigest)
-			if err == nil {
-				if wasRunning {
-					fmt.Printf("  Reopening %s...\n", r.App.Name)
-					_, _ = runner.Run(ctx, "open", "-a", r.App.Path)
-				}
-				return nil, false
-			}
-			// Attempt rollback on failed direct install.
-			rolledBack := false
-			mayRequireRollback := installer.MayRequireRollback(err)
-			if mayRequireRollback {
-				rolledBack = rollbackAfterFailedInstall(ctx, bm, r.App.Name)
-			}
-			if wasRunning && (!mayRequireRollback || rolledBack) {
-				_, _ = runner.Run(ctx, "open", "-a", r.App.Path)
-			}
-			fmt.Fprintf(os.Stderr, "  direct install failed, opening app for self-update: %v\n", err)
-			if rolledBack {
-				return err, true
+			err, rolledBack, done := tryDirectInstall(ctx, r, runner, bm, inst, "opening app for self-update")
+			if done {
+				return err, rolledBack
 			}
 		}
 		// Fallback: open app for self-update.
@@ -429,6 +403,31 @@ func performUpdate(cmd *cobra.Command, ctx context.Context, r *checker.UpdateRes
 		Success:     updateErr == nil || errors.Is(updateErr, checker.ErrOpenedExternally),
 		RolledBack:  rolledBack,
 	})
+}
+
+// tryDirectInstall downloads r.DownloadURL and installs it over r.App.Path,
+// quitting the app first and reopening it afterwards. done reports whether the
+// update finished (success, or a failure that was rolled back from backup);
+// when done is false the caller should fall back to its source-specific action.
+func tryDirectInstall(ctx context.Context, r *checker.UpdateResult, runner checker.CmdRunner, bm *backup.Manager, inst *installer.Installer, fallbackNote string) (err error, rolledBack, done bool) {
+	wasRunning := quitAppIfRunning(ctx, r.App, runner)
+	err = inst.Install(ctx, r.DownloadURL, r.App.Path, r.App.Name, r.DownloadDigest)
+	if err == nil {
+		if wasRunning {
+			fmt.Printf("  Reopening %s...\n", r.App.Name)
+			_, _ = runner.Run(ctx, "open", "-a", r.App.Path)
+		}
+		return nil, false, true
+	}
+	mayRequireRollback := installer.MayRequireRollback(err)
+	if mayRequireRollback {
+		rolledBack = rollbackAfterFailedInstall(ctx, bm, r.App.Name)
+	}
+	if wasRunning && (!mayRequireRollback || rolledBack) {
+		_, _ = runner.Run(ctx, "open", "-a", r.App.Path)
+	}
+	fmt.Fprintf(os.Stderr, "  direct install failed, %s: %v\n", fallbackNote, err)
+	return err, rolledBack, rolledBack
 }
 
 // rollbackAfterFailedInstall attempts to restore an app from backup after a failed install.
@@ -493,6 +492,13 @@ func quitAppIfRunning(ctx context.Context, a *app.App, runner checker.CmdRunner)
 	return true
 }
 
+// caskDirectInstall reports whether a cask-sourced update will be applied by
+// downloading the cask's artifact directly rather than via brew or self-update.
+func caskDirectInstall(r *checker.UpdateResult) bool {
+	return r.Source == "brew-info" && !r.App.InstalledViaBrew &&
+		r.DownloadURL != "" && r.App.Path != ""
+}
+
 // openForSelfUpdate opens an app so it can self-update via its built-in updater.
 func openForSelfUpdate(ctx context.Context, a *app.App, runner checker.CmdRunner) {
 	_, _ = runner.Run(ctx, "open", "-a", a.Path)
@@ -504,6 +510,9 @@ func describeAction(r *checker.UpdateResult) string {
 	case "brew", "brew-info":
 		if r.App.InstalledViaBrew && r.App.CaskName != "" {
 			return fmt.Sprintf("brew upgrade --cask %s", r.App.CaskName)
+		}
+		if caskDirectInstall(r) {
+			return "direct install"
 		}
 		return "open app for self-update"
 	case "mas":

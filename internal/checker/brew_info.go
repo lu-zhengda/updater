@@ -23,6 +23,15 @@ type brewInfoResponse struct {
 type brewInfoCask struct {
 	Token   string `json:"token"`
 	Version string `json:"version"`
+	URL     string `json:"url"`
+	Sha256  string `json:"sha256"`
+}
+
+// brewCaskArtifact is the update-relevant data parsed from brew info output.
+type brewCaskArtifact struct {
+	Version        string
+	DownloadURL    string
+	DownloadDigest string
 }
 
 // BrewInfoChecker checks for updates using `brew info --cask --json=v2`.
@@ -71,7 +80,7 @@ func (b *BrewInfoChecker) Check(ctx context.Context, a *app.App) (*UpdateResult,
 		}
 	}
 
-	latestVersion, err := parseBrewInfo(output)
+	artifact, err := parseBrewInfo(output)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse brew info for %s: %w", a.CaskName, err)
 	}
@@ -80,27 +89,31 @@ func (b *BrewInfoChecker) Check(ctx context.Context, a *app.App) (*UpdateResult,
 		App:            a,
 		Source:         "brew-info",
 		CurrentVersion: a.Version,
-		LatestVersion:  latestVersion,
-		HasUpdate:      version.IsNewer(a.Version, latestVersion),
-		IsMajorUpdate:  version.IsMajorUpgrade(a.Version, latestVersion),
+		LatestVersion:  artifact.Version,
+		HasUpdate:      version.IsNewer(a.Version, artifact.Version),
+		IsMajorUpdate:  version.IsMajorUpgrade(a.Version, artifact.Version),
+		DownloadURL:    artifact.DownloadURL,
+		DownloadDigest: artifact.DownloadDigest,
 	}, nil
 }
 
-// parseBrewInfo extracts the version from brew info JSON output.
-// Handles composite versions like "4.60.1,218372" by taking the part before the comma.
-func parseBrewInfo(data []byte) (string, error) {
+// parseBrewInfo extracts the version and download artifact from brew info JSON
+// output. Handles composite versions like "4.60.1,218372" by taking the part
+// before the comma. Casks declaring `sha256 :no_check` yield an empty digest.
+func parseBrewInfo(data []byte) (brewCaskArtifact, error) {
 	var resp brewInfoResponse
 	if err := json.Unmarshal(data, &resp); err != nil {
-		return "", fmt.Errorf("failed to unmarshal brew info JSON: %w", err)
+		return brewCaskArtifact{}, fmt.Errorf("failed to unmarshal brew info JSON: %w", err)
 	}
 
 	if len(resp.Casks) == 0 {
-		return "", fmt.Errorf("no cask found in brew info response")
+		return brewCaskArtifact{}, fmt.Errorf("no cask found in brew info response")
 	}
 
-	v := resp.Casks[0].Version
+	cask := resp.Casks[0]
+	v := cask.Version
 	if v == "" {
-		return "", fmt.Errorf("empty version in brew info response")
+		return brewCaskArtifact{}, fmt.Errorf("empty version in brew info response")
 	}
 
 	// Strip composite build number suffix (e.g., "4.60.1,218372" → "4.60.1").
@@ -108,7 +121,11 @@ func parseBrewInfo(data []byte) (string, error) {
 		v = v[:idx]
 	}
 
-	return v, nil
+	artifact := brewCaskArtifact{Version: v, DownloadURL: cask.URL}
+	if cask.Sha256 != "" && cask.Sha256 != "no_check" {
+		artifact.DownloadDigest = "sha256:" + cask.Sha256
+	}
+	return artifact, nil
 }
 
 // CaskExists checks whether a Homebrew cask exists by running

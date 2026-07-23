@@ -114,8 +114,10 @@ func (inst *Installer) download(ctx context.Context, rawURL, destDir, expectedDi
 		return "", fmt.Errorf("download is too large: %d bytes exceeds %d-byte limit", resp.ContentLength, maxDownloadSize)
 	}
 
-	// Determine filename from Content-Disposition or URL path.
-	filename, err := filenameFromResponse(resp, rawURL)
+	// Determine filename from Content-Disposition or URL path. Use the final
+	// (post-redirect) URL: extension-less endpoints like a cask's
+	// "/download/latest" often redirect to the actual artifact name.
+	filename, err := filenameFromResponse(resp, resp.Request.URL.String())
 	if err != nil {
 		return "", err
 	}

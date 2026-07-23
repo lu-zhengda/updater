@@ -38,7 +38,7 @@ func TestBrewInfoChecker_CanCheck(t *testing.T) {
 }
 
 func TestBrewInfoChecker_Check(t *testing.T) {
-	jsonResp := `{"casks":[{"token":"1password","version":"8.10.60"}]}`
+	jsonResp := `{"casks":[{"token":"1password","version":"8.10.60","url":"https://example.com/1password.zip","sha256":"abc123"}]}`
 	runner := &MockCmdRunner{Output: []byte(jsonResp)}
 
 	checker := NewBrewInfoChecker(runner)
@@ -64,6 +64,12 @@ func TestBrewInfoChecker_Check(t *testing.T) {
 	}
 	if result.CurrentVersion != "8.10.50" {
 		t.Errorf("CurrentVersion = %q, want %q", result.CurrentVersion, "8.10.50")
+	}
+	if result.DownloadURL != "https://example.com/1password.zip" {
+		t.Errorf("DownloadURL = %q, want cask url", result.DownloadURL)
+	}
+	if result.DownloadDigest != "sha256:abc123" {
+		t.Errorf("DownloadDigest = %q, want %q", result.DownloadDigest, "sha256:abc123")
 	}
 }
 
@@ -134,18 +140,35 @@ func TestParseBrewInfo(t *testing.T) {
 	tests := []struct {
 		name    string
 		data    string
-		want    string
+		want    brewCaskArtifact
 		wantErr bool
 	}{
 		{
 			name: "simple version",
 			data: `{"casks":[{"token":"firefox","version":"134.0"}]}`,
-			want: "134.0",
+			want: brewCaskArtifact{Version: "134.0"},
 		},
 		{
 			name: "composite version",
 			data: `{"casks":[{"token":"docker","version":"4.60.1,218372"}]}`,
-			want: "4.60.1",
+			want: brewCaskArtifact{Version: "4.60.1"},
+		},
+		{
+			name: "url and sha256",
+			data: `{"casks":[{"token":"vscode","version":"1.130.0","url":"https://example.com/vscode.zip","sha256":"deadbeef"}]}`,
+			want: brewCaskArtifact{
+				Version:        "1.130.0",
+				DownloadURL:    "https://example.com/vscode.zip",
+				DownloadDigest: "sha256:deadbeef",
+			},
+		},
+		{
+			name: "sha256 no_check yields empty digest",
+			data: `{"casks":[{"token":"chrome","version":"150.0","url":"https://example.com/chrome.dmg","sha256":"no_check"}]}`,
+			want: brewCaskArtifact{
+				Version:     "150.0",
+				DownloadURL: "https://example.com/chrome.dmg",
+			},
 		},
 		{
 			name:    "empty casks array",
@@ -172,7 +195,7 @@ func TestParseBrewInfo(t *testing.T) {
 				return
 			}
 			if got != tt.want {
-				t.Errorf("parseBrewInfo() = %q, want %q", got, tt.want)
+				t.Errorf("parseBrewInfo() = %+v, want %+v", got, tt.want)
 			}
 		})
 	}

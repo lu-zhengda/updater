@@ -216,6 +216,27 @@ func TestDownloadRejectsInsecureRedirect(t *testing.T) {
 	}
 }
 
+func TestDownload_FilenameFromRedirectTarget(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/latest", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/artifact.zip", http.StatusFound)
+	})
+	mux.HandleFunc("/artifact.zip", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("zip content"))
+	})
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+
+	inst := New(&checker.MockCmdRunner{}, ts.Client())
+	path, err := inst.download(context.Background(), ts.URL+"/latest", t.TempDir(), "")
+	if err != nil {
+		t.Fatalf("download failed: %v", err)
+	}
+	if got := filepath.Base(path); got != "artifact.zip" {
+		t.Errorf("filename = %q, want %q (from redirect target)", got, "artifact.zip")
+	}
+}
+
 func TestDownload_VerifiesDigest(t *testing.T) {
 	payload := []byte("verified payload")
 	sum := sha256.Sum256(payload)
