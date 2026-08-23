@@ -75,6 +75,8 @@ updater
 | Electron generic | HTTPS `latest-mac.yml` from update server | Verifies SHA-512 and Apple identity before direct install; otherwise opens app |
 | Brew-info fallback | `brew info --cask --json=v2` | If brew-installed: `brew upgrade --cask`; otherwise opens app |
 | npm globals | `npm outdated -g --json` | `npm install -g <pkg>@latest` |
+| pnpm globals | `pnpm outdated -g --format json` | `pnpm update -g --latest <pkg>` |
+| pipx applications | `pipx list --json` + PyPI JSON | `pipx upgrade <environment>` |
 | uv tools | `uv tool list` + PyPI JSON | `uv tool upgrade <tool>` |
 | cargo crates | `cargo install --list` + crates.io API | `cargo install <crate>` |
 | macOS system | `softwareupdate -l` | Opens Software Update settings |

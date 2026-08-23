@@ -165,6 +165,49 @@ func TestDiscoverUvTools_RunnerError(t *testing.T) {
 	}
 }
 
+func TestDiscoverPnpmPackages(t *testing.T) {
+	runner := &checker.MockCmdRunner{Output: []byte(`[
+		{"dependencies": {
+			"typescript": {"version": "5.7.3"},
+			"eslint": {"version": "9.17.0"}
+		}}
+	]`)}
+	apps, err := DiscoverPnpmPackages(context.Background(), runner)
+	if err != nil {
+		t.Fatalf("DiscoverPnpmPackages() error = %v", err)
+	}
+	if len(apps) != 2 {
+		t.Fatalf("got %d apps, want 2", len(apps))
+	}
+	if apps[0].Name != "eslint" || apps[0].BundleID != "pnpm.global.eslint" ||
+		apps[0].Source != app.SourcePnpm || apps[0].PnpmPackage != "eslint" {
+		t.Fatalf("apps[0] = %#v, want sorted pnpm eslint entry", apps[0])
+	}
+	if apps[1].Name != "typescript" || apps[1].Version != "5.7.3" {
+		t.Fatalf("apps[1] = %#v, want typescript 5.7.3", apps[1])
+	}
+}
+
+func TestDiscoverPipxPackages(t *testing.T) {
+	runner := &checker.MockCmdRunner{Output: []byte(`{"venvs":{
+		"ruff":{"metadata":{"main_package":{
+			"package":"ruff","package_or_url":"ruff","package_version":"0.9.0","pinned":false
+		}}}
+	}}`)}
+	apps, err := DiscoverPipxPackages(context.Background(), runner)
+	if err != nil {
+		t.Fatalf("DiscoverPipxPackages() error = %v", err)
+	}
+	if len(apps) != 1 {
+		t.Fatalf("got %d apps, want 1", len(apps))
+	}
+	got := apps[0]
+	if got.Name != "ruff" || got.BundleID != "pipx.venv.ruff" || got.Source != app.SourcePipx ||
+		got.PipxEnvironment != "ruff" || got.PipxPackage != "ruff" || got.Version != "0.9.0" {
+		t.Fatalf("pipx app = %#v", got)
+	}
+}
+
 // --- EnrichApps ---
 
 func TestEnrichApps_Phase1_GitHubMapping(t *testing.T) {
@@ -566,7 +609,7 @@ func TestEnrichApps_VSCode_GetsCaskViaBasename(t *testing.T) {
 		t.Errorf("CaskName = %q, want %q", result[0].CaskName, "visual-studio-code")
 	}
 	// BrewInfoChecker should now be able to handle this app.
-	brewInfoChecker := BuildCheckers(&checker.MockCmdRunner{}, "")[11] // last checker
+	brewInfoChecker := BuildCheckers(&checker.MockCmdRunner{}, "")[13] // last checker
 	if !brewInfoChecker.CanCheck(result[0]) {
 		t.Error("BrewInfoChecker.CanCheck = false, want true (app has CaskName)")
 	}
@@ -609,7 +652,7 @@ func TestEnrichApps_GitHubDesktop_GetsCaskViaBundleIDSegment(t *testing.T) {
 	if result[0].CaskName != "github" {
 		t.Errorf("CaskName = %q, want %q", result[0].CaskName, "github")
 	}
-	brewInfoChecker := BuildCheckers(&checker.MockCmdRunner{}, "")[11]
+	brewInfoChecker := BuildCheckers(&checker.MockCmdRunner{}, "")[13]
 	if !brewInfoChecker.CanCheck(result[0]) {
 		t.Error("BrewInfoChecker.CanCheck = false, want true (app has CaskName)")
 	}
@@ -653,7 +696,7 @@ func TestEnrichApps_GenericElectron_GetsCaskViaDisplayName(t *testing.T) {
 	if result[0].CaskName != "acme" {
 		t.Errorf("CaskName = %q, want %q", result[0].CaskName, "acme")
 	}
-	brewInfoChecker := BuildCheckers(&checker.MockCmdRunner{}, "")[11]
+	brewInfoChecker := BuildCheckers(&checker.MockCmdRunner{}, "")[13]
 	if !brewInfoChecker.CanCheck(result[0]) {
 		t.Error("BrewInfoChecker.CanCheck = false, want true (app has CaskName)")
 	}
@@ -751,8 +794,8 @@ func TestBuildCheckers(t *testing.T) {
 	runner := &checker.MockCmdRunner{}
 	checkers := BuildCheckers(runner, "test-token")
 
-	if len(checkers) != 12 {
-		t.Fatalf("got %d checkers, want 12", len(checkers))
+	if len(checkers) != 14 {
+		t.Fatalf("got %d checkers, want 14", len(checkers))
 	}
 
 	expectedNames := []string{
@@ -764,6 +807,8 @@ func TestBuildCheckers(t *testing.T) {
 		"formula",
 		"electron",
 		"npm",
+		"pnpm",
+		"pipx",
 		"uv",
 		"cargo",
 		"managed",

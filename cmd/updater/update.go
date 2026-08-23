@@ -294,6 +294,31 @@ func executeUpdate(ctx context.Context, r *checker.UpdateResult, runner checker.
 		fmt.Println(string(output))
 		return nil, false
 
+	case "pnpm":
+		if r.App.PnpmPackage == "" {
+			return fmt.Errorf("no pnpm package name for %s", r.App.Name), false
+		}
+		output, err := runner.Run(ctx, "pnpm", "update", "-g", "--latest", r.App.PnpmPackage)
+		if err != nil {
+			return fmt.Errorf("failed to update pnpm package %s: %w", r.App.PnpmPackage, err), false
+		}
+		fmt.Println(string(output))
+		return nil, false
+
+	case "pipx":
+		if r.App.PipxEnvironment == "" {
+			return fmt.Errorf("no pipx environment name for %s", r.App.Name), false
+		}
+		if r.App.PipxPinned || r.App.PipxNonRegistry {
+			return fmt.Errorf("pipx environment %s is pinned or not a plain PyPI install", r.App.PipxEnvironment), false
+		}
+		output, err := runner.Run(ctx, "pipx", "upgrade", r.App.PipxEnvironment)
+		if err != nil {
+			return fmt.Errorf("failed to update pipx environment %s: %w", r.App.PipxEnvironment, err), false
+		}
+		fmt.Println(string(output))
+		return nil, false
+
 	case "uv":
 		if r.App.UvTool == "" {
 			return fmt.Errorf("no uv tool name for %s", r.App.Name), false
@@ -524,6 +549,10 @@ func describeAction(r *checker.UpdateResult) string {
 		return fmt.Sprintf("brew upgrade %s", r.App.FormulaName)
 	case "npm":
 		return fmt.Sprintf("npm install -g %s@latest", r.App.NpmPackage)
+	case "pnpm":
+		return fmt.Sprintf("pnpm update -g --latest %s", r.App.PnpmPackage)
+	case "pipx":
+		return fmt.Sprintf("pipx upgrade %s", r.App.PipxEnvironment)
 	case "uv":
 		if r.App.UvPinned && r.LatestVersion != "" {
 			return fmt.Sprintf("uv tool install %s==%s (pinned install)", r.App.UvTool, r.LatestVersion)

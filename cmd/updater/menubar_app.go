@@ -22,7 +22,8 @@ import (
 )
 
 // extraPathDirs are prepended to PATH when missing. Under launchd the PATH is
-// /usr/bin:/bin:/usr/sbin:/sbin, which would hide brew, mas, npm, uv, and cargo.
+// /usr/bin:/bin:/usr/sbin:/sbin, which would hide brew, mas, npm, pnpm, pipx,
+// uv, and cargo.
 var extraPathDirs = []string{"/opt/homebrew/bin", "/usr/local/bin"}
 
 // runMenubarApp starts the systray event loop. It blocks until Quit.
@@ -35,13 +36,28 @@ func runMenubarApp() error {
 // ensurePath prepends well-known tool directories missing from PATH.
 func ensurePath() {
 	path := os.Getenv("PATH")
+	dirs := append([]string{}, extraPathDirs...)
+	if home, err := os.UserHomeDir(); err == nil {
+		// pnpm's global executables live in one of these locations depending on
+		// whether PNPM_HOME or global-bin-dir was configured by `pnpm setup`.
+		dirs = append(dirs,
+			filepath.Join(home, ".local", "bin"),
+			filepath.Join(home, "Library", "pnpm"),
+			filepath.Join(home, "Library", "pnpm", "bin"),
+			filepath.Join(home, ".local", "share", "pnpm"),
+		)
+		// A pip --user installation of pipx on macOS may place its executable
+		// under a versioned ~/Library/Python directory.
+		pythonUserBins, _ := filepath.Glob(filepath.Join(home, "Library", "Python", "*", "bin"))
+		dirs = append(dirs, pythonUserBins...)
+	}
 	parts := filepath.SplitList(path)
 	present := make(map[string]bool, len(parts))
 	for _, p := range parts {
 		present[p] = true
 	}
 	var prepend []string
-	for _, d := range extraPathDirs {
+	for _, d := range dirs {
 		if !present[d] {
 			prepend = append(prepend, d)
 		}
@@ -50,6 +66,8 @@ func ensurePath() {
 		os.Setenv("PATH", strings.Join(prepend, string(os.PathListSeparator))+string(os.PathListSeparator)+path)
 	}
 }
+
+var menubarBuildCheckers = updater.BuildCheckers
 
 // menubarApp owns all menu state. The menu is fully rebuilt on every refresh
 // via systray.ResetMenu; click-handler goroutines are scoped to a generation
@@ -146,7 +164,7 @@ func (m *menubarApp) runCheck(ctx context.Context) ([]*checker.UpdateResult, err
 	progress := m.progressItem
 	m.mu.Unlock()
 
-	checkers := updater.BuildCheckers(runner, cfg.ResolveGitHubToken())
+	checkers := menubarBuildCheckers(runner, cfg.ResolveGitHubToken())
 	var done int
 	results := updater.CheckAllProgress(ctx, apps, checkers, cfg.MaxConcurrentOrDefault(), func(*checker.UpdateResult) {
 		done++ // serialized by CheckAllProgress

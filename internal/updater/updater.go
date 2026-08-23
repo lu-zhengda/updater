@@ -147,6 +147,62 @@ func DiscoverNpmPackages(ctx context.Context, runner checker.CmdRunner) ([]*app.
 	return apps, nil
 }
 
+// DiscoverPnpmPackages creates synthetic App entries for each globally installed pnpm package.
+func DiscoverPnpmPackages(ctx context.Context, runner checker.CmdRunner) ([]*app.App, error) {
+	packages, err := checker.ListInstalledPnpmPackages(ctx, runner)
+	if err != nil {
+		return nil, err
+	}
+
+	names := make([]string, 0, len(packages))
+	for name := range packages {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	apps := make([]*app.App, 0, len(packages))
+	for _, name := range names {
+		apps = append(apps, &app.App{
+			Name:        name,
+			BundleID:    "pnpm.global." + name,
+			Version:     packages[name],
+			Source:      app.SourcePnpm,
+			PnpmPackage: name,
+		})
+	}
+	return apps, nil
+}
+
+// DiscoverPipxPackages creates synthetic App entries for pipx-managed applications.
+func DiscoverPipxPackages(ctx context.Context, runner checker.CmdRunner) ([]*app.App, error) {
+	packages, err := checker.ListInstalledPipxPackages(ctx, runner)
+	if err != nil {
+		return nil, err
+	}
+
+	names := make([]string, 0, len(packages))
+	for environment := range packages {
+		names = append(names, environment)
+	}
+	sort.Strings(names)
+
+	apps := make([]*app.App, 0, len(packages))
+	for _, environment := range names {
+		info := packages[environment]
+		apps = append(apps, &app.App{
+			Name:            environment,
+			BundleID:        "pipx.venv." + environment,
+			Version:         info.Version,
+			Source:          app.SourcePipx,
+			PipxEnvironment: info.Environment,
+			PipxPackage:     info.Package,
+			PipxNonRegistry: info.NonRegistry,
+			PipxPinned:      info.Pinned,
+		})
+	}
+	return apps, nil
+}
+
 // DiscoverCargoCrates creates synthetic App entries for each crate installed via `cargo install`.
 func DiscoverCargoCrates(ctx context.Context, runner checker.CmdRunner) ([]*app.App, error) {
 	crates, err := checker.ListInstalledCargoCrates(ctx, runner)
@@ -174,10 +230,11 @@ func DiscoverCargoCrates(ctx context.Context, runner checker.CmdRunner) ([]*app.
 }
 
 // DiscoverAll runs the full discovery pipeline shared by every entry point
-// (CLI commands, TUI, menu bar app): disk apps plus brew formulae, npm
-// globals, uv tools, and cargo crates, followed by enrichment. Failures in
-// individual package-manager sources are non-fatal and reported through warn
-// (which may be nil). The returned apps are enriched but not filtered; apply
+// (CLI commands, TUI, menu bar app): disk apps plus brew formulae, npm and pnpm
+// globals, pipx applications, uv tools, and cargo crates, followed by
+// enrichment. Failures in individual package-manager sources are non-fatal and
+// reported through warn (which may be nil). The returned apps are enriched but
+// not filtered; apply
 // FilterIgnored as needed.
 func DiscoverAll(ctx context.Context, cfg *config.Config, runner checker.CmdRunner, warn func(source string, err error)) ([]*app.App, error) {
 	if warn == nil {
@@ -195,6 +252,8 @@ func DiscoverAll(ctx context.Context, cfg *config.Config, runner checker.CmdRunn
 	}{
 		{"brew formulae", DiscoverBrewFormulae},
 		{"npm packages", DiscoverNpmPackages},
+		{"pnpm packages", DiscoverPnpmPackages},
+		{"pipx applications", DiscoverPipxPackages},
 		{"uv tools", DiscoverUvTools},
 		{"cargo crates", DiscoverCargoCrates},
 	}
@@ -376,6 +435,8 @@ func BuildCheckers(runner checker.CmdRunner, githubToken string) []checker.Check
 		checker.NewBrewFormulaChecker(runner),
 		checker.NewElectronChecker(httpClient),
 		checker.NewNpmChecker(runner),
+		checker.NewPnpmChecker(runner),
+		checker.NewPipxChecker(nil, ""),
 		checker.NewUvChecker(nil, ""),
 		checker.NewCargoChecker(nil, ""),
 		checker.NewManagedChecker(),

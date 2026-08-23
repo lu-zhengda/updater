@@ -111,6 +111,14 @@ func discoverNpmPackages(ctx context.Context, runner checker.CmdRunner) ([]*app.
 	return updater.DiscoverNpmPackages(ctx, runner)
 }
 
+func discoverPnpmPackages(ctx context.Context, runner checker.CmdRunner) ([]*app.App, error) {
+	return updater.DiscoverPnpmPackages(ctx, runner)
+}
+
+func discoverPipxPackages(ctx context.Context, runner checker.CmdRunner) ([]*app.App, error) {
+	return updater.DiscoverPipxPackages(ctx, runner)
+}
+
 func discoverUvTools(ctx context.Context, runner checker.CmdRunner) ([]*app.App, error) {
 	return updater.DiscoverUvTools(ctx, runner)
 }
@@ -196,6 +204,10 @@ func cliSourceName(source string) string {
 		return "formula"
 	case "npm":
 		return "npm"
+	case "pnpm":
+		return "pnpm"
+	case "pipx":
+		return "pipx"
 	case "uv":
 		return "uv"
 	case "cargo":

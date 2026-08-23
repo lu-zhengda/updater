@@ -48,7 +48,7 @@ func runDoctor(cmd *cobra.Command, _ []string) error {
 	var checks []doctorCheck
 
 	// External tools.
-	tools := []string{"brew", "mas", "osascript", "hdiutil", "ditto", "sw_vers", "npm", "uv"}
+	tools := []string{"brew", "mas", "osascript", "hdiutil", "ditto", "sw_vers", "npm", "pnpm", "pipx", "uv"}
 	for _, tool := range tools {
 		checks = append(checks, checkTool(ctx, runner, tool))
 	}

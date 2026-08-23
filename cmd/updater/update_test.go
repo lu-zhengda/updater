@@ -20,6 +20,17 @@ import (
 	"github.com/spf13/cobra"
 )
 
+type captureUpdateRunner struct {
+	name string
+	args []string
+}
+
+func (r *captureUpdateRunner) Run(_ context.Context, name string, args ...string) ([]byte, error) {
+	r.name = name
+	r.args = append([]string(nil), args...)
+	return []byte("updated"), nil
+}
+
 // createFakeBackup manually creates a backup directory structure that
 // backup.Manager.HasBackup/Restore can find.
 func createFakeBackup(t *testing.T, baseDir, appName, appPath string) {
@@ -95,6 +106,57 @@ func TestRollback_NotTriggeredForBrew(t *testing.T) {
 	}
 	if rolledBack {
 		t.Error("brew failures should NOT trigger rollback")
+	}
+}
+
+func TestExecuteUpdate_PnpmGlobalPackage(t *testing.T) {
+	runner := &captureUpdateRunner{}
+	result := &checker.UpdateResult{
+		App: &app.App{
+			Name:        "typescript",
+			Source:      app.SourcePnpm,
+			PnpmPackage: "typescript",
+		},
+		Source:         "pnpm",
+		CurrentVersion: "5.0.0",
+		LatestVersion:  "5.7.3",
+	}
+
+	err, rolledBack := executeUpdate(context.Background(), result, runner, nil, nil)
+	if err != nil {
+		t.Fatalf("executeUpdate() error = %v", err)
+	}
+	if rolledBack {
+		t.Fatal("executeUpdate() rolledBack = true, want false")
+	}
+	if runner.name != "pnpm" || strings.Join(runner.args, " ") != "update -g --latest typescript" {
+		t.Fatalf("command = %s %s, want pnpm update -g --latest typescript", runner.name, strings.Join(runner.args, " "))
+	}
+}
+
+func TestExecuteUpdate_PipxApplication(t *testing.T) {
+	runner := &captureUpdateRunner{}
+	result := &checker.UpdateResult{
+		App: &app.App{
+			Name:            "black",
+			Source:          app.SourcePipx,
+			PipxEnvironment: "black",
+			PipxPackage:     "black",
+		},
+		Source:         "pipx",
+		CurrentVersion: "24.10.0",
+		LatestVersion:  "25.1.0",
+	}
+
+	err, rolledBack := executeUpdate(context.Background(), result, runner, nil, nil)
+	if err != nil {
+		t.Fatalf("executeUpdate() error = %v", err)
+	}
+	if rolledBack {
+		t.Fatal("executeUpdate() rolledBack = true, want false")
+	}
+	if runner.name != "pipx" || strings.Join(runner.args, " ") != "upgrade black" {
+		t.Fatalf("command = %s %s, want pipx upgrade black", runner.name, strings.Join(runner.args, " "))
 	}
 }
 
@@ -280,6 +342,22 @@ func TestDescribeAction(t *testing.T) {
 				Source: "formula",
 			},
 			want: "brew upgrade node",
+		},
+		{
+			name: "pnpm",
+			result: &checker.UpdateResult{
+				App:    &app.App{PnpmPackage: "typescript"},
+				Source: "pnpm",
+			},
+			want: "pnpm update -g --latest typescript",
+		},
+		{
+			name: "pipx",
+			result: &checker.UpdateResult{
+				App:    &app.App{PipxEnvironment: "black"},
+				Source: "pipx",
+			},
+			want: "pipx upgrade black",
 		},
 		{
 			name: "system",

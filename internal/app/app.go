@@ -21,6 +21,8 @@ const (
 	SourceToolbox     Source = "toolbox"
 	SourceAdobe       Source = "adobe"
 	SourceNpm         Source = "npm"
+	SourcePnpm        Source = "pnpm"
+	SourcePipx        Source = "pipx"
 	SourceUv          Source = "uv"
 	SourceCargo       Source = "cargo"
 	SourceUnknown     Source = "unknown"
@@ -45,6 +47,11 @@ type App struct {
 	SourceOverrideActive   bool
 	SourceOverrideKind     string
 	NpmPackage             string // Globally installed npm package name
+	PnpmPackage            string // Globally installed pnpm package name
+	PipxEnvironment        string // pipx managed-environment name used by `pipx upgrade`
+	PipxPackage            string // Canonical Python distribution package name
+	PipxNonRegistry        bool   // true for VCS, URL, path, script, or constrained installs
+	PipxPinned             bool   // true when pipx has pinned the environment
 	UvTool                 string // Tool name managed by `uv tool install`
 	UvNonRegistry          bool   // true when the uv tool was installed from git/path/url, not PyPI
 	UvPinned               bool   // true when the uv tool requirement pins an exact version (==)
