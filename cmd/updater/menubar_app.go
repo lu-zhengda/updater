@@ -223,7 +223,7 @@ func (m *menubarApp) notifyNewUpdates(updatable []*checker.UpdateResult) {
 //	Check Now
 //	---
 //	Open Terminal UI
-//	Preferences ▸ (interval, Start at Login)
+//	Preferences ▸ (interval, backups, Start at Login)
 //	Quit Updater
 func (m *menubarApp) rebuild(updatable []*checker.UpdateResult, status string) {
 	m.mu.Lock()
@@ -331,6 +331,18 @@ func (m *menubarApp) rebuild(updatable []*checker.UpdateResult, status string) {
 			go m.mutateConfig(func(cfg *config.Config) { cfg.ScheduleInterval = opt.hours })
 		})
 	}
+	backupCfg, err := config.Load(config.DefaultPath())
+	backupsEnabled := err == nil && backupCfg.MaxBackupsLimit() > 0
+	backups := prefs.AddSubMenuItemCheckbox("Back Up Before Updates", "Keep rollback copies of updated apps", backupsEnabled)
+	onClick(gen, backups, func() {
+		go m.mutateConfig(func(cfg *config.Config) {
+			if backupsEnabled {
+				cfg.MaxBackups = 0
+			} else {
+				cfg.MaxBackups = 1
+			}
+		})
+	})
 	login := prefs.AddSubMenuItemCheckbox("Start at Login", "Keep the menu bar app running via launchd", loginItemInstalled())
 	onClick(gen, login, func() { go toggleLoginItem(login) })
 

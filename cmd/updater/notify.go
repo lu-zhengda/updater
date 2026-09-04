@@ -7,7 +7,6 @@ import (
 	"os"
 	"strings"
 
-	"github.com/lu-zhengda/updater/internal/backup"
 	"github.com/lu-zhengda/updater/internal/checker"
 	"github.com/lu-zhengda/updater/internal/config"
 	"github.com/lu-zhengda/updater/internal/installer"
@@ -110,7 +109,7 @@ func runNotify(cmd *cobra.Command, _ []string) error {
 // and manual/notify-only policy apps.
 func autoUpdateAfterNotify(ctx context.Context, cfg *config.Config, updatable []*checker.UpdateResult) ([]string, []string) {
 	runner := newRunner()
-	bm := backup.NewManager(backup.DefaultBaseDir(), cfg.MaxBackupsOrDefault(), runner)
+	bm := backupManagerForConfig(cfg, runner)
 	inst := installer.New(runner, nil)
 
 	autoSkipSources := map[string]bool{

@@ -149,8 +149,8 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	// Create backup manager and installer for direct updates.
-	bm := backup.NewManager(backup.DefaultBaseDir(), cfg.MaxBackupsOrDefault(), runner)
+	// Backups are opt-in because app bundles can consume substantial disk space.
+	bm := backupManagerForConfig(cfg, runner)
 	inst := installer.New(runner, nil)
 
 	// Execute updates. When using --all, skip pinned apps unless explicitly named.
@@ -219,8 +219,22 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
+// backupManagerForConfig returns a manager only when automatic backups are
+// explicitly enabled. Manual rollback commands construct their own manager so
+// disabling new backups does not hide or invalidate existing recovery data.
+func backupManagerForConfig(cfg *config.Config, runner checker.CmdRunner) *backup.Manager {
+	if cfg == nil {
+		return nil
+	}
+	limit := cfg.MaxBackupsLimit()
+	if limit == 0 {
+		return nil
+	}
+	return backup.NewManager(backup.DefaultBaseDir(), limit, runner)
+}
+
 // executeUpdate performs the actual update for a single app.
-// It backs up the current version before updating when possible.
+// It backs up the current version before updating when a manager is provided.
 // Returns the error (if any) and whether a rollback was performed.
 func executeUpdate(ctx context.Context, r *checker.UpdateResult, runner checker.CmdRunner, bm *backup.Manager, inst *installer.Installer) (error, bool) {
 	// Backup before update (non-fatal on failure).

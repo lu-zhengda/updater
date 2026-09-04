@@ -34,6 +34,7 @@ type Config struct {
 	InteractiveNotifications bool                             `yaml:"interactive_notifications"`
 	ignoredSet               map[string]bool                  `yaml:"-"`
 	pinnedSet                map[string]bool                  `yaml:"-"`
+	maxBackupsSet            bool                             `yaml:"-"`
 }
 
 // DefaultPath returns the default config file path (~/.config/updater/config.yaml).
@@ -51,6 +52,11 @@ func Parse(data []byte) (*Config, error) {
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("failed to parse config file: %w", err)
 	}
+	var fields map[string]yaml.Node
+	if err := yaml.Unmarshal(data, &fields); err != nil {
+		return nil, fmt.Errorf("failed to parse config file: %w", err)
+	}
+	_, cfg.maxBackupsSet = fields["max_backups"]
 	if err := validateSourceOverrides(cfg.SourceOverrides); err != nil {
 		return nil, fmt.Errorf("failed to parse config file: %w", err)
 	}
@@ -185,13 +191,13 @@ func (c *Config) MaxConcurrentOrDefault() int {
 	return 10
 }
 
-// MaxBackupsOrDefault returns MaxBackups if set to a positive value,
-// otherwise returns 1 as the default.
-func (c *Config) MaxBackupsOrDefault() int {
+// MaxBackupsLimit returns the configured per-app retention count. Zero means
+// automatic backups are disabled.
+func (c *Config) MaxBackupsLimit() int {
 	if c.MaxBackups > 0 {
 		return c.MaxBackups
 	}
-	return 1
+	return 0
 }
 
 // ScheduleIntervalOrDefault returns ScheduleInterval if set to a positive value,
@@ -319,14 +325,15 @@ func Merge(current, imported *Config) *Config {
 	}
 	result.Policies = mergeMaps(current.Policies, imported.Policies)
 
-	// Non-zero scalar overrides.
+	// Non-zero scalar overrides. MaxBackups is the exception: an explicitly
+	// imported zero disables backups.
 	if imported.GitHubToken != "" {
 		result.GitHubToken = imported.GitHubToken
 	}
 	if imported.MaxConcurrent > 0 {
 		result.MaxConcurrent = imported.MaxConcurrent
 	}
-	if imported.MaxBackups > 0 {
+	if imported.maxBackupsSet || imported.MaxBackups > 0 {
 		result.MaxBackups = imported.MaxBackups
 	}
 	if imported.ScheduleInterval > 0 {

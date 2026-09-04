@@ -207,7 +207,7 @@ cask_mappings:
   com.readdle.PDFExpert-Mac: "pdf-expert"
 
 max_concurrent: 10
-max_backups: 1
+max_backups: 0
 interactive_notifications: true
 ```
 
@@ -215,13 +215,14 @@ Notes:
 
 - Set `GITHUB_TOKEN` in the environment when authenticated GitHub API access is needed. A legacy `github_token` config value is still accepted, but the config is stored with owner-only permissions.
 - `cask_mappings` are only needed when automatic cask token detection is wrong.
+- Backups are disabled by default because app bundles can be large. Enable **Preferences › Back Up Before Updates** in the menu bar app, or set `max_backups` to a positive per-app retention count. Set it to `0` to disable backups.
 - Use `updater config export` and `updater config import <file>` to move config between machines.
 
 ## Safety Model
 
 - `--dry-run` prints the exact planned actions without making changes.
-- Backups are created before install-based updates when app paths are available.
-- Failed direct installs attempt automatic rollback from backup.
+- When backups are enabled, they are created before install-based updates when app paths are available.
+- Failed direct installs attempt automatic rollback when a backup is available.
 - Downloaded apps must be valid, notarized, and match the installed bundle ID and Developer Team ID. Installer packages must be notarized and signed by that same team.
 - Scheduled checks notify only; unattended installation requires `schedule --auto-update`.
 - Pinned apps are skipped in `update --all`.

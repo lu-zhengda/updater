@@ -14,7 +14,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/lu-zhengda/updater/internal/backup"
 	"github.com/lu-zhengda/updater/internal/checker"
 	"github.com/lu-zhengda/updater/internal/config"
 	"github.com/lu-zhengda/updater/internal/history"
@@ -156,7 +155,7 @@ func updateFromWindow(state *windowState, bundleID string) (bool, string) {
 		return false, err.Error()
 	}
 	runner := newRunner()
-	bm := backup.NewManager(backup.DefaultBaseDir(), cfg.MaxBackupsOrDefault(), runner)
+	bm := backupManagerForConfig(cfg, runner)
 	inst := installer.New(runner, nil)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)

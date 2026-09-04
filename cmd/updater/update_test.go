@@ -25,6 +25,16 @@ type captureUpdateRunner struct {
 	args []string
 }
 
+func TestBackupManagerForConfigIsOptIn(t *testing.T) {
+	runner := &checker.MockCmdRunner{}
+	if got := backupManagerForConfig(&config.Config{}, runner); got != nil {
+		t.Fatal("backupManagerForConfig() returned a manager for max_backups 0")
+	}
+	if got := backupManagerForConfig(&config.Config{MaxBackups: 1}, runner); got == nil {
+		t.Fatal("backupManagerForConfig() returned nil for positive max_backups")
+	}
+}
+
 func (r *captureUpdateRunner) Run(_ context.Context, name string, args ...string) ([]byte, error) {
 	r.name = name
 	r.args = append([]string(nil), args...)

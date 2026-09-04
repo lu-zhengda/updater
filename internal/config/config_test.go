@@ -210,21 +210,21 @@ func TestMaxConcurrentOrDefault(t *testing.T) {
 	}
 }
 
-func TestMaxBackupsOrDefault(t *testing.T) {
+func TestMaxBackupsLimit(t *testing.T) {
 	tests := []struct {
 		name  string
 		value int
 		want  int
 	}{
-		{"zero returns default", 0, 1},
-		{"negative returns default", -1, 1},
+		{"zero disables backups", 0, 0},
+		{"negative disables backups", -1, 0},
 		{"positive returns value", 5, 5},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := &Config{MaxBackups: tt.value}
-			if got := cfg.MaxBackupsOrDefault(); got != tt.want {
-				t.Errorf("MaxBackupsOrDefault() = %d, want %d", got, tt.want)
+			if got := cfg.MaxBackupsLimit(); got != tt.want {
+				t.Errorf("MaxBackupsLimit() = %d, want %d", got, tt.want)
 			}
 		})
 	}
@@ -729,6 +729,19 @@ func TestMerge_MaxBackupsOverride(t *testing.T) {
 	result := Merge(current, imported)
 	if result.MaxBackups != 10 {
 		t.Errorf("MaxBackups = %d, want 10 (imported should override)", result.MaxBackups)
+	}
+}
+
+func TestMerge_ExplicitZeroMaxBackupsDisablesBackups(t *testing.T) {
+	current := &Config{MaxBackups: 3}
+	imported, err := Parse([]byte("max_backups: 0\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result := Merge(current, imported)
+	if result.MaxBackups != 0 {
+		t.Fatalf("MaxBackups = %d, want 0", result.MaxBackups)
 	}
 }
 

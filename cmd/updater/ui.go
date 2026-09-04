@@ -48,7 +48,8 @@ func runUI(cmd *cobra.Command, _ []string) error {
 	runner := newRunner()
 	checkers := buildCheckers(runner, cfg.ResolveGitHubToken())
 	maxConc := cfg.MaxConcurrentOrDefault()
-	bm := backup.NewManager(backup.DefaultBaseDir(), cfg.MaxBackupsOrDefault(), runner)
+	rollbackManager := backup.NewManager(backup.DefaultBaseDir(), cfg.MaxBackupsLimit(), runner)
+	updateBackupManager := backupManagerForConfig(cfg, runner)
 	inst := installer.New(runner, nil)
 
 	pinnedIDs := make(map[string]bool, len(cfg.PinnedApps))
@@ -81,7 +82,7 @@ func runUI(cmd *cobra.Command, _ []string) error {
 	}
 
 	updateFn := func(ctx context.Context, result *checker.UpdateResult) error {
-		err, _ := executeUpdate(ctx, result, runner, bm, inst)
+		err, _ := executeUpdate(ctx, result, runner, updateBackupManager, inst)
 		return err
 	}
 
@@ -119,11 +120,11 @@ func runUI(cmd *cobra.Command, _ []string) error {
 				break
 			}
 		}
-		return bm.Restore(ctx, appName)
+		return rollbackManager.Restore(ctx, appName)
 	}
 
 	hasBackupFn := func(appName string) bool {
-		return bm.HasBackup(appName)
+		return rollbackManager.HasBackup(appName)
 	}
 
 	historyFn := func() ([]history.Entry, error) {

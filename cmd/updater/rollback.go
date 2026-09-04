@@ -54,7 +54,7 @@ func rollbackSingle(cmd *cobra.Command, query string, useJSON bool) error {
 	}
 
 	runner := newRunner()
-	bm := backup.NewManager(backup.DefaultBaseDir(), cfg.MaxBackupsOrDefault(), runner)
+	bm := backup.NewManager(backup.DefaultBaseDir(), cfg.MaxBackupsLimit(), runner)
 
 	backupName := query
 	var targetAppName string
@@ -149,7 +149,7 @@ func rollbackAll(cmd *cobra.Command, useJSON bool) error {
 	}
 
 	runner := newRunner()
-	bm := backup.NewManager(baseDir, cfg.MaxBackupsOrDefault(), runner)
+	bm := backup.NewManager(baseDir, cfg.MaxBackupsLimit(), runner)
 
 	// Discover installed apps once for quit-if-running lookups.
 	installedApps, _ := discoverApps()
