@@ -2,9 +2,11 @@ package updater
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -232,10 +234,9 @@ func DiscoverCargoCrates(ctx context.Context, runner checker.CmdRunner) ([]*app.
 // DiscoverAll runs the full discovery pipeline shared by every entry point
 // (CLI commands, TUI, menu bar app): disk apps plus brew formulae, npm and pnpm
 // globals, pipx applications, uv tools, and cargo crates, followed by
-// enrichment. Failures in individual package-manager sources are non-fatal and
-// reported through warn (which may be nil). The returned apps are enriched but
-// not filtered; apply
-// FilterIgnored as needed.
+// enrichment. Missing optional executables are skipped silently. Other failures
+// are non-fatal and reported through warn (which may be nil). The returned apps
+// are enriched but not filtered; apply FilterIgnored as needed.
 func DiscoverAll(ctx context.Context, cfg *config.Config, runner checker.CmdRunner, warn func(source string, err error)) ([]*app.App, error) {
 	if warn == nil {
 		warn = func(string, error) {}
@@ -260,7 +261,9 @@ func DiscoverAll(ctx context.Context, cfg *config.Config, runner checker.CmdRunn
 	for _, s := range sources {
 		extra, err := s.fn(ctx, runner)
 		if err != nil {
-			warn(s.name, err)
+			if !errors.Is(err, exec.ErrNotFound) {
+				warn(s.name, err)
+			}
 			continue
 		}
 		apps = append(apps, extra...)
@@ -304,7 +307,9 @@ func EnrichApps(ctx context.Context, apps []*app.App, cfg *config.Config, runner
 	casks, err := checker.ListInstalledCasks(ctx, runner)
 	if err != nil {
 		// Non-fatal: brew may not be installed.
-		fmt.Fprintf(os.Stderr, "warning: could not list brew casks: %v\n", err)
+		if !errors.Is(err, exec.ErrNotFound) {
+			fmt.Fprintf(os.Stderr, "warning: could not list brew casks: %v\n", err)
+		}
 		return apps, nil
 	}
 

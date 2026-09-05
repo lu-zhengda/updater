@@ -3,7 +3,11 @@ package updater
 import (
 	"context"
 	"fmt"
+	"os"
+	"os/exec"
+	"reflect"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/lu-zhengda/updater/internal/app"
@@ -26,6 +30,59 @@ func (m *mockChecker) Check(_ context.Context, a *app.App) (*checker.UpdateResul
 }
 
 // --- DiscoverBrewFormulae ---
+
+func TestDiscoverAll_OptionalPackageManagers(t *testing.T) {
+	// Exercise real executable lookup without depending on installed managers.
+	t.Setenv("PATH", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
+	for _, tt := range []struct {
+		name     string
+		runner   checker.CmdRunner
+		wantWarn bool
+	}{
+		{"absent", &checker.RealCmdRunner{}, false},
+		{"wrapped absent", &checker.MockCmdRunner{Err: fmt.Errorf("wrapped: %w", &exec.Error{Name: "manager", Err: exec.ErrNotFound})}, false},
+		{"command failure", &checker.MockCmdRunner{Err: &exec.ExitError{}}, true},
+		{"permission denied", &checker.MockCmdRunner{Err: os.ErrPermission}, true},
+		{"timeout", &checker.MockCmdRunner{Err: context.DeadlineExceeded}, true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			stderr, err := os.CreateTemp(t.TempDir(), "stderr")
+			if err != nil {
+				t.Fatal(err)
+			}
+			originalStderr := os.Stderr
+			os.Stderr = stderr
+			t.Cleanup(func() { os.Stderr = originalStderr; stderr.Close() })
+
+			var warnings []string
+			_, err = DiscoverAll(context.Background(), &config.Config{}, tt.runner, func(source string, _ error) {
+				warnings = append(warnings, source)
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var want []string
+			if tt.wantWarn {
+				want = []string{"brew formulae", "npm packages", "pnpm packages", "pipx applications", "uv tools", "cargo crates"}
+			}
+			if !reflect.DeepEqual(warnings, want) {
+				t.Errorf("warnings = %v, want %v", warnings, want)
+			}
+			output, err := os.ReadFile(stderr.Name())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tt.wantWarn {
+				if !strings.Contains(string(output), "warning: could not list brew casks:") {
+					t.Errorf("missing cask warning: %s", output)
+				}
+			} else if len(output) != 0 {
+				t.Errorf("unexpected stderr: %s", output)
+			}
+		})
+	}
+}
 
 func TestDiscoverBrewFormulae(t *testing.T) {
 	tests := []struct {
