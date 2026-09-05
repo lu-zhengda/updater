@@ -66,9 +66,10 @@ homebrew_casks:
       bash: completions/updater.bash
       zsh: completions/updater.zsh
       fish: completions/updater.fish
-    # Install Updater.app as the app. The archive's root binary is linked onto
-    # PATH automatically (goreleaser emits `binary "updater"`), so the CLI/TUI
-    # keeps working standalone.
+    # Use the executable inside the stapled app for CLI/TUI launches too.
+    # A quarantined standalone Mach-O cannot carry the app's stapled ticket.
+    binaries:
+      - "#{appdir}/Updater.app/Contents/MacOS/updater"
     custom_block: |
       app "Updater.app"
     hooks:
