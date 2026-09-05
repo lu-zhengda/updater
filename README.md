@@ -1,7 +1,6 @@
 # updater
 
 [![CI](https://github.com/lu-zhengda/updater/actions/workflows/ci.yml/badge.svg)](https://github.com/lu-zhengda/updater/actions/workflows/ci.yml)
-[![Release](https://github.com/lu-zhengda/updater/actions/workflows/release.yml/badge.svg)](https://github.com/lu-zhengda/updater/actions/workflows/release.yml)
 [![Latest Release](https://img.shields.io/github/v/release/lu-zhengda/updater?sort=semver)](https://github.com/lu-zhengda/updater/releases)
 [![Go Version](https://img.shields.io/github/go-mod/go-version/lu-zhengda/updater)](https://github.com/lu-zhengda/updater/blob/main/go.mod)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/lu-zhengda/updater/blob/main/LICENSE)
