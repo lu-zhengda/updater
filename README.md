@@ -9,7 +9,7 @@
 
 Installing gives you both entry points from one binary:
 
-- **Updater.app** (default) — a menu bar app in `/Applications` that checks periodically, shows an update count, notifies about new updates, and updates apps from the dropdown. It launches automatically after install/upgrade.
+- **Updater.app** (default) — a menu bar app in `/Applications` that checks periodically, shows an update count, notifies about new updates, and updates apps from the dropdown. Open it from Applications after install/upgrade.
 - **`updater` CLI/TUI** — the same engine on your PATH for terminal use, scripting, and agents.
 
 ## Requirements
@@ -36,9 +36,10 @@ brew install --cask lu-zhengda/tap/updater
 updater --version
 ```
 
-This installs `Updater.app` to `/Applications` (and launches it), puts the
+This installs `Updater.app` to `/Applications`, puts the
 `updater` CLI on your PATH, and includes `mas` automatically as a cask
-dependency. Upgrades refresh both, since they are the same binary.
+dependency. Upgrades refresh both, since they are the same binary. Open
+`Updater.app` from Applications after installing.
 
 Upgrade later:
 
@@ -147,7 +148,7 @@ updater schedule --remove
 ## Menu Bar App (Updater.app)
 
 `Updater.app` is the default entry point: opening it (Finder, Spotlight, or
-the automatic post-install launch) runs the menu bar app. It periodically
+a manual launch after installation) runs the menu bar app. It periodically
 runs the same discovery/check pipeline as the CLI, shows an update count in
 the menu bar, posts a macOS notification when new updates appear, and lets
 you update a single app or everything from the dropdown (updates go through

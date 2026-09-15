@@ -78,12 +78,5 @@ homebrew_casks:
           if OS.mac?
             # Replace a manually-placed copy (e.g. from the release tarball);
             # Homebrew refuses to overwrite an app it did not install.
-            system_command "/bin/rm", args: ["-rf", "#{appdir}/Updater.app"], sudo: false
-          end
-      post:
-        install: |
-          if OS.mac?
-            # The release is Developer ID signed and notarized; preserve
-            # quarantine so Gatekeeper can enforce that trust decision.
-            system_command "/usr/bin/open", args: ["#{appdir}/Updater.app"], sudo: false
+            remove "Updater.app", base: :appdir, recursive: true
           end
