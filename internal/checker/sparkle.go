@@ -105,10 +105,15 @@ func (s *SparkleChecker) Check(ctx context.Context, a *app.App) (*UpdateResult, 
 		return nil, fmt.Errorf("failed to check sparkle update: no items in appcast for %s", a.Name)
 	}
 
-	// Find the best matching item: filter by macOS version, pick the last
-	// compatible item (feeds often list oldest first, newest last, or newest first).
+	// Select the newest release compatible with the current macOS version.
 	macOSVersion := getMacOSVersionFn()
 	item := findBestItem(rss.Channel.Items, macOSVersion)
+	if item == (sparkleItem{}) {
+		return &UpdateResult{
+			App: a, Source: "sparkle",
+			CurrentVersion: a.Version, LatestVersion: a.Version,
+		}, nil
+	}
 
 	// Extract version: prefer enclosure attributes (most common in real feeds),
 	// fall back to item child elements.
@@ -144,6 +149,7 @@ func (s *SparkleChecker) Check(ctx context.Context, a *app.App) (*UpdateResult, 
 
 // findBestItem picks the most appropriate item from the feed,
 // filtering by macOS compatibility and preferring the newest version.
+// It returns a zero item if no release is compatible.
 func findBestItem(items []sparkleItem, macOSVersion string) sparkleItem {
 	var best sparkleItem
 	bestVersion := ""
@@ -179,10 +185,6 @@ func findBestItem(items []sparkleItem, macOSVersion string) sparkleItem {
 		}
 	}
 
-	// If no compatible item found, return the first one
-	if bestVersion == "" && len(items) > 0 {
-		return items[0]
-	}
 	return best
 }
 

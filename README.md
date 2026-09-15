@@ -18,6 +18,15 @@ Installing gives you both entry points from one binary:
 - Homebrew (recommended)
 - `mas` for Mac App Store checks (installed automatically with the Homebrew cask)
 
+### macOS 27 verification
+
+Verified locally on macOS 27.0 (build 26A428), Apple silicon, with the macOS
+27.0 SDK: race tests, `go vet`, app bundle build/signature verification, CLI
+discovery, and the native updates window completing a check. Sparkle feeds
+respect macOS version limits even when no release supports the current OS.
+Installing updates, notifications, and login startup still require separate
+end-to-end verification on macOS 27.
+
 ## Install (Recommended)
 
 Install from Homebrew tap:

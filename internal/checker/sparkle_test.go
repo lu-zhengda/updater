@@ -104,36 +104,42 @@ func TestSparkleChecker_CheckErrorPaths(t *testing.T) {
 	})
 }
 
-func TestFindBestItem_AllFilteredOut(t *testing.T) {
-	// All items are filtered out by OS version, should return items[0] as fallback.
+func TestSparkleChecker_MacOS27Compatibility(t *testing.T) {
 	orig := getMacOSVersionFn
-	getMacOSVersionFn = func() string { return "13.0" }
-	defer func() { getMacOSVersionFn = orig }()
+	getMacOSVersionFn = func() string { return "27.0" }
+	t.Cleanup(func() { getMacOSVersionFn = orig })
 
-	items := []sparkleItem{
-		{
-			Title:            "Version 4.0",
-			MinSystemVersion: "16.0",
-			Enclosure: sparkleEnclosure{
-				ShortVersionString: "4.0.0",
-				URL:                "https://example.com/v4.dmg",
-			},
-		},
-		{
-			Title:            "Version 3.0",
-			MinSystemVersion: "15.0",
-			Enclosure: sparkleEnclosure{
-				ShortVersionString: "3.0.0",
-				URL:                "https://example.com/v3.dmg",
-			},
-		},
-	}
-
-	result := findBestItem(items, getMacOSVersionFn())
-	// Both items require macOS 15+ or 16+, but we're on 13.0 — all filtered out.
-	// Should fallback to items[0].
-	if result.Enclosure.ShortVersionString != "4.0.0" {
-		t.Errorf("expected fallback to items[0] (4.0.0), got %q", result.Enclosure.ShortVersionString)
+	for _, tt := range []struct {
+		name, limits string
+		wantUpdate   bool
+	}{
+		{"older macOS only", "<sparkle:maximumSystemVersion>26.99</sparkle:maximumSystemVersion>", false},
+		{"future macOS only", "<sparkle:minimumSystemVersion>28.0</sparkle:minimumSystemVersion>", false},
+		{"macOS 27 minimum", "<sparkle:minimumSystemVersion>27.0</sparkle:minimumSystemVersion>", true},
+		{"macOS 27 maximum", "<sparkle:maximumSystemVersion>27.0</sparkle:maximumSystemVersion>", true},
+		{"unrestricted", "", true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			ts := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = w.Write([]byte(`<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle"><channel><item>` + tt.limits +
+					`<enclosure url="https://example.com/v2.dmg" sparkle:shortVersionString="2.0.0" /></item></channel></rss>`))
+			}))
+			defer ts.Close()
+			a := &app.App{Name: "TestApp", Version: "1.0.0", FeedURL: ts.URL}
+			result, err := NewSparkleChecker(ts.Client()).Check(context.Background(), a)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result.HasUpdate != tt.wantUpdate {
+				t.Fatalf("HasUpdate = %v, want %v", result.HasUpdate, tt.wantUpdate)
+			}
+			if !tt.wantUpdate && (result.DownloadURL != "" || result.StaleSource || result.LatestVersion != a.Version) {
+				t.Fatalf("incompatible feed must not offer a download or trigger stale-source fallback: %+v", result)
+			}
+			if tt.wantUpdate && (result.LatestVersion != "2.0.0" || result.DownloadURL == "") {
+				t.Fatalf("compatible release missing: %+v", result)
+			}
+		})
 	}
 }
 
