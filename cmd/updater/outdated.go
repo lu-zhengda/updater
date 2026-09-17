@@ -30,6 +30,7 @@ type outdatedEntry struct {
 	CurrentVersion string `json:"current_version"`
 	LatestVersion  string `json:"latest_version"`
 	Source         string `json:"source"`
+	NativeUpgrade  bool   `json:"native_upgrade,omitempty"`
 	DownloadURL    string `json:"download_url,omitempty"`
 }
 
@@ -80,6 +81,7 @@ func toOutdatedEntries(results []*checker.UpdateResult) []outdatedEntry {
 			LatestVersion:  r.LatestVersion,
 			Source:         r.Source,
 			DownloadURL:    r.DownloadURL,
+			NativeUpgrade:  r.NativeUpgrade,
 		})
 	}
 	if entries == nil {

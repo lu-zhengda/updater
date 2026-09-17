@@ -161,6 +161,9 @@ func printCheckResults(cmd *cobra.Command, results []*checker.UpdateResult, cfg 
 		if r.HasUpdate && cfg.IsPinned(r.App.BundleID) {
 			pinnedCount++
 			fmt.Fprintf(w, "%s\t%s\t%s\t%s\tPINNED\n", r.App.Name, r.CurrentVersion, r.LatestVersion, src)
+		} else if r.HasUpdate && r.NativeUpgrade {
+			updateCount++
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\tARM VERSION AVAILABLE\n", r.App.Name, r.CurrentVersion, r.LatestVersion, src)
 		} else if r.HasUpdate && r.IsMajorUpdate {
 			updateCount++
 			fmt.Fprintf(w, "%s\t%s\t%s\t%s\tMAJOR UPDATE\n", r.App.Name, r.CurrentVersion, r.LatestVersion, src)
@@ -229,6 +232,7 @@ type checkEntry struct {
 	Source         string `json:"source"`
 	Status         string `json:"status"`
 	DownloadURL    string `json:"download_url,omitempty"`
+	NativeUpgrade  bool   `json:"native_upgrade,omitempty"`
 	ReleaseNotes   string `json:"release_notes,omitempty"`
 	Error          string `json:"error,omitempty"`
 }
@@ -246,6 +250,7 @@ func toCheckEntries(results []*checker.UpdateResult, cfg *config.Config) []check
 			Source:             r.Source,
 			DownloadURL:        r.DownloadURL,
 			ReleaseNotes:       r.ReleaseNotes,
+			NativeUpgrade:      r.NativeUpgrade,
 		}
 		switch {
 		case r.Error != nil:

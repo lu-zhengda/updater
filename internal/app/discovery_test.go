@@ -1,6 +1,7 @@
 package app
 
 import (
+	"encoding/binary"
 	"os"
 	"path/filepath"
 	"testing"
@@ -10,6 +11,7 @@ import (
 
 // plistData holds the Info.plist fields we care about.
 type plistData struct {
+	BundleExecutable   string `plist:"CFBundleExecutable,omitempty"`
 	BundleName         string `plist:"CFBundleName"`
 	BundleDisplayName  string `plist:"CFBundleDisplayName"`
 	BundleID           string `plist:"CFBundleIdentifier"`
@@ -991,5 +993,26 @@ func TestEnrichElectronApp_UnknownProvider(t *testing.T) {
 	}
 	if apps[0].ElectronUpdateURL != "" {
 		t.Errorf("expected empty ElectronUpdateURL, got %q", apps[0].ElectronUpdateURL)
+	}
+}
+
+func TestDiscoverIntelExecutable(t *testing.T) {
+	dir := t.TempDir()
+	appPath := createFakeApp(t, dir, "Test", plistData{BundleID: "test.app", BundleExecutable: "Test"}, false, false)
+	binaryPath := filepath.Join(appPath, "Contents", "MacOS")
+	if err := os.MkdirAll(binaryPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Minimal valid 64-bit Intel Mach-O header.
+	data := make([]byte, 32)
+	binary.LittleEndian.PutUint32(data, 0xfeedfacf)
+	binary.LittleEndian.PutUint32(data[4:], 0x01000007)
+	binary.LittleEndian.PutUint32(data[12:], 2)
+	if err := os.WriteFile(filepath.Join(binaryPath, "Test"), data, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	apps, err := Discover(dir)
+	if err != nil || len(apps) != 1 || !apps[0].IntelOnly {
+		t.Fatalf("Intel app not detected: %+v, %v", apps, err)
 	}
 }

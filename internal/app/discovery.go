@@ -6,12 +6,14 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/lu-zhengda/updater/internal/architecture"
 	"gopkg.in/yaml.v3"
 	"howett.net/plist"
 )
 
 // infoPlist maps the fields we read from an app's Info.plist.
 type infoPlist struct {
+	BundleExecutable   string `plist:"CFBundleExecutable"`
 	BundleName         string `plist:"CFBundleName"`
 	BundleDisplayName  string `plist:"CFBundleDisplayName"`
 	BundleID           string `plist:"CFBundleIdentifier"`
@@ -93,6 +95,10 @@ func parseApp(appPath string) (*App, error) {
 		Path:     appPath,
 		FeedURL:  info.FeedURL,
 		Source:   classifySource(appPath, contentsDir, info),
+	}
+
+	if executable := info.BundleExecutable; executable != "" && executable != "." && executable != ".." && filepath.Base(executable) == executable {
+		a.IntelOnly = architecture.IntelOnly(filepath.Join(contentsDir, "MacOS", executable))
 	}
 
 	if a.Source == SourceElectron {

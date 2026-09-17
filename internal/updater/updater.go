@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,8 +15,10 @@ import (
 	"time"
 
 	"github.com/lu-zhengda/updater/internal/app"
+	"github.com/lu-zhengda/updater/internal/architecture"
 	"github.com/lu-zhengda/updater/internal/checker"
 	"github.com/lu-zhengda/updater/internal/config"
+	"github.com/lu-zhengda/updater/internal/version"
 )
 
 // DiscoverApps scans /Applications and ~/Applications for installed apps.
@@ -596,6 +599,8 @@ func CheckWithFallthrough(ctx context.Context, a *app.App, checkers []checker.Ch
 	var lastErr error
 	var lastSource string
 	var staleCount int
+	var fallback *checker.UpdateResult
+	seekNative := a.IntelOnly && architecture.Native() == "arm64"
 
 	for _, c := range checkers {
 		if !c.CanCheck(a) {
@@ -615,7 +620,27 @@ func CheckWithFallthrough(ctx context.Context, a *app.App, checkers []checker.Ch
 			continue // stale feed, try next checker
 		}
 
-		return withOverrideProvenance(result, a)
+		result = withOverrideProvenance(result, a)
+		if seekNative && result.Error == nil {
+			download, parseErr := url.Parse(result.DownloadURL)
+			if parseErr == nil && result.DownloadURL != "" && architecture.Score(download.Path, "arm64") >= 2 &&
+				result.CurrentVersion != "" && result.LatestVersion != "" && version.IsNewerOrEqual(result.CurrentVersion, result.LatestVersion) {
+				result.NativeUpgrade = true
+				result.HasUpdate = true
+			}
+			// A version-only source (notably brew outdated) may miss a same-version
+			// native replacement. Keep its result if later sources have none.
+			if !result.HasUpdate {
+				if fallback == nil {
+					fallback = result
+				}
+				continue
+			}
+		}
+		return result
+	}
+	if fallback != nil {
+		return fallback
 	}
 
 	// All checkers failed or were stale — return error result from last attempt.

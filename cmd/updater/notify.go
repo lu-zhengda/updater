@@ -118,7 +118,7 @@ func autoUpdateAfterNotify(ctx context.Context, cfg *config.Config, updatable []
 
 	var updated, failed []string
 	for _, r := range updatable {
-		if cfg.IsPinned(r.App.BundleID) || r.IsMajorUpdate || autoSkipSources[r.Source] {
+		if cfg.IsPinned(r.App.BundleID) || r.IsMajorUpdate || r.NativeUpgrade || autoSkipSources[r.Source] {
 			continue
 		}
 		policy := cfg.Policy(r.App.BundleID)
@@ -148,7 +148,11 @@ func autoUpdateAfterNotify(ctx context.Context, cfg *config.Config, updatable []
 func buildNotificationBody(results []*checker.UpdateResult) string {
 	parts := make([]string, 0, len(results))
 	for _, r := range results {
-		parts = append(parts, fmt.Sprintf("%s (%s\u2192%s)", r.App.Name, r.CurrentVersion, r.LatestVersion))
+		if r.NativeUpgrade {
+			parts = append(parts, r.App.Name+" (ARM version available)")
+		} else {
+			parts = append(parts, fmt.Sprintf("%s (%s\u2192%s)", r.App.Name, r.CurrentVersion, r.LatestVersion))
+		}
 	}
 	body := strings.Join(parts, ", ")
 	if len(body) > 200 {

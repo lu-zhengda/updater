@@ -92,6 +92,8 @@ updater
 
 Direct downloads prefer the Mac’s native architecture, then universal builds. Explicitly incompatible builds are excluded. Before replacing an app from a DMG or ZIP, the updater also checks that its executable supports the native architecture, even when filenames omit it.
 
+On Apple Silicon, Intel-only apps are offered an **Install ARM version** action when an update source advertises a native or universal build at the same or a newer version. These suggestions are excluded from unattended auto-updates; pins and ignore settings still apply. Unlabeled downloads do not trigger a suggestion.
+
 Also detected (for visibility): Setapp, JetBrains Toolbox, and Adobe apps.
 
 ## Command Guide

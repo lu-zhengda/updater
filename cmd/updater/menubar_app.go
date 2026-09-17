@@ -268,10 +268,17 @@ func (m *menubarApp) rebuild(updatable []*checker.UpdateResult, status string) {
 		items := make([]*systray.MenuItem, len(updatable))
 		for i, r := range updatable {
 			label := fmt.Sprintf("%s  %s → %s", r.App.Name, r.CurrentVersion, r.LatestVersion)
+			if r.NativeUpgrade {
+				label += " · Intel → ARM"
+			}
 			items[i] = systray.AddMenuItem(label, "")
 			r, item := r, items[i]
 
-			update := item.AddSubMenuItem("Update Now", "Update "+r.App.Name)
+			action := "Update Now"
+			if r.NativeUpgrade {
+				action = "Install ARM Version"
+			}
+			update := item.AddSubMenuItem(action, "Update "+r.App.Name)
 			onClick(gen, update, func() {
 				go func() {
 					m.runUpdate(r.App.Name, r.App.BundleID, item)

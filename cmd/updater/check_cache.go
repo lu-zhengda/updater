@@ -17,13 +17,14 @@ type checkCache struct {
 }
 
 type cacheEntry struct {
-	Name     string `json:"name"`
-	BundleID string `json:"bundle_id"`
-	Current  string `json:"current_version"`
-	Latest   string `json:"latest_version,omitempty"`
-	Source   string `json:"source"`
-	Status   string `json:"status"` // update_available | ok | error | pinned
-	Error    string `json:"error,omitempty"`
+	Name          string `json:"name"`
+	BundleID      string `json:"bundle_id"`
+	Current       string `json:"current_version"`
+	Latest        string `json:"latest_version,omitempty"`
+	Source        string `json:"source"`
+	Status        string `json:"status"` // update_available | ok | error | pinned
+	NativeUpgrade bool   `json:"native_upgrade,omitempty"`
+	Error         string `json:"error,omitempty"`
 }
 
 func checkCachePath() string {
@@ -39,11 +40,12 @@ func cacheEntriesFromResults(results []*checker.UpdateResult, isPinned func(stri
 	entries := make([]cacheEntry, 0, len(results))
 	for _, r := range results {
 		e := cacheEntry{
-			Name:     r.App.Name,
-			BundleID: r.App.BundleID,
-			Current:  r.CurrentVersion,
-			Latest:   r.LatestVersion,
-			Source:   r.Source,
+			Name:          r.App.Name,
+			BundleID:      r.App.BundleID,
+			Current:       r.CurrentVersion,
+			Latest:        r.LatestVersion,
+			Source:        r.Source,
+			NativeUpgrade: r.NativeUpgrade,
 		}
 		switch {
 		case r.Error != nil:

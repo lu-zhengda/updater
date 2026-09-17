@@ -107,7 +107,7 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 			if cfg.IsPinned(r.App.BundleID) {
 				continue
 			}
-			if r.IsMajorUpdate {
+			if r.IsMajorUpdate || r.NativeUpgrade {
 				continue
 			}
 			if autoSkipSources[r.Source] {
@@ -255,11 +255,11 @@ func executeUpdate(ctx context.Context, r *checker.UpdateResult, runner checker.
 			openForSelfUpdate(ctx, r.App, runner)
 			return checker.ErrOpenedExternally, false
 		}
-		return brewUpgrade(ctx, r.App, runner), false
+		return brewUpgrade(ctx, r.App, runner, r.NativeUpgrade), false
 
 	case "brew-info":
 		if r.App.InstalledViaBrew && r.App.CaskName != "" {
-			return brewUpgrade(ctx, r.App, runner), false
+			return brewUpgrade(ctx, r.App, runner, r.NativeUpgrade), false
 		}
 		// Not brew-managed: install the cask's artifact directly instead of
 		// relying on the app's own updater.
@@ -483,17 +483,21 @@ func rollbackAfterFailedInstall(ctx context.Context, bm *backup.Manager, appName
 	return true
 }
 
-// brewUpgrade quits the app if running, runs brew upgrade, and reopens it.
-func brewUpgrade(ctx context.Context, a *app.App, runner checker.CmdRunner) error {
+// brewUpgrade quits the app, upgrades (or reinstalls for ARM migration), and reopens it.
+func brewUpgrade(ctx context.Context, a *app.App, runner checker.CmdRunner, reinstall bool) error {
 	wasRunning := quitAppIfRunning(ctx, a, runner)
 
-	output, err := runner.Run(ctx, "brew", "upgrade", "--cask", a.CaskName)
+	action := "upgrade"
+	if reinstall {
+		action = "reinstall"
+	}
+	output, err := runner.Run(ctx, "brew", action, "--cask", a.CaskName)
 	if err != nil {
 		// Reopen if we quit it but upgrade failed.
 		if wasRunning {
 			_, _ = runner.Run(ctx, "open", "-a", a.Path)
 		}
-		return fmt.Errorf("failed to run brew upgrade: %w", err)
+		return fmt.Errorf("failed to run brew %s: %w", action, err)
 	}
 	fmt.Println(string(output))
 
@@ -545,6 +549,9 @@ func openForSelfUpdate(ctx context.Context, a *app.App, runner checker.CmdRunner
 
 // describeAction returns a human-readable action string for each update source.
 func describeAction(r *checker.UpdateResult) string {
+	if r.NativeUpgrade {
+		return "Install ARM version"
+	}
 	switch r.Source {
 	case "brew", "brew-info":
 		if r.App.InstalledViaBrew && r.App.CaskName != "" {

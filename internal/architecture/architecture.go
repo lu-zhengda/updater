@@ -2,6 +2,7 @@
 package architecture
 
 import (
+	"debug/macho"
 	"os/exec"
 	"runtime"
 	"strings"
@@ -46,4 +47,26 @@ func Score(name, arch string) int {
 		return 0
 	}
 	return 1
+}
+
+// IntelOnly reports a known Intel-only Mach-O executable. Unreadable files,
+// scripts and universal binaries must not trigger migration suggestions.
+func IntelOnly(path string) bool {
+	if fat, err := macho.OpenFat(path); err == nil {
+		defer fat.Close()
+		intel := false
+		for _, arch := range fat.Arches {
+			if arch.Cpu == macho.CpuArm64 {
+				return false
+			}
+			intel = intel || arch.Cpu == macho.CpuAmd64 || arch.Cpu == macho.Cpu386
+		}
+		return intel
+	}
+	binary, err := macho.Open(path)
+	if err != nil {
+		return false
+	}
+	defer binary.Close()
+	return binary.Cpu == macho.CpuAmd64 || binary.Cpu == macho.Cpu386
 }

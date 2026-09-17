@@ -1313,6 +1313,10 @@ func (m Model) renderRow(index int, isCursor bool, isSelected bool) string {
 		latest = r.result.LatestVersion
 		rawSource = r.result.Source
 		status = stylePinned.Render("pinned")
+	} else if r.result.HasUpdate && r.result.NativeUpgrade {
+		latest = r.result.LatestVersion
+		rawSource = r.result.Source
+		status = styleUpdate.Render("ARM available")
 	} else if r.result.HasUpdate && r.result.IsMajorUpdate {
 		latest = r.result.LatestVersion
 		rawSource = r.result.Source

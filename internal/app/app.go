@@ -30,6 +30,7 @@ const (
 
 // App represents an installed macOS application.
 type App struct {
+	IntelOnly        bool // executable contains Intel code and no ARM slice
 	Name             string
 	BundleID         string
 	Version          string // CFBundleShortVersionString

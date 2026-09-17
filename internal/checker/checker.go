@@ -23,6 +23,7 @@ type UpdateResult struct {
 	DownloadURL    string
 	DownloadDigest string // optional "sha256:<hex>" or "sha512:<base64>"
 	ReleaseNotes   string
+	NativeUpgrade  bool // offers replacing an Intel-only app with an ARM-capable build
 	HasUpdate      bool
 	IsMajorUpdate  bool // true when latest has a higher major version
 	StaleSource    bool // true when the source's latest is older than installed

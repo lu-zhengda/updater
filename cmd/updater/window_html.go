@@ -102,7 +102,7 @@ function render() {
     if (busy[e.bundle_id]) stateHtml = '<span class="msg">Updating…</span>';
     else if (m) stateHtml = '<span class="msg ' + (m.ok ? "" : "err") + '">' + esc(m.message) + '</span>';
     else if (e.status === "update_available")
-      stateHtml = '<button onclick="doUpdate(\'' + esc(e.bundle_id) + '\')" ' + (checking ? "disabled" : "") + '>Update</button>' +
+      stateHtml = '<button onclick="doUpdate(\'' + esc(e.bundle_id) + '\')" ' + (checking ? "disabled" : "") + '>' + (e.native_upgrade ? 'Install ARM version' : 'Update') + '</button>' +
         '<button class="mini" onclick="doPin(\'' + esc(e.bundle_id) + '\')" title="Skip this update">Pin</button>' +
         '<button class="mini" onclick="doIgnore(\'' + esc(e.bundle_id) + '\')" title="Stop checking this app">Ignore</button>';
     else if (e.status === "pinned")
@@ -113,7 +113,7 @@ function render() {
     else stateHtml = '<span class="dot ok">●</span>';
 
     const ver = e.status === "update_available" || e.status === "pinned"
-      ? esc(e.current_version) + ' → <b>' + esc(e.latest_version) + '</b>'
+      ? esc(e.current_version) + ' → <b>' + esc(e.latest_version) + '</b>' + (e.native_upgrade ? ' · Intel → ARM' : '')
       : esc(e.current_version);
     return '<div class="row"><span class="name">' + esc(e.name) + '</span>' +
       '<span class="ver">' + ver + '</span><span class="src">' + esc(e.source) + '</span>' +
