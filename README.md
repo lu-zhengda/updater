@@ -81,7 +81,7 @@ updater
 | Homebrew formula | `brew outdated --formula --json` | `brew upgrade <formula>` |
 | Mac App Store | `mas outdated` | `mas upgrade <id>` or opens App Store updates |
 | GitHub Releases | GitHub Releases API | Verifies release digest and Apple identity before direct install; otherwise opens release asset URL |
-| Electron generic | HTTPS `latest-mac.yml` from update server | Verifies SHA-512 and Apple identity before direct install; otherwise opens app |
+| Electron generic | HTTPS macOS update feed (including Notion’s ARM channel) | Verifies SHA-512 and Apple identity before direct install; otherwise opens app |
 | Brew-info fallback | `brew info --cask --json=v2` | If brew-installed: `brew upgrade --cask`; otherwise opens app |
 | npm globals | `npm outdated -g --json` | `npm install -g <pkg>@latest` |
 | pnpm globals | `pnpm outdated -g --format json` | `pnpm update -g --latest <pkg>` |
@@ -89,6 +89,8 @@ updater
 | uv tools | `uv tool list` + PyPI JSON | `uv tool upgrade <tool>` |
 | cargo crates | `cargo install --list` + crates.io API | `cargo install <crate>` |
 | macOS system | `softwareupdate -l` | Opens Software Update settings |
+
+Direct downloads prefer the Mac’s native architecture, then universal builds. Explicitly incompatible builds are excluded. Before replacing an app from a DMG or ZIP, the updater also checks that its executable supports the native architecture, even when filenames omit it.
 
 Also detected (for visibility): Setapp, JetBrains Toolbox, and Adobe apps.
 

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/lu-zhengda/updater/internal/app"
+	"github.com/lu-zhengda/updater/internal/architecture"
 	"github.com/lu-zhengda/updater/internal/version"
 )
 
@@ -136,13 +137,17 @@ var macKeywords = []string{"mac", "darwin", "macos", "osx"}
 // It looks for assets with macOS file extensions (.dmg, .pkg, .zip) that
 // also contain a macOS keyword (mac, darwin, macos, osx) in their name.
 func findMacAsset(assets []GitHubAsset) GitHubAsset {
+	var best GitHubAsset
+	bestScore := 0
 	for _, asset := range assets {
 		nameLower := strings.ToLower(asset.Name)
 		if hasMacExtension(nameLower) && hasMacKeyword(nameLower) {
-			return asset
+			if score := architecture.Score(nameLower, architecture.Native()); score > bestScore {
+				best, bestScore = asset, score
+			}
 		}
 	}
-	return GitHubAsset{}
+	return best
 }
 
 func hasMacExtension(name string) bool {

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/lu-zhengda/updater/internal/app"
+	"github.com/lu-zhengda/updater/internal/architecture"
 	"github.com/lu-zhengda/updater/internal/version"
 )
 
@@ -153,8 +154,13 @@ func (s *SparkleChecker) Check(ctx context.Context, a *app.App) (*UpdateResult, 
 func findBestItem(items []sparkleItem, macOSVersion string) sparkleItem {
 	var best sparkleItem
 	bestVersion := ""
+	bestScore := 0
 
 	for _, item := range items {
+		score := architecture.Score(item.Enclosure.URL, architecture.Native())
+		if score == 0 {
+			continue
+		}
 		// Skip items incompatible with current macOS
 		if item.MinSystemVersion != "" && macOSVersion != "" {
 			if !version.IsNewerOrEqual(item.MinSystemVersion, macOSVersion) {
@@ -179,7 +185,8 @@ func findBestItem(items []sparkleItem, macOSVersion string) sparkleItem {
 			v = item.Version
 		}
 
-		if bestVersion == "" || version.IsNewer(bestVersion, v) {
+		if bestVersion == "" || version.IsNewer(bestVersion, v) || v == bestVersion && score > bestScore {
+			bestScore = score
 			best = item
 			bestVersion = v
 		}

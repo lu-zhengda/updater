@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/lu-zhengda/updater/internal/architecture"
 )
 
 func TestParseCodeIdentity(t *testing.T) {
@@ -76,6 +78,10 @@ func TestVerifyReplacementAppAcceptsMatchingNotarizedIdentity(t *testing.T) {
 				return nil, nil
 			}
 			return []byte("Identifier=com.example.app\nTeamIdentifier=AB12CD34EF\n"), nil
+		case "/usr/bin/plutil":
+			return []byte("Candidate"), nil
+		case "/usr/bin/lipo":
+			return nil, nil
 		case "/usr/sbin/spctl":
 			return []byte("accepted\nsource=Notarized Developer ID"), nil
 		default:
@@ -85,5 +91,38 @@ func TestVerifyReplacementAppAcceptsMatchingNotarizedIdentity(t *testing.T) {
 
 	if err := verifier.VerifyReplacementApp(context.Background(), "/Applications/Installed.app", candidate); err != nil {
 		t.Fatalf("expected matching notarized app to pass: %v", err)
+	}
+}
+
+func TestVerifyReplacementAppRejectsWrongArchitecture(t *testing.T) {
+	candidate := filepath.Join(t.TempDir(), "Candidate.app")
+	if err := os.Mkdir(candidate, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	checked := false
+	verifier := &Verifier{run: func(_ context.Context, name string, args ...string) ([]byte, error) {
+		switch name {
+		case "/usr/bin/codesign":
+			return []byte("Identifier=com.example.app\nTeamIdentifier=AB12CD34EF\n"), nil
+		case "/usr/bin/plutil":
+			return []byte("Candidate"), nil
+		case "/usr/bin/lipo":
+			checked = true
+			wantArch := architecture.Native()
+			if wantArch == "amd64" {
+				wantArch = "x86_64"
+			}
+			if len(args) != 3 || args[0] != "-verify_arch" || args[1] != wantArch || args[2] != filepath.Join(candidate, "Contents", "MacOS", "Candidate") {
+				t.Fatalf("unexpected binary check: %v", args)
+			}
+			return nil, fmt.Errorf("missing native architecture")
+		default:
+			t.Fatalf("must stop before Gatekeeper after architecture failure: %s", name)
+			return nil, nil
+		}
+	}}
+	err := verifier.VerifyReplacementApp(context.Background(), "/Applications/Installed.app", candidate)
+	if !checked || err == nil || !strings.Contains(err.Error(), "does not support native architecture") {
+		t.Fatalf("wrong architecture must be rejected: %v", err)
 	}
 }

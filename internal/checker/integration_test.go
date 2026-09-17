@@ -146,7 +146,7 @@ func TestGitHub_EndToEnd(t *testing.T) {
 		Body:    "Bug fixes and improvements",
 		Assets: []GitHubAsset{
 			{Name: "app-linux-amd64.tar.gz", DownloadURL: "https://example.com/linux.tar.gz"},
-			{Name: "app-macos-arm64.dmg", DownloadURL: "https://example.com/mac.dmg"},
+			{Name: "app-macos-universal.dmg", DownloadURL: "https://example.com/mac.dmg"},
 		},
 	}
 

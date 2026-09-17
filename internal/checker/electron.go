@@ -9,15 +9,22 @@ import (
 	"time"
 
 	"github.com/lu-zhengda/updater/internal/app"
+	"github.com/lu-zhengda/updater/internal/architecture"
 	"github.com/lu-zhengda/updater/internal/version"
 	"gopkg.in/yaml.v3"
 )
 
 // latestMacYML maps the fields from an Electron generic server's latest-mac.yml.
 type latestMacYML struct {
-	Version string `yaml:"version"`
-	Path    string `yaml:"path"`
-	SHA512  string `yaml:"sha512"`
+	Files   []electronFile `yaml:"files"`
+	Version string         `yaml:"version"`
+	Path    string         `yaml:"path"`
+	SHA512  string         `yaml:"sha512"`
+}
+
+type electronFile struct {
+	URL    string `yaml:"url"`
+	SHA512 string `yaml:"sha512"`
 }
 
 // ElectronChecker checks for updates via Electron generic update servers.
@@ -49,6 +56,11 @@ func (e *ElectronChecker) Check(ctx context.Context, a *app.App) (*UpdateResult,
 		return nil, fmt.Errorf("refusing insecure Electron update URL for %s: %w", a.Name, err)
 	}
 	metadataURL := baseURL + "/latest-mac.yml"
+	arch := architecture.Native()
+	// Notion switches channels at runtime; app-update.yml always says latest.
+	if a.BundleID == "notion.id" && arch == "arm64" {
+		metadataURL = baseURL + "/arm64-mac.yml"
+	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, metadataURL, nil)
 	if err != nil {
@@ -81,6 +93,26 @@ func (e *ElectronChecker) Check(ctx context.Context, a *app.App) (*UpdateResult,
 	if latest.Version == "" {
 		return nil, fmt.Errorf("no version found in update info for %s", a.Name)
 	}
+
+	files := latest.Files
+	if len(files) == 0 && latest.Path != "" {
+		files = []electronFile{{URL: latest.Path, SHA512: latest.SHA512}}
+	}
+	var selected electronFile
+	bestScore := 0
+	for _, file := range files {
+		parsed, err := url.Parse(file.URL)
+		if err != nil || !hasMacExtension(strings.ToLower(parsed.Path)) {
+			continue
+		}
+		if score := architecture.Score(parsed.Path, arch); score > bestScore {
+			selected, bestScore = file, score
+		}
+	}
+	if len(files) > 0 && selected.URL == "" {
+		return nil, fmt.Errorf("no compatible %s download for %s", arch, a.Name)
+	}
+	latest.Path, latest.SHA512 = selected.URL, selected.SHA512
 
 	var downloadURL string
 	var downloadDigest string

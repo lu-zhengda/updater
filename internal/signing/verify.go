@@ -5,8 +5,11 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/lu-zhengda/updater/internal/architecture"
 )
 
 // CodeIdentity is the stable Apple signing identity used to decide whether a
@@ -58,6 +61,24 @@ func (v *Verifier) VerifyReplacementApp(ctx context.Context, installedApp, candi
 	}
 	if candidate.TeamID != installed.TeamID {
 		return fmt.Errorf("candidate Team ID %q does not match installed Team ID %q", candidate.TeamID, installed.TeamID)
+	}
+
+	// Validate the binary itself: feeds can omit or mislabel architecture.
+	executable, err := v.run(ctx, "/usr/bin/plutil", "-extract", "CFBundleExecutable", "raw", "-o", "-", filepath.Join(candidateApp, "Contents", "Info.plist"))
+	if err != nil {
+		return commandError("cannot read candidate executable", executable, err)
+	}
+	name := strings.TrimSpace(string(executable))
+	if name == "" || name == "." || name == ".." || filepath.Base(name) != name {
+		return fmt.Errorf("invalid candidate executable name %q", name)
+	}
+	arch := architecture.Native()
+	if arch == "amd64" {
+		arch = "x86_64"
+	}
+	binary := filepath.Join(candidateApp, "Contents", "MacOS", name)
+	if output, err := v.run(ctx, "/usr/bin/lipo", "-verify_arch", arch, binary); err != nil {
+		return commandError("candidate app does not support native architecture "+arch, output, err)
 	}
 
 	if output, err := v.run(ctx, "/usr/sbin/spctl", "--assess", "--type", "execute", "--verbose=4", candidateApp); err != nil {
