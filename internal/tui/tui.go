@@ -409,7 +409,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case updateDoneMsg:
 		delete(m.updating, msg.index)
 		m.rows[msg.index].updating = false
-		if errors.Is(msg.err, checker.ErrOpenedExternally) {
+		if errors.Is(msg.err, checker.ErrUpdateScheduled) {
+			m.statusMsg = checker.ErrUpdateScheduled.Error()
+		} else if errors.Is(msg.err, checker.ErrOpenedExternally) {
 			m.statusMsg = fmt.Sprintf("Opened %s for update", m.rows[msg.index].app.Name)
 		} else if msg.err != nil {
 			m.statusMsg = fmt.Sprintf("Update failed for %s: %v", m.rows[msg.index].app.Name, msg.err)

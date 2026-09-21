@@ -176,6 +176,23 @@ updater menubar run       # run the menu bar app in the foreground (debugging)
 The check interval follows `schedule_interval` from the config (same setting
 used by `updater schedule`).
 
+Updater appears in the same update list as other apps. Use its **Update** action,
+**Update All**, or **YOLO Mode** to install a new version. Internally, a helper waits
+for active update batches to finish, updates the complete app, and restarts it.
+`updater upgrade` also supports app-bundle installations, including the Homebrew
+CLI link. Homebrew cask installations are upgraded through Homebrew;
+direct installations verify the release checksum,
+signature, notarization, and app identity before replacement. A failed replacement
+restores the previous app. Results appear in update history and notifications;
+helper details are logged to `~/.config/updater/logs/self-update.log`.
+
+Enable **Preferences › YOLO Mode** to automatically install available updates
+after menu bar checks, including major versions. It is off by default and also
+applies to scheduled checks. Pins, ignored apps, manual/notify-only policies,
+download verification, and the exclusion of ARM migration suggestions still
+apply. Apps requiring an external updater remain available for manual action.
+Successful installs appear in history; failed installs remain available to retry.
+
 Building the app bundle from source:
 
 ```sh
@@ -221,6 +238,7 @@ cask_mappings:
 
 max_concurrent: 10
 max_backups: 0
+yolo_mode: false
 interactive_notifications: true
 ```
 
@@ -237,7 +255,7 @@ Notes:
 - When backups are enabled, they are created before install-based updates when app paths are available.
 - Failed direct installs attempt automatic rollback when a backup is available.
 - Downloaded apps must be valid, notarized, and match the installed bundle ID and Developer Team ID. Installer packages must be notarized and signed by that same team.
-- Scheduled checks notify only; unattended installation requires `schedule --auto-update`.
+- Scheduled checks notify only by default; unattended installation requires `schedule --auto-update` (non-major updates) or YOLO Mode (including major updates).
 - Pinned apps are skipped in `update --all`.
 - `policy` lets you force per-app behavior (`auto`, `manual`, `notify-only`).
 

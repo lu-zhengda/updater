@@ -159,6 +159,11 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 	if flagDryRun {
 		return printDryRun(cmd, updatable, isExplicit, cfg, jsonOutputEnabled(flagDryRunJSON))
 	}
+	activity, err := updateActivityLock(ctx, false)
+	if err != nil {
+		return err
+	}
+	defer activity.Close()
 
 	// Split updates into sequential and parallel groups.
 	sequentialSources := map[string]bool{
@@ -237,6 +242,18 @@ func backupManagerForConfig(cfg *config.Config, runner checker.CmdRunner) *backu
 // It backs up the current version before updating when a manager is provided.
 // Returns the error (if any) and whether a rollback was performed.
 func executeUpdate(ctx context.Context, r *checker.UpdateResult, runner checker.CmdRunner, bm *backup.Manager, inst *installer.Installer) (error, bool) {
+	// Every entry point routes self-updates to a helper outside the app bundle.
+	if r.App.BundleID == app.UpdaterBundleID {
+		if err := startSelfUpgrade(ctx, r.App.Path); err != nil {
+			return err, false
+		}
+		return checker.ErrUpdateScheduled, false
+	}
+	activity, err := updateActivityLock(ctx, false)
+	if err != nil {
+		return err, false
+	}
+	defer activity.Close()
 	// Backup before update (non-fatal on failure).
 	if bm != nil && r.App.Path != "" {
 		if err := bm.Backup(ctx, r.App.Name, r.App.BundleID, r.CurrentVersion, r.App.Path); err != nil {
@@ -426,6 +443,10 @@ func performUpdate(cmd *cobra.Command, ctx context.Context, r *checker.UpdateRes
 		r.App.Name, r.CurrentVersion, r.LatestVersion, canonicalSourceLabel(r.Source, r.SourceOverrideActive))
 
 	updateErr, rolledBack := executeUpdate(ctx, r, runner, bm, inst)
+	if errors.Is(updateErr, checker.ErrUpdateScheduled) {
+		fmt.Fprintln(cmd.OutOrStdout(), checker.ErrUpdateScheduled)
+		return
+	}
 	if errors.Is(updateErr, checker.ErrOpenedExternally) {
 		// Not an error.
 	} else if updateErr != nil {
@@ -549,6 +570,9 @@ func openForSelfUpdate(ctx context.Context, a *app.App, runner checker.CmdRunner
 
 // describeAction returns a human-readable action string for each update source.
 func describeAction(r *checker.UpdateResult) string {
+	if r.App.BundleID == app.UpdaterBundleID {
+		return "update Updater and restart"
+	}
 	if r.NativeUpgrade {
 		return "Install ARM version"
 	}

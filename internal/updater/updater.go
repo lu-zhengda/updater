@@ -621,6 +621,9 @@ func CheckWithFallthrough(ctx context.Context, a *app.App, checkers []checker.Ch
 		}
 
 		result = withOverrideProvenance(result, a)
+		if a.BundleID == app.UpdaterBundleID {
+			result.HasUpdate = version.IsNewer(version.ReleaseVersion(result.CurrentVersion), result.LatestVersion)
+		}
 		if seekNative && result.Error == nil {
 			download, parseErr := url.Parse(result.DownloadURL)
 			if parseErr == nil && result.DownloadURL != "" && architecture.Score(download.Path, "arm64") >= 2 &&

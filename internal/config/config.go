@@ -29,12 +29,14 @@ type Config struct {
 	ScheduleOffered          bool                             `yaml:"schedule_offered"`
 	ScheduleInterval         int                              `yaml:"schedule_interval"`
 	ScheduledAutoUpdate      bool                             `yaml:"scheduled_auto_update"`
+	YOLOMode                 bool                             `yaml:"yolo_mode"`
 	LastChecked              time.Time                        `yaml:"last_checked,omitempty"`
 	Policies                 map[string]string                `yaml:"policies,omitempty"` // bundleID → "auto"|"manual"|"notify-only"
 	InteractiveNotifications bool                             `yaml:"interactive_notifications"`
 	ignoredSet               map[string]bool                  `yaml:"-"`
 	pinnedSet                map[string]bool                  `yaml:"-"`
 	maxBackupsSet            bool                             `yaml:"-"`
+	yoloModeSet              bool                             `yaml:"-"`
 }
 
 // DefaultPath returns the default config file path (~/.config/updater/config.yaml).
@@ -57,6 +59,7 @@ func Parse(data []byte) (*Config, error) {
 		return nil, fmt.Errorf("failed to parse config file: %w", err)
 	}
 	_, cfg.maxBackupsSet = fields["max_backups"]
+	_, cfg.yoloModeSet = fields["yolo_mode"]
 	if err := validateSourceOverrides(cfg.SourceOverrides); err != nil {
 		return nil, fmt.Errorf("failed to parse config file: %w", err)
 	}
@@ -305,7 +308,8 @@ func (c *Config) RemoveCaskMapping(bundleID string) {
 
 // Merge merges an imported config into the current one and returns the result.
 // Lists are unioned (deduplicated), maps are merged (imported overrides current),
-// and non-zero scalars from imported override current values.
+// and non-zero scalars from imported override current values. Explicit values
+// for max_backups and yolo_mode also override when zero or false.
 func Merge(current, imported *Config) *Config {
 	result := *current // shallow copy
 
@@ -325,8 +329,7 @@ func Merge(current, imported *Config) *Config {
 	}
 	result.Policies = mergeMaps(current.Policies, imported.Policies)
 
-	// Non-zero scalar overrides. MaxBackups is the exception: an explicitly
-	// imported zero disables backups.
+	// Explicit zero/false imports can disable backups and YOLO Mode.
 	if imported.GitHubToken != "" {
 		result.GitHubToken = imported.GitHubToken
 	}
@@ -338,6 +341,9 @@ func Merge(current, imported *Config) *Config {
 	}
 	if imported.ScheduleInterval > 0 {
 		result.ScheduleInterval = imported.ScheduleInterval
+	}
+	if imported.yoloModeSet || imported.YOLOMode {
+		result.YOLOMode = imported.YOLOMode
 	}
 
 	result.buildIgnoredSet()

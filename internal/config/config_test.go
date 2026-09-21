@@ -614,6 +614,40 @@ func TestScheduledAutoUpdateRoundTrip(t *testing.T) {
 	}
 }
 
+func TestYOLOModeConfig(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	cfg, err := Load(path)
+	if err != nil || cfg.YOLOMode {
+		t.Fatalf("missing config must default YOLO Mode off: %+v, %v", cfg, err)
+	}
+	for _, enabled := range []bool{true, false} {
+		cfg.YOLOMode = enabled
+		if err := cfg.Save(path); err != nil {
+			t.Fatal(err)
+		}
+		cfg, err = Load(path)
+		if err != nil || cfg.YOLOMode != enabled {
+			t.Fatalf("YOLO Mode did not round trip %t: %+v, %v", enabled, cfg, err)
+		}
+	}
+	for _, tc := range []struct {
+		yaml string
+		want bool
+	}{
+		{"max_concurrent: 5", true},
+		{"yolo_mode: false", false},
+		{"yolo_mode: true", true},
+	} {
+		imported, err := Parse([]byte(tc.yaml))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := Merge(&Config{YOLOMode: true}, imported).YOLOMode; got != tc.want {
+			t.Errorf("import %q: YOLO Mode = %t, want %t", tc.yaml, got, tc.want)
+		}
+	}
+}
+
 func TestPolicy_GetSetRemove(t *testing.T) {
 	cfg := defaultConfig()
 

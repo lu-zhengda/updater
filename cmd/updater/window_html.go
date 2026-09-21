@@ -161,7 +161,7 @@ function onError(msg) {
 function onUpdateDone(r) {
   delete busy[r.bundleId];
   rowMsg[r.bundleId] = r;
-  if (r.ok) {
+  if (r.ok && !r.scheduled) {
     const e = entries.find(x => x.bundle_id === r.bundleId);
     if (e) e.status = "ok";
   }
@@ -185,7 +185,9 @@ function doUnpin(id) {
 
 document.getElementById("refresh").onclick = () => { if (!checking) { checking = true; render(); goRefresh(); } };
 document.getElementById("updateAll").onclick = () => {
-  entries.filter(e => e.status === "update_available").forEach(e => { busy[e.bundle_id] = true; goUpdate(e.bundle_id); });
+  const ids = entries.filter(e => e.status === "update_available").map(e => e.bundle_id);
+  ids.forEach(id => { busy[id] = true; });
+  goUpdateAll(ids);
   render();
 };
 

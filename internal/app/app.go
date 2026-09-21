@@ -5,6 +5,8 @@ import (
 	"strings"
 )
 
+const UpdaterBundleID = "com.updater.app"
+
 // Source identifies where an app was installed from.
 type Source string
 

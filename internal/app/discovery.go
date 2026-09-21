@@ -104,6 +104,10 @@ func parseApp(appPath string) (*App, error) {
 	if a.Source == SourceElectron {
 		enrichElectronApp(contentsDir, a)
 	}
+	if a.BundleID == UpdaterBundleID {
+		a.Source = SourceGitHub
+		a.GitHubRepo = "lu-zhengda/updater"
+	}
 
 	return a, nil
 }

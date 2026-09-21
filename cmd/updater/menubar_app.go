@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"fyne.io/systray"
+	"github.com/lu-zhengda/updater/internal/app"
 	"github.com/lu-zhengda/updater/internal/checker"
 	"github.com/lu-zhengda/updater/internal/config"
 	"github.com/lu-zhengda/updater/internal/updater"
@@ -126,7 +127,7 @@ func (m *menubarApp) refresh() {
 
 	m.rebuild(nil, "Checking for updates…")
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
 
 	updatable, err := m.runCheck(ctx)
@@ -173,11 +174,25 @@ func (m *menubarApp) runCheck(ctx context.Context) ([]*checker.UpdateResult, err
 		}
 	})
 
+	// Re-read preferences after checking so changes made during a check apply.
+	cfg, err = config.Load(config.DefaultPath())
+	if err != nil {
+		return nil, fmt.Errorf("failed to load config: %w", err)
+	}
+	if cfg.YOLOMode {
+		m.mu.Lock()
+		progress = m.progressItem
+		m.mu.Unlock()
+		if progress != nil {
+			progress.SetTitle("YOLO Mode: installing updates…")
+		}
+		autoUpdateAfterNotify(ctx, cfg, results)
+	}
 	writeCheckCache(cacheEntriesFromResults(results, cfg.IsPinned))
 
 	var updatable []*checker.UpdateResult
 	for _, r := range results {
-		if r.HasUpdate && r.Error == nil && !cfg.IsPinned(r.App.BundleID) {
+		if r.HasUpdate && r.Error == nil && !cfg.IsPinned(r.App.BundleID) && !cfg.IsIgnored(r.App.BundleID) {
 			updatable = append(updatable, r)
 		}
 	}
@@ -223,7 +238,7 @@ func (m *menubarApp) notifyNewUpdates(updatable []*checker.UpdateResult) {
 //	Check Now
 //	---
 //	Open Terminal UI
-//	Preferences ▸ (interval, backups, Start at Login)
+//	Preferences ▸ (interval, YOLO Mode, backups, Start at Login)
 //	Quit Updater
 func (m *menubarApp) rebuild(updatable []*checker.UpdateResult, status string) {
 	m.mu.Lock()
@@ -301,9 +316,16 @@ func (m *menubarApp) rebuild(updatable []*checker.UpdateResult, status string) {
 			go func() {
 				all.Disable()
 				all.SetTitle("Updating…")
+				activity, err := updateActivityLock(context.Background(), false)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "cannot start updates: %v\n", err)
+					return
+				}
+				defer activity.Close()
 				for i, r := range updatable {
 					m.runUpdate(r.App.Name, r.App.BundleID, items[i])
 				}
+				_ = activity.Close()
 				m.refresh()
 			}()
 		})
@@ -338,8 +360,13 @@ func (m *menubarApp) rebuild(updatable []*checker.UpdateResult, status string) {
 			go m.mutateConfig(func(cfg *config.Config) { cfg.ScheduleInterval = opt.hours })
 		})
 	}
-	backupCfg, err := config.Load(config.DefaultPath())
-	backupsEnabled := err == nil && backupCfg.MaxBackupsLimit() > 0
+	prefsCfg, err := config.Load(config.DefaultPath())
+	yoloEnabled := err == nil && prefsCfg.YOLOMode
+	yolo := prefs.AddSubMenuItemCheckbox("YOLO Mode", "Automatically install available updates, including major versions", yoloEnabled)
+	onClick(gen, yolo, func() {
+		go m.mutateConfig(func(cfg *config.Config) { cfg.YOLOMode = !cfg.YOLOMode })
+	})
+	backupsEnabled := err == nil && prefsCfg.MaxBackupsLimit() > 0
 	backups := prefs.AddSubMenuItemCheckbox("Back Up Before Updates", "Keep rollback copies of updated apps", backupsEnabled)
 	onClick(gen, backups, func() {
 		go m.mutateConfig(func(cfg *config.Config) {
@@ -450,7 +477,11 @@ func (m *menubarApp) runUpdate(name, bundleID string, item *systray.MenuItem) {
 		item.SetTitle("✗ " + name + " (failed)")
 		return
 	}
-	item.SetTitle("✓ " + name + " (updated)")
+	if bundleID == app.UpdaterBundleID {
+		item.SetTitle("Self-update started…")
+	} else {
+		item.SetTitle("✓ " + name + " (updated)")
+	}
 }
 
 // loginItemInstalled reports whether the LaunchAgent plist exists.

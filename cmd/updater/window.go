@@ -126,7 +126,21 @@ func runWindow() error {
 	_ = w.Bind("goUpdate", func(bundleID string) {
 		go func() {
 			ok, msg := updateFromWindow(state, bundleID)
-			push("onUpdateDone", map[string]any{"bundleId": bundleID, "ok": ok, "message": msg})
+			push("onUpdateDone", map[string]any{"bundleId": bundleID, "ok": ok, "message": msg, "scheduled": msg == checker.ErrUpdateScheduled.Error()})
+		}()
+	})
+	_ = w.Bind("goUpdateAll", func(ids []string) {
+		go func() {
+			activity, err := updateActivityLock(context.Background(), false)
+			if err != nil {
+				push("onError", err.Error())
+				return
+			}
+			defer activity.Close()
+			for _, id := range ids {
+				ok, msg := updateFromWindow(state, id)
+				push("onUpdateDone", map[string]any{"bundleId": id, "ok": ok, "message": msg, "scheduled": msg == checker.ErrUpdateScheduled.Error()})
+			}
 		}()
 	})
 
@@ -162,6 +176,9 @@ func updateFromWindow(state *windowState, bundleID string) (bool, string) {
 	defer cancel()
 
 	updateErr, rolledBack := executeUpdate(ctx, result, runner, bm, inst)
+	if errors.Is(updateErr, checker.ErrUpdateScheduled) {
+		return true, checker.ErrUpdateScheduled.Error()
+	}
 	_ = history.Append(history.DefaultPath(), history.Entry{
 		AppName:     result.App.Name,
 		BundleID:    result.App.BundleID,

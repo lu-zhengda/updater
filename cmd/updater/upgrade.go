@@ -52,6 +52,16 @@ func runUpgrade(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("failed to resolve executable path: %w", err)
 	}
+	if bundle := updaterBundlePath(execPath); bundle != "" {
+		if err := startSelfUpgrade(ctx, bundle); err != nil {
+			return err
+		}
+		if useJSON {
+			return writeJSON(cmd, map[string]any{"status": "scheduled", "message": checker.ErrUpdateScheduled.Error()})
+		}
+		fmt.Fprintln(cmd.OutOrStdout(), checker.ErrUpdateScheduled)
+		return nil
+	}
 
 	// Detect Homebrew installation.
 	if isBrewInstall(execPath) {
@@ -74,7 +84,7 @@ func runUpgrade(cmd *cobra.Command, args []string) error {
 
 	latestVersion := checker.CleanTagVersion(release.TagName)
 
-	if !versionpkg.IsNewer(version, latestVersion) {
+	if !versionpkg.IsNewer(versionpkg.ReleaseVersion(version), latestVersion) {
 		if useJSON {
 			return writeJSON(cmd, map[string]any{
 				"status":          "up_to_date",
@@ -85,60 +95,13 @@ func runUpgrade(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	// Releases contain one universal macOS archive. The checksum file is
-	// downloaded separately, and the extracted executable must also match the
-	// currently installed Developer ID identity.
-	assetName := fmt.Sprintf("updater_%s_darwin.tar.gz", latestVersion)
-	var archiveAsset, checksumAsset checker.GitHubAsset
-	for _, asset := range release.Assets {
-		if asset.Name == assetName {
-			archiveAsset = asset
-		}
-		if asset.Name == "checksums.txt" {
-			checksumAsset = asset
-		}
-	}
-	if archiveAsset.DownloadURL == "" {
-		return fmt.Errorf("no matching asset %q in release %s", assetName, release.TagName)
-	}
-	if checksumAsset.DownloadURL == "" {
-		return fmt.Errorf("release %s has no checksums.txt asset", release.TagName)
-	}
-
-	checksums, err := downloadBytes(checksumAsset.DownloadURL, token, maxChecksumFileSize)
-	if err != nil {
-		return fmt.Errorf("failed to download checksums: %w", err)
-	}
-	expectedSHA, err := checksumForAsset(checksums, assetName)
-	if err != nil {
-		return err
-	}
-	if archiveAsset.Digest != "" && archiveAsset.Digest != "sha256:"+expectedSHA {
-		return fmt.Errorf("GitHub asset digest does not match checksums.txt")
-	}
-
+	// Share release/checksum verification with complete app upgrades.
 	dir := filepath.Dir(execPath)
-	archiveFile, err := os.CreateTemp(dir, ".updater-upgrade-*.tar.gz")
+	archivePath, err := downloadSelfArchive(release, token, dir)
 	if err != nil {
-		if os.IsPermission(err) {
-			return fmt.Errorf("permission denied writing to %s (try sudo)", dir)
-		}
-		return fmt.Errorf("failed to create temp file: %w", err)
-	}
-	archivePath := archiveFile.Name()
-	defer os.Remove(archivePath)
-
-	actualSHA, err := downloadFileAndHash(archiveFile, archiveAsset.DownloadURL, token, maxSelfUpgradeArchiveSize)
-	if err != nil {
-		archiveFile.Close()
 		return err
 	}
-	if err := archiveFile.Close(); err != nil {
-		return fmt.Errorf("failed to close downloaded archive: %w", err)
-	}
-	if actualSHA != expectedSHA {
-		return fmt.Errorf("downloaded archive checksum mismatch")
-	}
+	defer os.Remove(archivePath)
 
 	candidate, err := os.CreateTemp(dir, ".updater-candidate-*")
 	if err != nil {

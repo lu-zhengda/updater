@@ -1,11 +1,20 @@
 package version
 
 import (
+	"regexp"
 	"strconv"
 	"strings"
 
 	"github.com/Masterminds/semver/v3"
 )
+
+var developmentSuffix = regexp.MustCompile(`(-[0-9]+-g[0-9a-f]+)?-dirty$|-[0-9]+-g[0-9a-f]+$`)
+
+// ReleaseVersion compares a local git-describe build with its base release,
+// without treating an ordinary prerelease such as -rc.1 as a development build.
+func ReleaseVersion(v string) string {
+	return developmentSuffix.ReplaceAllString(v, "")
+}
 
 // IsNewerOrEqual reports whether version is >= threshold.
 func IsNewerOrEqual(threshold, version string) bool {

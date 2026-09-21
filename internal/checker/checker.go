@@ -14,6 +14,9 @@ import (
 // opens an external app or settings pane instead of performing the update directly.
 var ErrOpenedExternally = errors.New("opened externally")
 
+// ErrUpdateScheduled means a detached helper owns the update and its history.
+var ErrUpdateScheduled = errors.New("self-update started; Updater will restart when ready")
+
 // UpdateResult holds the outcome of checking a single app for updates.
 type UpdateResult struct {
 	App            *app.App

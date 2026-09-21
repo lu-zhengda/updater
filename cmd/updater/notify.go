@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/lu-zhengda/updater/internal/checker"
 	"github.com/lu-zhengda/updater/internal/config"
+	"github.com/lu-zhengda/updater/internal/history"
 	"github.com/lu-zhengda/updater/internal/installer"
 	"github.com/spf13/cobra"
 )
@@ -75,26 +77,27 @@ func runNotify(cmd *cobra.Command, _ []string) error {
 	body := buildNotificationBody(updatable)
 	subtitle := buildNotificationSubtitle(updatable)
 
-	if flagInteractive || cfg.InteractiveNotifications {
-		if err := sendInteractiveNotification(ctx, runner, len(updatable), body); err != nil {
-			return err
-		}
+	interactive := (flagInteractive || cfg.InteractiveNotifications) && !cfg.YOLOMode
+	var notifyErr error
+	if interactive {
+		notifyErr = sendInteractiveNotification(ctx, runner, len(updatable), body)
 	} else {
-		if err := sendNotification(ctx, runner, len(updatable), body, subtitle); err != nil {
-			return err
-		}
+		notifyErr = sendNotification(ctx, runner, len(updatable), body, subtitle)
 	}
 
 	updated, failed := []string{}, []string{}
-	autoUpdateEnabled := flagAutoUpdate && cfg.ScheduledAutoUpdate
+	autoUpdateEnabled := cfg.YOLOMode || (flagAutoUpdate && cfg.ScheduledAutoUpdate)
 	if autoUpdateEnabled {
 		updated, failed = autoUpdateAfterNotify(ctx, cfg, updatable)
+	}
+	if notifyErr != nil {
+		return notifyErr
 	}
 
 	if useJSON {
 		return writeJSON(cmd, map[string]any{
 			"updates_available": len(updatable),
-			"interactive":       flagInteractive || cfg.InteractiveNotifications,
+			"interactive":       interactive,
 			"auto_update":       autoUpdateEnabled,
 			"updated":           updated,
 			"failed":            failed,
@@ -104,10 +107,16 @@ func runNotify(cmd *cobra.Command, _ []string) error {
 	return nil
 }
 
-// autoUpdateAfterNotify performs safe auto-updates for eligible apps after the
-// notification has been sent. It skips pinned, major-update, system/setapp/toolbox/adobe,
-// and manual/notify-only policy apps.
+// autoUpdateAfterNotify applies available unattended updates for the menu bar
+// and scheduled checks. YOLO Mode also includes major versions. Successful
+// installs clear HasUpdate so callers display and cache the remaining updates.
 func autoUpdateAfterNotify(ctx context.Context, cfg *config.Config, updatable []*checker.UpdateResult) ([]string, []string) {
+	activity, err := updateActivityLock(ctx, false)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "cannot start automatic updates: %v\n", err)
+		return nil, nil
+	}
+	defer activity.Close()
 	runner := newRunner()
 	bm := backupManagerForConfig(cfg, runner)
 	inst := installer.New(runner, nil)
@@ -118,27 +127,58 @@ func autoUpdateAfterNotify(ctx context.Context, cfg *config.Config, updatable []
 
 	var updated, failed []string
 	for _, r := range updatable {
-		if cfg.IsPinned(r.App.BundleID) || r.IsMajorUpdate || r.NativeUpgrade || autoSkipSources[r.Source] {
+		if ctx.Err() != nil {
+			break
+		}
+		if !r.HasUpdate || r.Error != nil || cfg.IsIgnored(r.App.BundleID) || cfg.IsPinned(r.App.BundleID) ||
+			(r.IsMajorUpdate && !cfg.YOLOMode) || r.NativeUpgrade || autoSkipSources[r.Source] {
 			continue
 		}
 		policy := cfg.Policy(r.App.BundleID)
 		if policy == config.PolicyManual || policy == config.PolicyNotifyOnly {
 			continue
 		}
-		updateErr, _ := executeUpdate(ctx, r, runner, bm, inst)
-		if updateErr == nil || errors.Is(updateErr, checker.ErrOpenedExternally) {
+		// Only attempt actions that can install an update without user input.
+		action := describeAction(r)
+		if strings.HasPrefix(action, "open ") || action == "unsupported source" {
+			continue
+		}
+		updateErr, rolledBack := executeUpdate(ctx, r, runner, bm, inst)
+		if errors.Is(updateErr, checker.ErrUpdateScheduled) {
+			continue // The helper records and announces the actual result.
+		}
+		_ = history.Append(history.DefaultPath(), history.Entry{
+			AppName:     r.App.Name,
+			BundleID:    r.App.BundleID,
+			FromVersion: r.CurrentVersion,
+			ToVersion:   r.LatestVersion,
+			Source:      r.Source,
+			Timestamp:   time.Now(),
+			Success:     updateErr == nil,
+			RolledBack:  rolledBack,
+		})
+		if updateErr == nil {
 			updated = append(updated, r.App.Name)
+			r.HasUpdate = false
+			r.CurrentVersion = r.LatestVersion
 		} else {
 			failed = append(failed, r.App.Name)
+			if !errors.Is(updateErr, checker.ErrOpenedExternally) {
+				fmt.Fprintf(os.Stderr, "auto-update %s failed: %v\n", r.App.Name, updateErr)
+			}
 		}
 	}
 
-	if len(updated) > 0 {
-		body := fmt.Sprintf("Updated: %s", strings.Join(updated, ", "))
-		if len(failed) > 0 {
-			body += fmt.Sprintf(". Failed: %s", strings.Join(failed, ", "))
+	if len(updated)+len(failed) > 0 {
+		var parts []string
+		if len(updated) > 0 {
+			parts = append(parts, "Updated: "+strings.Join(updated, ", "))
 		}
-		_ = sendNotification(ctx, runner, len(updated), body, "")
+		if len(failed) > 0 {
+			parts = append(parts, "Needs attention: "+strings.Join(failed, ", "))
+		}
+		script := fmt.Sprintf(`display notification "%s" with title "Updater"`, escapeAppleScript(strings.Join(parts, ". ")))
+		_, _ = runner.Run(ctx, "osascript", "-e", script)
 	}
 	return updated, failed
 }
