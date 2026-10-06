@@ -103,6 +103,9 @@ func parseApp(appPath string) (*App, error) {
 
 	if a.Source == SourceElectron {
 		enrichElectronApp(contentsDir, a)
+		if a.Source == SourceElectron {
+			enrichElectronMetadata(contentsDir, a)
+		}
 	}
 	if a.BundleID == UpdaterBundleID {
 		a.Source = SourceGitHub
@@ -156,6 +159,11 @@ func classifySource(appPath, contentsDir string, info *infoPlist) Source {
 	// Electron: has Electron Framework but no Sparkle.
 	electronFramework := filepath.Join(contentsDir, "Frameworks", "Electron Framework.framework")
 	if _, err := os.Stat(electronFramework); err == nil {
+		return SourceElectron
+	}
+	// Some Electron apps rename their framework (for example Codex Framework).
+	// The packaged application is an independent Electron discovery signal.
+	if _, err := os.Stat(filepath.Join(contentsDir, "Resources", "app.asar")); err == nil {
 		return SourceElectron
 	}
 

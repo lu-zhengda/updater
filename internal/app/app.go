@@ -60,6 +60,8 @@ type App struct {
 	UvPinned               bool   // true when the uv tool requirement pins an exact version (==)
 	CargoCrate             string // Crate name installed via `cargo install`
 	ElectronUpdateURL      string // Generic update server base URL from app-update.yml
+	ElectronUpdateFormat   string // empty: latest-mac.yml; vscode: update API; squirrel: RELEASES.json
+	ElectronUpdateChannel  string // product.json quality for VS Code-compatible update APIs
 	enrichmentBaseline     *enrichmentBaseline
 }
 

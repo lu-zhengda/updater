@@ -337,12 +337,13 @@ func EnrichApps(ctx context.Context, apps []*app.App, cfg *config.Config, runner
 		// Compute cask-token candidates for apps that may need brew-info fallback:
 		// - SourceUnknown apps
 		// - SourceSparkle apps (Sparkle feeds can become stale)
-		// - SourceElectron apps without a native update URL or GitHub repo
+		// - SourceElectron apps without a feed, or with a native protocol adapter
+		//   that may need a fallback if its service is unavailable
 		//
 		// This keeps behavior explicit and avoids probing managed/system-only sources.
 		needsCaskFallback := a.Source == app.SourceUnknown ||
 			a.Source == app.SourceSparkle ||
-			(a.Source == app.SourceElectron && a.ElectronUpdateURL == "" && a.GitHubRepo == "")
+			(a.Source == app.SourceElectron && (a.ElectronUpdateFormat != "" || (a.ElectronUpdateURL == "" && a.GitHubRepo == "")))
 		if a.CaskName == "" && needsCaskFallback {
 			candidates := app.CaskCandidates(a)
 			// Try each candidate against the installed cask list.  The multi-signal
@@ -436,6 +437,7 @@ func BuildCheckers(runner checker.CmdRunner, githubToken string) []checker.Check
 	httpClient := &http.Client{Timeout: 30 * time.Second}
 	return []checker.Checker{
 		checker.NewSparkleChecker(httpClient),
+		checker.NewVendorChecker(httpClient),
 		checker.NewBrewChecker(runner),
 		checker.NewMASChecker(runner),
 		checker.NewGitHubChecker(httpClient, "", githubToken),
@@ -623,6 +625,15 @@ func CheckWithFallthrough(ctx context.Context, a *app.App, checkers []checker.Ch
 		result = withOverrideProvenance(result, a)
 		if a.BundleID == app.UpdaterBundleID {
 			result.HasUpdate = version.IsNewer(version.ReleaseVersion(result.CurrentVersion), result.LatestVersion)
+		}
+		// Repositories such as microsoft/vscode publish release versions but
+		// no macOS artifacts. Let an installable source answer before keeping
+		// that version-only result. Explicit overrides remain authoritative.
+		if result.Source == "github" && result.DownloadURL == "" && !a.SourceOverrideActive && a.BundleID != app.UpdaterBundleID {
+			if fallback == nil {
+				fallback = result
+			}
+			continue
 		}
 		if seekNative && result.Error == nil {
 			download, parseErr := url.Parse(result.DownloadURL)

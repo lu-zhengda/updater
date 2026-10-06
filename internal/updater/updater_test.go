@@ -666,7 +666,7 @@ func TestEnrichApps_VSCode_GetsCaskViaBasename(t *testing.T) {
 		t.Errorf("CaskName = %q, want %q", result[0].CaskName, "visual-studio-code")
 	}
 	// BrewInfoChecker should now be able to handle this app.
-	brewInfoChecker := BuildCheckers(&checker.MockCmdRunner{}, "")[13] // last checker
+	brewInfoChecker := checker.NewBrewInfoChecker(&checker.MockCmdRunner{})
 	if !brewInfoChecker.CanCheck(result[0]) {
 		t.Error("BrewInfoChecker.CanCheck = false, want true (app has CaskName)")
 	}
@@ -709,7 +709,7 @@ func TestEnrichApps_GitHubDesktop_GetsCaskViaBundleIDSegment(t *testing.T) {
 	if result[0].CaskName != "github" {
 		t.Errorf("CaskName = %q, want %q", result[0].CaskName, "github")
 	}
-	brewInfoChecker := BuildCheckers(&checker.MockCmdRunner{}, "")[13]
+	brewInfoChecker := checker.NewBrewInfoChecker(&checker.MockCmdRunner{})
 	if !brewInfoChecker.CanCheck(result[0]) {
 		t.Error("BrewInfoChecker.CanCheck = false, want true (app has CaskName)")
 	}
@@ -753,7 +753,7 @@ func TestEnrichApps_GenericElectron_GetsCaskViaDisplayName(t *testing.T) {
 	if result[0].CaskName != "acme" {
 		t.Errorf("CaskName = %q, want %q", result[0].CaskName, "acme")
 	}
-	brewInfoChecker := BuildCheckers(&checker.MockCmdRunner{}, "")[13]
+	brewInfoChecker := checker.NewBrewInfoChecker(&checker.MockCmdRunner{})
 	if !brewInfoChecker.CanCheck(result[0]) {
 		t.Error("BrewInfoChecker.CanCheck = false, want true (app has CaskName)")
 	}
@@ -851,12 +851,13 @@ func TestBuildCheckers(t *testing.T) {
 	runner := &checker.MockCmdRunner{}
 	checkers := BuildCheckers(runner, "test-token")
 
-	if len(checkers) != 14 {
-		t.Fatalf("got %d checkers, want 14", len(checkers))
+	if len(checkers) != 15 {
+		t.Fatalf("got %d checkers, want 15", len(checkers))
 	}
 
 	expectedNames := []string{
 		"sparkle",
+		"vendor",
 		"brew",
 		"mas",
 		"github",

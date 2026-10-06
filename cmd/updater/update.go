@@ -281,10 +281,7 @@ func executeUpdate(ctx context.Context, r *checker.UpdateResult, runner checker.
 		// Not brew-managed: install the cask's artifact directly instead of
 		// relying on the app's own updater.
 		if r.DownloadURL != "" && inst != nil && r.App.Path != "" {
-			err, rolledBack, done := tryDirectInstall(ctx, r, runner, bm, inst, "opening app for self-update")
-			if done {
-				return err, rolledBack
-			}
+			return tryDirectInstall(ctx, r, runner, bm, inst)
 		}
 		openForSelfUpdate(ctx, r.App, runner)
 		return checker.ErrOpenedExternally, false
@@ -389,16 +386,12 @@ func executeUpdate(ctx context.Context, r *checker.UpdateResult, runner checker.
 
 	case "sparkle", "github":
 		if r.DownloadURL == "" {
-			fmt.Println("  No download URL available. Check the app for in-app updates.")
-			return nil, false
+			return fmt.Errorf("no installable download available for %s from %s", r.App.Name, r.Source), false
 		}
 
 		// Try direct install if installer is available.
 		if inst != nil && r.App.Path != "" {
-			err, rolledBack, done := tryDirectInstall(ctx, r, runner, bm, inst, "falling back to browser")
-			if done {
-				return err, rolledBack
-			}
+			return tryDirectInstall(ctx, r, runner, bm, inst)
 		}
 
 		// Fallback: open in browser.
@@ -408,13 +401,10 @@ func executeUpdate(ctx context.Context, r *checker.UpdateResult, runner checker.
 		}
 		return checker.ErrOpenedExternally, false
 
-	case "electron":
+	case "electron", "vendor":
 		// Try direct install from ElectronUpdateURL if available.
 		if r.DownloadURL != "" && inst != nil && r.App.Path != "" {
-			err, rolledBack, done := tryDirectInstall(ctx, r, runner, bm, inst, "opening app for self-update")
-			if done {
-				return err, rolledBack
-			}
+			return tryDirectInstall(ctx, r, runner, bm, inst)
 		}
 		// Fallback: open app for self-update.
 		_, _ = runner.Run(ctx, "open", "-a", r.App.Path)
@@ -466,10 +456,10 @@ func performUpdate(cmd *cobra.Command, ctx context.Context, r *checker.UpdateRes
 }
 
 // tryDirectInstall downloads r.DownloadURL and installs it over r.App.Path,
-// quitting the app first and reopening it afterwards. done reports whether the
-// update finished (success, or a failure that was rolled back from backup);
-// when done is false the caller should fall back to its source-specific action.
-func tryDirectInstall(ctx context.Context, r *checker.UpdateResult, runner checker.CmdRunner, bm *backup.Manager, inst *installer.Installer, fallbackNote string) (err error, rolledBack, done bool) {
+// quitting the app first and reopening it afterwards. If installation fails,
+// hand off to the app or download page while preserving the failure so callers
+// do not record the manual handoff as a completed installation.
+func tryDirectInstall(ctx context.Context, r *checker.UpdateResult, runner checker.CmdRunner, bm *backup.Manager, inst *installer.Installer) (err error, rolledBack bool) {
 	wasRunning := quitAppIfRunning(ctx, r.App, runner)
 	err = inst.Install(ctx, r.DownloadURL, r.App.Path, r.App.Name, r.DownloadDigest)
 	if err == nil {
@@ -477,17 +467,33 @@ func tryDirectInstall(ctx context.Context, r *checker.UpdateResult, runner check
 			fmt.Printf("  Reopening %s...\n", r.App.Name)
 			_, _ = runner.Run(ctx, "open", "-a", r.App.Path)
 		}
-		return nil, false, true
+		return nil, false
 	}
 	mayRequireRollback := installer.MayRequireRollback(err)
 	if mayRequireRollback {
 		rolledBack = rollbackAfterFailedInstall(ctx, bm, r.App.Name)
 	}
-	if wasRunning && (!mayRequireRollback || rolledBack) {
+	if mayRequireRollback && !rolledBack {
+		return err, false // do not launch a possibly damaged app
+	}
+	if ctx.Err() != nil {
+		return err, rolledBack // cancellation is not a request for manual handoff
+	}
+	// Sparkle/GitHub fall back to the download page; other desktop sources
+	// open the installed app so its own updater can take over.
+	openArgs := []string{"-a", r.App.Path}
+	target := "app"
+	if r.Source == "sparkle" || r.Source == "github" {
+		openArgs = []string{r.DownloadURL}
+		target = "download page"
+	}
+	if wasRunning && target == "download page" {
 		_, _ = runner.Run(ctx, "open", "-a", r.App.Path)
 	}
-	fmt.Fprintf(os.Stderr, "  direct install failed, %s: %v\n", fallbackNote, err)
-	return err, rolledBack, rolledBack
+	if _, openErr := runner.Run(ctx, "open", openArgs...); openErr != nil {
+		return fmt.Errorf("automatic update failed: %w; could not open %s: %v", err, target, openErr), rolledBack
+	}
+	return fmt.Errorf("automatic update failed: %w; opened %s for manual update", err, target), rolledBack
 }
 
 // rollbackAfterFailedInstall attempts to restore an app from backup after a failed install.
@@ -612,7 +618,7 @@ func describeAction(r *checker.UpdateResult) string {
 			return "direct install"
 		}
 		return "open download URL"
-	case "electron":
+	case "electron", "vendor":
 		if r.DownloadURL != "" && r.App.Path != "" {
 			return "direct install"
 		}

@@ -46,7 +46,7 @@ func (e *ElectronChecker) Name() string {
 
 // CanCheck returns true if the app has an Electron update URL.
 func (e *ElectronChecker) CanCheck(a *app.App) bool {
-	return a.ElectronUpdateURL != "" && a.Source == app.SourceElectron
+	return a.ElectronUpdateURL != "" && a.ElectronUpdateFormat == "" && a.Source == app.SourceElectron
 }
 
 // Check fetches latest-mac.yml from the app's update server and compares versions.

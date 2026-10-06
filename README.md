@@ -76,13 +76,14 @@ updater
 
 | Source | How updates are checked | Update behavior |
 | --- | --- | --- |
-| Sparkle | HTTPS appcast feed from app metadata | Installs only notarized updates matching the installed app's bundle and Developer Team identity; otherwise opens download URL |
+| Sparkle | HTTPS appcast from Info.plist or embedded Electron package metadata (including Codex) | Installs notarized updates matching the installed app's bundle and Developer Team identity |
 | Homebrew cask | `brew outdated --cask --greedy --json` | `brew upgrade --cask <token>` |
 | Homebrew formula | `brew outdated --formula --json` | `brew upgrade <formula>` |
 | Mac App Store | `mas outdated` | `mas upgrade <id>` or opens App Store updates |
-| GitHub Releases | GitHub Releases API | Verifies release digest and Apple identity before direct install; otherwise opens release asset URL |
-| Electron generic | HTTPS macOS update feed (including Notion’s ARM channel) | Verifies SHA-512 and Apple identity before direct install; otherwise opens app |
-| Brew-info fallback | `brew info --cask --json=v2` | If brew-installed: `brew upgrade --cask`; otherwise opens app |
+| GitHub Releases | GitHub Releases API | Verifies release digest and Apple identity before direct install |
+| Electron generic | HTTPS macOS update feed (including Notion’s ARM channel) | Verifies SHA-512 and Apple identity before direct install |
+| Native Electron services | VS Code-compatible update APIs and Squirrel.Mac release indexes (including Claude desktop) | Downloads the native artifact, verifies any supplied checksum and Apple identity, and installs directly |
+| Brew-info fallback | `brew info --cask --json=v2` | If brew-installed: `brew upgrade --cask`; otherwise verifies and installs the cask artifact directly |
 | npm globals | `npm outdated -g --json` | `npm install -g <pkg>@latest` |
 | pnpm globals | `pnpm outdated -g --format json` | `pnpm update -g --latest <pkg>` |
 | pipx applications | `pipx list --json` + PyPI JSON | `pipx upgrade <environment>` |
@@ -91,6 +92,24 @@ updater
 | macOS system | `softwareupdate -l` | Opens Software Update settings |
 
 Direct downloads prefer the Mac’s native architecture, then universal builds. Explicitly incompatible builds are excluded. Before replacing an app from a DMG or ZIP, the updater also checks that its executable supports the native architecture, even when filenames omit it.
+
+Electron discovery reads structured metadata from `Resources/app` and `app.asar`,
+including archives with unpacked metadata files and apps with renamed frameworks.
+Embedded `sparkleFeedUrl` fields (including app-prefixed names such as
+`codexSparkleFeedUrl`) retain the packaged release channel; conflicting feed URLs
+are not guessed. VS Code-compatible `product.json` update services retain their
+`stable` or `insider` channel. Claude's release-index address is supplied by a
+bundle-ID adapter; the release-index parser is shared. These feeds are checked
+before Homebrew and legacy GitHub mappings, so a version-only release cannot hide
+the vendor's installer. Explicit `source_overrides` still take precedence.
+
+Failed direct installs open the app or download page for manual updating and
+show the original failure alongside the handoff. The handoff is not recorded as
+a completed installation. Cancelled installs and failed replacements that could
+not be rolled back do not launch an external updater. Sources that only support
+an external updater still offer that manual action. Apps with
+authenticated or undocumented update protocols require a compatible adapter;
+Updater does not infer endpoints from arbitrary executable code.
 
 On Apple Silicon, Intel-only apps are offered an **Install ARM version** action when an update source advertises a native or universal build at the same or a newer version. These suggestions are excluded from unattended auto-updates; pins and ignore settings still apply. Unlabeled downloads do not trigger a suggestion.
 
@@ -231,7 +250,7 @@ policies:
   com.google.Chrome: manual
 
 github_mappings:
-  com.microsoft.VSCode: "microsoft/vscode"
+  com.example.MyApp: "example/my-app"
 
 cask_mappings:
   com.readdle.PDFExpert-Mac: "pdf-expert"
