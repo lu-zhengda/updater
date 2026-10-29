@@ -214,10 +214,6 @@ func (inst *Installer) installDMG(ctx context.Context, dmgPath, appPath, appName
 		return fmt.Errorf("no .app bundle found in DMG for %s", appName)
 	}
 
-	if err := inst.verifier.VerifyReplacementApp(ctx, appPath, appBundle); err != nil {
-		return fmt.Errorf("downloaded app failed security verification: %w", err)
-	}
-
 	return inst.replaceApp(ctx, appBundle, appPath)
 }
 
@@ -226,18 +222,43 @@ func (inst *Installer) installDMG(ctx context.Context, dmgPath, appPath, appName
 // (nesting the new bundle inside the old one), so stage next to the target
 // on the same volume, remove the old bundle, and rename into place.
 func (inst *Installer) replaceApp(ctx context.Context, srcBundle, appPath string) error {
-	staging := appPath + ".updater-staging"
-	_, _ = inst.runner.Run(ctx, "rm", "-rf", staging)
+	stagingDir := appPath + ".updater-staging"
+	// Preserve the bundle's name: macOS uses it to resolve the executable in
+	// signed apps such as Muse that omit CFBundleExecutable.
+	staging := filepath.Join(stagingDir, filepath.Base(srcBundle))
+	if _, err := inst.runner.Run(ctx, "rm", "-rf", stagingDir); err != nil {
+		return fmt.Errorf("failed to clear app staging directory: %w", err)
+	}
+	if _, err := inst.runner.Run(ctx, "mkdir", "-p", stagingDir); err != nil {
+		return fmt.Errorf("failed to create app staging directory: %w", err)
+	}
+	keepStaging := false
+	defer func() {
+		if !keepStaging {
+			_, _ = inst.runner.Run(context.WithoutCancel(ctx), "rm", "-rf", stagingDir)
+		}
+	}()
 
 	if _, err := inst.runner.Run(ctx, "cp", "-a", srcBundle, staging); err != nil {
-		_, _ = inst.runner.Run(ctx, "rm", "-rf", staging)
 		return fmt.Errorf("failed to stage new app: %w", err)
 	}
+	// Some vendor DMGs (including Chrome) carry Finder metadata that strict
+	// codesign verification rejects. Normalize only the disposable copy, and
+	// leave quarantine and all other attributes intact. -s avoids following
+	// symlinks outside the bundle. Never weaken signature/Gatekeeper checks.
+	// Read-only files can reject removal even when the attribute is absent
+	// (Muse). Cleanup is best-effort; verification below must still succeed.
+	for _, attr := range []string{"com.apple.FinderInfo", "com.apple.ResourceFork"} {
+		_, _ = inst.runner.Run(ctx, "/usr/bin/xattr", "-rds", attr, staging)
+	}
+	if err := inst.verifier.VerifyReplacementApp(ctx, appPath, staging); err != nil {
+		return fmt.Errorf("downloaded app failed security verification: %w", err)
+	}
 	if _, err := inst.runner.Run(ctx, "rm", "-rf", appPath); err != nil {
-		_, _ = inst.runner.Run(ctx, "rm", "-rf", staging)
 		return &installError{err: fmt.Errorf("failed to remove old app: %w", err), mayHaveModified: true}
 	}
 	if _, err := inst.runner.Run(ctx, "mv", staging, appPath); err != nil {
+		keepStaging = true // preserve the verified replacement for recovery
 		return &installError{err: fmt.Errorf("failed to move new app into place: %w", err), mayHaveModified: true}
 	}
 	return nil
@@ -308,10 +329,6 @@ func (inst *Installer) installZIP(ctx context.Context, zipPath, appPath, appName
 	appBundle := findAppInVolume(ctx, inst.runner, tmpDir, appName)
 	if appBundle == "" {
 		return fmt.Errorf("no .app bundle found in ZIP for %s", appName)
-	}
-
-	if err := inst.verifier.VerifyReplacementApp(ctx, appPath, appBundle); err != nil {
-		return fmt.Errorf("downloaded app failed security verification: %w", err)
 	}
 
 	return inst.replaceApp(ctx, appBundle, appPath)

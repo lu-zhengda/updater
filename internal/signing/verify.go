@@ -17,6 +17,7 @@ import (
 type CodeIdentity struct {
 	Identifier string
 	TeamID     string
+	Executable string
 }
 
 type commandFunc func(context.Context, string, ...string) ([]byte, error)
@@ -64,19 +65,14 @@ func (v *Verifier) VerifyReplacementApp(ctx context.Context, installedApp, candi
 	}
 
 	// Validate the binary itself: feeds can omit or mislabel architecture.
-	executable, err := v.run(ctx, "/usr/bin/plutil", "-extract", "CFBundleExecutable", "raw", "-o", "-", filepath.Join(candidateApp, "Contents", "Info.plist"))
+	binary, err := v.appExecutable(ctx, candidateApp, candidate)
 	if err != nil {
-		return commandError("cannot read candidate executable", executable, err)
-	}
-	name := strings.TrimSpace(string(executable))
-	if name == "" || name == "." || name == ".." || filepath.Base(name) != name {
-		return fmt.Errorf("invalid candidate executable name %q", name)
+		return err
 	}
 	arch := architecture.Native()
 	if arch == "amd64" {
 		arch = "x86_64"
 	}
-	binary := filepath.Join(candidateApp, "Contents", "MacOS", name)
 	if output, err := v.run(ctx, "/usr/bin/lipo", "-verify_arch", arch, binary); err != nil {
 		return commandError("candidate app does not support native architecture "+arch, output, err)
 	}
@@ -85,6 +81,33 @@ func (v *Verifier) VerifyReplacementApp(ctx context.Context, installedApp, candi
 		return commandError("candidate app is not accepted by Gatekeeper", output, err)
 	}
 	return nil
+}
+
+func (v *Verifier) appExecutable(ctx context.Context, bundle string, identity CodeIdentity) (string, error) {
+	executable, err := v.run(ctx, "/usr/bin/plutil", "-extract", "CFBundleExecutable", "raw", "-o", "-", filepath.Join(bundle, "Contents", "Info.plist"))
+	if err == nil {
+		name := strings.TrimSpace(string(executable))
+		if name == "" || name == "." || name == ".." || filepath.Base(name) != name {
+			return "", fmt.Errorf("invalid candidate executable name %q", name)
+		}
+		return filepath.Join(bundle, "Contents", "MacOS", name), nil
+	}
+	// codesign can resolve a bundle's main executable even when its plist
+	// omits CFBundleExecutable (Muse). Use that path only after verification
+	// and identity matching, and require it to remain inside Contents/MacOS.
+	if identity.Executable == "" {
+		return "", commandError("cannot read candidate executable", executable, err)
+	}
+	binary, resolveErr := filepath.EvalSymlinks(identity.Executable)
+	root, rootErr := filepath.EvalSymlinks(bundle)
+	if resolveErr != nil || rootErr != nil || !filepath.IsAbs(binary) {
+		return "", fmt.Errorf("cannot resolve signed candidate executable %q", identity.Executable)
+	}
+	rel, relErr := filepath.Rel(filepath.Join(root, "Contents", "MacOS"), binary)
+	if relErr != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
+		return "", fmt.Errorf("signed candidate executable is outside Contents/MacOS: %q", identity.Executable)
+	}
+	return binary, nil
 }
 
 // VerifyInstallerPackage requires a notarized Developer ID Installer package
@@ -185,6 +208,8 @@ func parseCodeIdentity(output string) CodeIdentity {
 	for _, line := range strings.Split(output, "\n") {
 		line = strings.TrimSpace(line)
 		switch {
+		case strings.HasPrefix(line, "Executable="):
+			identity.Executable = strings.TrimPrefix(line, "Executable=")
 		case strings.HasPrefix(line, "Identifier="):
 			identity.Identifier = strings.TrimPrefix(line, "Identifier=")
 		case strings.HasPrefix(line, "TeamIdentifier="):

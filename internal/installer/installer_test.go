@@ -568,6 +568,7 @@ func TestReplaceAppReplacesExistingBundle(t *testing.T) {
 	writeBundle(dst, "1.0")
 
 	inst := New(&checker.RealCmdRunner{}, nil)
+	inst.verifier = allowVerifier{}
 	if err := inst.replaceApp(context.Background(), src, dst); err != nil {
 		t.Fatalf("replaceApp failed: %v", err)
 	}
@@ -584,6 +585,99 @@ func TestReplaceAppReplacesExistingBundle(t *testing.T) {
 	}
 	if _, err := os.Stat(dst + ".updater-staging"); !os.IsNotExist(err) {
 		t.Error("staging directory was left behind")
+	}
+}
+
+type appVerifierFunc func(context.Context, string, string) error
+
+func (f appVerifierFunc) VerifyReplacementApp(ctx context.Context, installed, candidate string) error {
+	return f(ctx, installed, candidate)
+}
+
+func (f appVerifierFunc) VerifyInstallerPackage(context.Context, string, string) error {
+	return fmt.Errorf("unexpected package verification")
+}
+
+func TestReplaceAppNormalizesStagedMetadataBeforeVerification(t *testing.T) {
+	for _, reject := range []bool{false, true} {
+		t.Run(fmt.Sprintf("reject=%v", reject), func(t *testing.T) {
+			root := t.TempDir()
+			src := filepath.Join(root, "download", "Muse.app")
+			dst := filepath.Join(root, "Applications", "Muse.app")
+			for _, path := range []string{src, dst} {
+				if err := os.MkdirAll(path, 0o755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := os.WriteFile(filepath.Join(dst, "old"), []byte("original"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			runner := &checker.RealCmdRunner{}
+			ctx := context.Background()
+			run := func(args ...string) string {
+				t.Helper()
+				out, err := runner.Run(ctx, "/usr/bin/xattr", args...)
+				if err != nil {
+					t.Fatalf("xattr %v: %v", args, err)
+				}
+				return string(out)
+			}
+			run("-wx", "com.apple.FinderInfo", "0000000000000000000000000000000000000000000000000000000000000001", src)
+			payload := filepath.Join(src, "payload")
+			if err := os.WriteFile(payload, []byte("new"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			run("-w", "com.apple.ResourceFork", "metadata", payload)
+			if err := os.WriteFile(filepath.Join(src, "readonly"), []byte("signed code"), 0o444); err != nil {
+				t.Fatal(err)
+			}
+			run("-w", "com.apple.quarantine", "0083;12345678;Updater;", src)
+			// Recursive cleanup must not follow a bundle link to an external file.
+			outside := filepath.Join(root, "external")
+			if err := os.WriteFile(outside, nil, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			run("-w", "com.apple.ResourceFork", "external metadata", outside)
+			if err := os.Symlink(outside, filepath.Join(src, "link")); err != nil {
+				t.Fatal(err)
+			}
+			verified := false
+			inst := New(runner, nil)
+			inst.verifier = appVerifierFunc(func(_ context.Context, installed, candidate string) error {
+				verified = true
+				if installed != dst || candidate == src || filepath.Base(candidate) != "Muse.app" {
+					t.Fatalf("must verify the staged bundle with its original name: %s", candidate)
+				}
+				attrs := run(candidate) + run(filepath.Join(candidate, "payload"))
+				if strings.Contains(attrs, "com.apple.FinderInfo") || strings.Contains(attrs, "com.apple.ResourceFork") || !strings.Contains(attrs, "com.apple.quarantine") {
+					t.Fatalf("unexpected staged attributes: %s", attrs)
+				}
+				if _, err := os.Stat(filepath.Join(installed, "old")); err != nil {
+					t.Fatal("installed app changed before verification")
+				}
+				if reject {
+					return fmt.Errorf("invalid signature")
+				}
+				return nil
+			})
+			err := inst.replaceApp(ctx, src, dst)
+			if !verified || (err != nil) != reject || MayRequireRollback(err) {
+				t.Fatalf("verified=%v, error=%v", verified, err)
+			}
+			if reject {
+				if _, err := os.Stat(filepath.Join(dst, "old")); err != nil {
+					t.Fatal("verification failure modified the installed app")
+				}
+			} else if attrs := run(dst); strings.Contains(attrs, "com.apple.FinderInfo") || !strings.Contains(attrs, "com.apple.quarantine") {
+				t.Fatalf("installed app did not retain verified metadata: %s", attrs)
+			}
+			if !strings.Contains(run(src), "com.apple.FinderInfo") || strings.TrimSpace(run("-p", "com.apple.ResourceFork", outside)) != "external metadata" {
+				t.Fatal("normalization modified the source bundle or external symlink target")
+			}
+			if _, err := os.Stat(dst + ".updater-staging"); !os.IsNotExist(err) {
+				t.Fatal("staging directory was left behind")
+			}
+		})
 	}
 }
 
