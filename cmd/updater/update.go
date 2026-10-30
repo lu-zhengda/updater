@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"strings"
 	"sync"
 	"text/tabwriter"
 	"time"
@@ -36,7 +35,7 @@ var updateCmd = &cobra.Command{
 
 func init() {
 	updateCmd.Flags().BoolVar(&flagAll, "all", false, "update all apps with available updates")
-	updateCmd.Flags().BoolVar(&flagAuto, "auto", false, "unattended mode (no prompts)")
+	updateCmd.Flags().BoolVar(&flagAuto, "auto", false, "unattended mode (no prompts; skip unsafe updates, preserving any app selector)")
 	updateCmd.Flags().BoolVar(&flagDryRun, "dry-run", false, "show what would be updated without making changes")
 	updateCmd.Flags().BoolVar(&flagDryRunJSON, "json", false, "output dry run results as JSON (requires --dry-run)")
 	updateCmd.Flags().StringVar(&flagBundleID, "bundle-id", "", "select the app to update by exact bundle ID instead of name")
@@ -85,6 +84,11 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("%w. Run 'updater scan' to see available apps", err)
 		}
 	}
+	// Scope checks and installs to the resolved app before applying auto filters.
+	// Keep the resolved identity: another app may have the same display name.
+	if targetApp != nil {
+		apps = []*app.App{targetApp}
+	}
 
 	checkers := buildCheckers(runner, cfg.ResolveGitHubToken())
 	results := checkAll(ctx, apps, checkers, cfg.MaxConcurrentOrDefault())
@@ -98,23 +102,14 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 	}
 
 	// Auto mode: filter to safe, unattended updates only.
+	var targetSkipReason string
 	if flagAuto {
-		autoSkipSources := map[string]bool{
-			"system": true, "setapp": true, "toolbox": true, "adobe": true,
-		}
 		var autoUpdatable []*checker.UpdateResult
 		for _, r := range updatable {
-			if cfg.IsPinned(r.App.BundleID) {
-				continue
-			}
-			if r.IsMajorUpdate || r.NativeUpgrade {
-				continue
-			}
-			if autoSkipSources[r.Source] {
-				continue
-			}
-			policy := cfg.Policy(r.App.BundleID)
-			if policy == config.PolicyManual || policy == config.PolicyNotifyOnly {
+			if reason := autoUpdateSkipReason(r, cfg); reason != "" {
+				if targetApp != nil {
+					targetSkipReason = reason
+				}
 				continue
 			}
 			autoUpdatable = append(autoUpdatable, r)
@@ -122,27 +117,23 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 		updatable = autoUpdatable
 	}
 
-	// If a specific app selector was given, filter to just that app.
-	if targetApp != nil && !flagAll && !flagAuto {
-		var matched []*checker.UpdateResult
-		for _, r := range updatable {
-			if targetApp.BundleID != "" && r.App.BundleID == targetApp.BundleID {
-				matched = append(matched, r)
-				continue
+	if len(updatable) == 0 {
+		if targetSkipReason != "" {
+			out := cmd.OutOrStdout()
+			if flagDryRun && jsonOutputEnabled(flagDryRunJSON) {
+				out = cmd.ErrOrStderr()
 			}
-			if strings.EqualFold(r.App.Name, targetApp.Name) {
-				matched = append(matched, r)
+			fmt.Fprintf(out, "Skipping %s (%s; --auto).\n", targetApp.Name, targetSkipReason)
+			if flagDryRun && jsonOutputEnabled(flagDryRunJSON) {
+				return printDryRunJSON(cmd, nil)
 			}
-		}
-		if len(matched) == 0 {
+		} else if targetApp != nil {
 			fmt.Fprintf(cmd.OutOrStdout(), "%s is up to date.\n", targetApp.Name)
-			return nil
+		} else {
+			fmt.Fprintln(cmd.OutOrStdout(), "All apps are up to date.")
 		}
-		updatable = matched
-	} else if len(updatable) == 0 {
-		fmt.Fprintln(cmd.OutOrStdout(), "All apps are up to date.")
 		return nil
-	} else if !flagAll && !flagAuto {
+	} else if targetApp == nil && !flagAll && !flagAuto {
 		// Without --all/--auto and without a specific app name, show what's available.
 		fmt.Fprintf(cmd.OutOrStdout(), "%d updates available. Use --all to update all, or specify an app name.\n", len(updatable))
 		printCheckResults(cmd, updatable, cfg)
@@ -222,6 +213,28 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 	}
 
 	return nil
+}
+
+// autoUpdateSkipReason describes why an available update cannot run with --auto.
+func autoUpdateSkipReason(r *checker.UpdateResult, cfg *config.Config) string {
+	if cfg.IsPinned(r.App.BundleID) {
+		return "pinned"
+	}
+	if r.IsMajorUpdate {
+		return "major update"
+	}
+	if r.NativeUpgrade {
+		return "ARM migration requires manual approval"
+	}
+	switch r.Source {
+	case "system", "setapp", "toolbox", "adobe":
+		return r.Source + " source requires an external updater"
+	}
+	policy := cfg.Policy(r.App.BundleID)
+	if policy == config.PolicyManual || policy == config.PolicyNotifyOnly {
+		return policy + " policy"
+	}
+	return ""
 }
 
 // backupManagerForConfig returns a manager only when automatic backups are
