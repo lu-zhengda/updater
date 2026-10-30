@@ -130,6 +130,13 @@ updater update --all --auto
 updater update --all --dry-run
 ```
 
+For an unattended update of one app, use `updater update "Microsoft Teams" --auto`
+or `updater update --bundle-id com.microsoft.teams2 --auto`. The selector still
+limits the operation to that app. `--auto` skips pinned apps, major updates, ARM
+migrations, manual/notify-only policies, and sources requiring an external
+updater; a selected app reports why it was skipped. Add `--dry-run` to preview
+the action. Without a selector, `--auto` considers all eligible apps.
+
 Scripting/JSON:
 
 ```sh
