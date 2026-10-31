@@ -167,6 +167,11 @@ updater cleanup --days 90
 updater cleanup --days 90 --delete
 ```
 
+`pin`, `unpin`, and `policy` accept package names and IDs from `updater scan`.
+If two sources have the same name, use the full ID, for example
+`updater pin homebrew.formula.httpie`. You can still unpin or clear a policy
+by its exact saved ID after uninstalling the package.
+
 Automation:
 
 ```sh

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"path/filepath"
 	"sort"
@@ -8,12 +9,37 @@ import (
 	"unicode"
 
 	"github.com/lu-zhengda/updater/internal/app"
+	"github.com/lu-zhengda/updater/internal/updater"
 )
 
 // joinAppNameArgs joins CLI args into a single app selector string so users can
 // pass multi-word app names without shell quoting.
 func joinAppNameArgs(args []string) string {
 	return strings.TrimSpace(strings.Join(args, " "))
+}
+
+// An exact stored ID can be cleared even if its package manager is unavailable.
+func resolveConfigTarget(ctx context.Context, query string, storedID bool) (name, bundleID string, err error) {
+	if storedID {
+		return query, query, nil
+	}
+	apps, err := discoverInstalled(ctx)
+	if err != nil {
+		return "", "", err
+	}
+	for _, a := range apps {
+		if query != "" && a.BundleID == query {
+			return a.Name, a.BundleID, nil
+		}
+	}
+	if updater.IsPackageID(query) {
+		return "", "", fmt.Errorf("package ID %q not found. Run 'updater scan' to see available apps", query)
+	}
+	a, err := resolveAppSelection(apps, query)
+	if err != nil {
+		return "", "", fmt.Errorf("%w. Run 'updater scan' to see available apps", err)
+	}
+	return a.Name, a.BundleID, nil
 }
 
 // resolveAppSelection resolves a user-provided app selector to a discovered app.
@@ -43,7 +69,7 @@ func resolveAppSelection(apps []*app.App, query string) (*app.App, error) {
 			ids = append(ids, a.BundleID)
 		}
 		sort.Strings(ids)
-		return nil, fmt.Errorf("app %q is ambiguous (bundle IDs: %s); use --bundle-id to pick one", query, strings.Join(ids, ", "))
+		return nil, fmt.Errorf("app %q is ambiguous (bundle IDs: %s); select by bundle ID", query, strings.Join(ids, ", "))
 	}
 
 	queryNorm := normalizeAppSelector(query)

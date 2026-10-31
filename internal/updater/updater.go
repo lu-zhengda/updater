@@ -69,6 +69,25 @@ func MacOSSystemApp() *app.App {
 	}
 }
 
+const (
+	formulaIDPrefix = "homebrew.formula."
+	uvIDPrefix      = "uv.tool."
+	npmIDPrefix     = "npm.global."
+	pnpmIDPrefix    = "pnpm.global."
+	pipxIDPrefix    = "pipx.venv."
+	cargoIDPrefix   = "cargo.crate."
+)
+
+// IsPackageID reports whether an ID belongs to a package manager's inventory.
+func IsPackageID(id string) bool {
+	for _, prefix := range []string{formulaIDPrefix, uvIDPrefix, npmIDPrefix, pnpmIDPrefix, pipxIDPrefix, cargoIDPrefix} {
+		if strings.HasPrefix(id, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
 // DiscoverBrewFormulae creates synthetic App entries for each installed Homebrew formula.
 func DiscoverBrewFormulae(ctx context.Context, runner checker.CmdRunner) ([]*app.App, error) {
 	formulae, err := checker.ListInstalledFormulae(ctx, runner)
@@ -86,7 +105,7 @@ func DiscoverBrewFormulae(ctx context.Context, runner checker.CmdRunner) ([]*app
 	for _, name := range names {
 		apps = append(apps, &app.App{
 			Name:             name,
-			BundleID:         "homebrew.formula." + name,
+			BundleID:         formulaIDPrefix + name,
 			Version:          formulae[name],
 			Source:           app.SourceBrewFormula,
 			FormulaName:      name,
@@ -115,7 +134,7 @@ func DiscoverUvTools(ctx context.Context, runner checker.CmdRunner) ([]*app.App,
 	for _, name := range names {
 		apps = append(apps, &app.App{
 			Name:          name,
-			BundleID:      "uv.tool." + name,
+			BundleID:      uvIDPrefix + name,
 			Version:       tools[name],
 			Source:        app.SourceUv,
 			UvTool:        name,
@@ -143,7 +162,7 @@ func DiscoverNpmPackages(ctx context.Context, runner checker.CmdRunner) ([]*app.
 	for _, name := range names {
 		apps = append(apps, &app.App{
 			Name:       name,
-			BundleID:   "npm.global." + name,
+			BundleID:   npmIDPrefix + name,
 			Version:    packages[name],
 			Source:     app.SourceNpm,
 			NpmPackage: name,
@@ -169,7 +188,7 @@ func DiscoverPnpmPackages(ctx context.Context, runner checker.CmdRunner) ([]*app
 	for _, name := range names {
 		apps = append(apps, &app.App{
 			Name:        name,
-			BundleID:    "pnpm.global." + name,
+			BundleID:    pnpmIDPrefix + name,
 			Version:     packages[name],
 			Source:      app.SourcePnpm,
 			PnpmPackage: name,
@@ -196,7 +215,7 @@ func DiscoverPipxPackages(ctx context.Context, runner checker.CmdRunner) ([]*app
 		info := packages[environment]
 		apps = append(apps, &app.App{
 			Name:            environment,
-			BundleID:        "pipx.venv." + environment,
+			BundleID:        pipxIDPrefix + environment,
 			Version:         info.Version,
 			Source:          app.SourcePipx,
 			PipxEnvironment: info.Environment,
@@ -225,7 +244,7 @@ func DiscoverCargoCrates(ctx context.Context, runner checker.CmdRunner) ([]*app.
 	for _, name := range names {
 		apps = append(apps, &app.App{
 			Name:       name,
-			BundleID:   "cargo.crate." + name,
+			BundleID:   cargoIDPrefix + name,
 			Version:    crates[name],
 			Source:     app.SourceCargo,
 			CargoCrate: name,
@@ -241,6 +260,15 @@ func DiscoverCargoCrates(ctx context.Context, runner checker.CmdRunner) ([]*app.
 // are non-fatal and reported through warn (which may be nil). The returned apps
 // are enriched but not filtered; apply FilterIgnored as needed.
 func DiscoverAll(ctx context.Context, cfg *config.Config, runner checker.CmdRunner, warn func(source string, err error)) ([]*app.App, error) {
+	apps, err := DiscoverInstalled(ctx, runner, warn)
+	if err != nil {
+		return nil, err
+	}
+	return EnrichApps(ctx, apps, cfg, runner)
+}
+
+// DiscoverInstalled lists installed apps and packages without probing update sources.
+func DiscoverInstalled(ctx context.Context, runner checker.CmdRunner, warn func(source string, err error)) ([]*app.App, error) {
 	if warn == nil {
 		warn = func(string, error) {}
 	}
@@ -272,7 +300,7 @@ func DiscoverAll(ctx context.Context, cfg *config.Config, runner checker.CmdRunn
 		apps = append(apps, extra...)
 	}
 
-	return EnrichApps(ctx, apps, cfg, runner)
+	return apps, nil
 }
 
 // EnrichApps applies explicit source overrides, config mappings, and

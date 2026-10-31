@@ -180,6 +180,17 @@ func TestValidateConfigMappings_StalePinned(t *testing.T) {
 	}
 }
 
+func TestValidateConfigMappings_PackageSettingsSurviveBundleScan(t *testing.T) {
+	cfg := &config.Config{
+		PinnedApps: []string{"homebrew.formula.httpie", "npm.global.@nanonets/graft", "pnpm.global.pnpm"},
+		Policies:   map[string]string{"cargo.crate.ripgrep": config.PolicyManual, "uv.tool.ruff": config.PolicyManual, "pipx.venv.black": config.PolicyManual},
+	}
+	check := validateConfigMappings(cfg, nil)[0]
+	if check.Status != "ok" || check.fixFn != nil {
+		t.Fatalf("package settings were marked for removal: %+v", check)
+	}
+}
+
 func TestValidateConfigMappings_MultipleStale(t *testing.T) {
 	cfg := &config.Config{
 		GitHubMappings: map[string]string{"com.stale.gh": "owner/repo"},

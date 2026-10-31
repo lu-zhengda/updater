@@ -8,7 +8,7 @@ import (
 )
 
 var pinCmd = &cobra.Command{
-	Use:   "pin <app-name>",
+	Use:   "pin <name-or-id>",
 	Short: "Pin an app to prevent automatic updates",
 	Long:  "Pinned apps show update status but are skipped during 'update --all'.",
 	Args:  cobra.MinimumNArgs(1),
@@ -16,7 +16,7 @@ var pinCmd = &cobra.Command{
 }
 
 var unpinCmd = &cobra.Command{
-	Use:   "unpin <app-name>",
+	Use:   "unpin <name-or-id>",
 	Short: "Unpin an app to allow automatic updates",
 	Args:  cobra.MinimumNArgs(1),
 	RunE:  runUnpin,
@@ -44,16 +44,10 @@ func runPin(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to load config: %w", err)
 	}
 
-	apps, err := discoverApps()
+	name, bundleID, err := resolveConfigTarget(cmd.Context(), name, false)
 	if err != nil {
 		return err
 	}
-
-	selected, err := resolveAppSelection(apps, name)
-	if err != nil {
-		return fmt.Errorf("%w. Run 'updater scan' to see available apps", err)
-	}
-	bundleID := selected.BundleID
 
 	if cfg.IsPinned(bundleID) {
 		if useJSON {
@@ -61,11 +55,11 @@ func runPin(cmd *cobra.Command, args []string) error {
 				"action":    "pin",
 				"status":    "already_pinned",
 				"changed":   false,
-				"app":       selected.Name,
+				"app":       name,
 				"bundle_id": bundleID,
 			})
 		}
-		fmt.Fprintf(cmd.OutOrStdout(), "%s is already pinned\n", selected.Name)
+		fmt.Fprintf(cmd.OutOrStdout(), "%s is already pinned\n", name)
 		return nil
 	}
 
@@ -79,12 +73,12 @@ func runPin(cmd *cobra.Command, args []string) error {
 			"action":    "pin",
 			"status":    "pinned",
 			"changed":   true,
-			"app":       selected.Name,
+			"app":       name,
 			"bundle_id": bundleID,
 		})
 	}
 
-	fmt.Fprintf(cmd.OutOrStdout(), "Pinned %s (%s)\n", selected.Name, bundleID)
+	fmt.Fprintf(cmd.OutOrStdout(), "Pinned %s (%s)\n", name, bundleID)
 	return nil
 }
 
@@ -98,16 +92,10 @@ func runUnpin(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to load config: %w", err)
 	}
 
-	apps, err := discoverApps()
+	name, bundleID, err := resolveConfigTarget(cmd.Context(), name, cfg.IsPinned(name))
 	if err != nil {
 		return err
 	}
-
-	selected, err := resolveAppSelection(apps, name)
-	if err != nil {
-		return fmt.Errorf("%w. Run 'updater scan' to see available apps", err)
-	}
-	bundleID := selected.BundleID
 
 	if !cfg.IsPinned(bundleID) {
 		if useJSON {
@@ -115,11 +103,11 @@ func runUnpin(cmd *cobra.Command, args []string) error {
 				"action":    "unpin",
 				"status":    "not_pinned",
 				"changed":   false,
-				"app":       selected.Name,
+				"app":       name,
 				"bundle_id": bundleID,
 			})
 		}
-		fmt.Fprintf(cmd.OutOrStdout(), "%s is not pinned\n", selected.Name)
+		fmt.Fprintf(cmd.OutOrStdout(), "%s is not pinned\n", name)
 		return nil
 	}
 
@@ -133,11 +121,15 @@ func runUnpin(cmd *cobra.Command, args []string) error {
 			"action":    "unpin",
 			"status":    "unpinned",
 			"changed":   true,
-			"app":       selected.Name,
+			"app":       name,
 			"bundle_id": bundleID,
 		})
 	}
 
-	fmt.Fprintf(cmd.OutOrStdout(), "Unpinned %s (%s)\n", selected.Name, bundleID)
+	if name == bundleID {
+		fmt.Fprintf(cmd.OutOrStdout(), "Unpinned %s\n", bundleID)
+	} else {
+		fmt.Fprintf(cmd.OutOrStdout(), "Unpinned %s (%s)\n", name, bundleID)
+	}
 	return nil
 }
