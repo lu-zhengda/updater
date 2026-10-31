@@ -9,7 +9,7 @@ import (
 )
 
 var policyCmd = &cobra.Command{
-	Use:   "policy <app-name> <auto|manual|notify-only|clear>",
+	Use:   "policy <name-or-id> <auto|manual|notify-only|clear>",
 	Short: "Set update policy for an app",
 	Long: `Set per-app update policies to control how updates are handled.
 
@@ -47,17 +47,10 @@ func runPolicy(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to load config: %w", err)
 	}
 
-	// Find app by name.
-	apps, err := discoverApps()
+	appName, bundleID, err := resolveConfigTarget(cmd.Context(), appName, policy == "clear" && cfg.Policy(appName) != "")
 	if err != nil {
 		return err
 	}
-
-	selected, err := resolveAppSelection(apps, appName)
-	if err != nil {
-		return fmt.Errorf("%w. Run 'updater scan' to see available apps", err)
-	}
-	bundleID := selected.BundleID
 
 	if policy == "clear" {
 		cfg.RemovePolicy(bundleID)
@@ -68,11 +61,11 @@ func runPolicy(cmd *cobra.Command, args []string) error {
 			return writeJSON(cmd, map[string]any{
 				"action":    "clear_policy",
 				"status":    "updated",
-				"app":       selected.Name,
+				"app":       appName,
 				"bundle_id": bundleID,
 			})
 		}
-		fmt.Fprintf(cmd.OutOrStdout(), "Cleared policy for %s\n", selected.Name)
+		fmt.Fprintf(cmd.OutOrStdout(), "Cleared policy for %s\n", appName)
 	} else {
 		cfg.SetPolicy(bundleID, policy)
 		if useJSON {
@@ -82,12 +75,12 @@ func runPolicy(cmd *cobra.Command, args []string) error {
 			return writeJSON(cmd, map[string]any{
 				"action":    "set_policy",
 				"status":    "updated",
-				"app":       selected.Name,
+				"app":       appName,
 				"bundle_id": bundleID,
 				"policy":    policy,
 			})
 		}
-		fmt.Fprintf(cmd.OutOrStdout(), "Set policy for %s to %s\n", selected.Name, policy)
+		fmt.Fprintf(cmd.OutOrStdout(), "Set policy for %s to %s\n", appName, policy)
 	}
 
 	if err := cfg.Save(cfgPath); err != nil {

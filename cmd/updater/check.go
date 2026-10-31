@@ -95,12 +95,18 @@ func discoverApps() ([]*app.App, error) {
 	return updater.DiscoverApps()
 }
 
+var discoverInstalled = func(ctx context.Context) ([]*app.App, error) {
+	return updater.DiscoverInstalled(ctx, newRunner(), warnDiscovery)
+}
+
 // discoverAll runs the full shared discovery pipeline, printing non-fatal
 // source warnings to stderr.
 var discoverAll = func(ctx context.Context, cfg *config.Config, runner checker.CmdRunner) ([]*app.App, error) {
-	return updater.DiscoverAll(ctx, cfg, runner, func(source string, err error) {
-		fmt.Fprintf(os.Stderr, "warning: could not discover %s: %v\n", source, err)
-	})
+	return updater.DiscoverAll(ctx, cfg, runner, warnDiscovery)
+}
+
+func warnDiscovery(source string, err error) {
+	fmt.Fprintf(os.Stderr, "warning: could not discover %s: %v\n", source, err)
 }
 
 func discoverBrewFormulae(ctx context.Context, runner checker.CmdRunner) ([]*app.App, error) {

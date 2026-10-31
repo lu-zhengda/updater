@@ -17,6 +17,7 @@ import (
 	"github.com/lu-zhengda/updater/internal/checker"
 	"github.com/lu-zhengda/updater/internal/config"
 	"github.com/lu-zhengda/updater/internal/history"
+	"github.com/lu-zhengda/updater/internal/updater"
 	"github.com/spf13/cobra"
 )
 
@@ -190,15 +191,17 @@ func validateConfigMappings(cfg *config.Config, apps []*app.App) []doctorCheck {
 			})
 		}
 	}
+	// This check scans app bundles only. A package pin or policy can outlive
+	// its package manager and can be removed explicitly by ID.
 	for id := range cfg.Policies {
-		if !bundleIDs[id] {
+		if !bundleIDs[id] && !updater.IsPackageID(id) {
 			staleEntries = append(staleEntries, staleEntry{
 				label: fmt.Sprintf("policies: %s", id), bundleID: id, kind: "policy",
 			})
 		}
 	}
 	for _, id := range cfg.PinnedApps {
-		if !bundleIDs[id] {
+		if !bundleIDs[id] && !updater.IsPackageID(id) {
 			staleEntries = append(staleEntries, staleEntry{
 				label: fmt.Sprintf("pinned_apps: %s", id), bundleID: id, kind: "pinned",
 			})

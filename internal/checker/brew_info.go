@@ -114,6 +114,13 @@ func caskInstalledVersion(shortVersion, buildVersion, latest string) string {
 	}
 
 	short, build, cask := numericVersionParts(shortVersion), numericVersionParts(buildVersion), numericVersionParts(latest)
+	// OneDrive packs the first two release components together in its plist
+	// build. Only use its revision if the entire installed release matches.
+	if len(short) >= 2 && len(build) == len(short) && len(cask) == len(short)+1 {
+		if revision, ok := strings.CutPrefix(buildVersion, strings.Replace(shortVersion, ".", "", 1)+"."); ok {
+			return shortVersion + "." + revision
+		}
+	}
 	if len(short) == 0 || len(build) == 0 || len(build) != len(cask) {
 		return shortVersion
 	}
