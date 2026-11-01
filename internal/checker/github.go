@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
+	"github.com/Masterminds/semver/v3"
 	"github.com/lu-zhengda/updater/internal/app"
 	"github.com/lu-zhengda/updater/internal/architecture"
 	"github.com/lu-zhengda/updater/internal/version"
@@ -35,6 +37,8 @@ type GitHubChecker struct {
 	client  *http.Client
 	baseURL string
 	token   string
+	// ReadBundleVersion inspects a release asset without installing it.
+	ReadBundleVersion func(ctx context.Context, downloadURL, digest, bundleID string) (string, error)
 }
 
 // NewGitHubChecker creates a new GitHubChecker.
@@ -102,6 +106,38 @@ func (g *GitHubChecker) Check(ctx context.Context, a *app.App) (*UpdateResult, e
 
 	latestVersion := CleanTagVersion(release.TagName)
 	asset := findMacAsset(release.Assets)
+	if override := a.ResolvedSourceOverride; override != nil && override.Kind == "github" {
+		switch override.VersionSource {
+		case "", "tag":
+			if override.VersionPattern != "" || override.VersionReplacement != "" {
+				latestVersion, err = transformGitHubVersion(latestVersion, override.VersionPattern, override.VersionReplacement)
+			}
+		case "bundle":
+			var bundleAssets []GitHubAsset
+			for _, candidate := range release.Assets {
+				name := strings.ToLower(candidate.Name)
+				if strings.HasSuffix(name, ".zip") || strings.HasSuffix(name, ".dmg") {
+					bundleAssets = append(bundleAssets, candidate)
+				}
+			}
+			asset = findMacAsset(bundleAssets)
+			if asset.DownloadURL == "" {
+				return nil, fmt.Errorf("no compatible macOS ZIP or DMG asset to read bundle version for %s", a.Name)
+			}
+			if g.ReadBundleVersion == nil {
+				return nil, fmt.Errorf("bundle version reader is unavailable for %s", a.Name)
+			}
+			latestVersion, err = g.ReadBundleVersion(ctx, asset.DownloadURL, asset.Digest, a.BundleID)
+			if err == nil && strings.TrimSpace(latestVersion) == "" {
+				err = fmt.Errorf("bundle version is empty")
+			}
+		default:
+			err = fmt.Errorf("unknown version_source %q", override.VersionSource)
+		}
+		if err != nil {
+			return nil, fmt.Errorf("failed to resolve GitHub version for %s: %w", a.Name, err)
+		}
+	}
 
 	return &UpdateResult{
 		App:            a,
@@ -114,6 +150,25 @@ func (g *GitHubChecker) Check(ctx context.Context, a *app.App) (*UpdateResult, e
 		HasUpdate:      version.IsNewer(a.Version, latestVersion),
 		IsMajorUpdate:  version.IsMajorUpgrade(a.Version, latestVersion),
 	}, nil
+}
+
+func transformGitHubVersion(tag, pattern, replacement string) (string, error) {
+	if strings.TrimSpace(pattern) == "" || strings.TrimSpace(replacement) == "" {
+		return "", fmt.Errorf("version_pattern and version_replacement must both be non-empty")
+	}
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		return "", fmt.Errorf("invalid version_pattern: %w", err)
+	}
+	match := re.FindStringSubmatchIndex(tag)
+	if match == nil || match[0] != 0 || match[1] != len(tag) {
+		return "", fmt.Errorf("version_pattern does not match the full release tag %q", tag)
+	}
+	transformed := string(re.ExpandString(nil, replacement, tag, match))
+	if _, err := semver.NewVersion(transformed); err != nil {
+		return "", fmt.Errorf("version_replacement produced invalid version %q: %w", transformed, err)
+	}
+	return transformed, nil
 }
 
 // CleanTagVersion strips common tag prefixes from GitHub release tags.

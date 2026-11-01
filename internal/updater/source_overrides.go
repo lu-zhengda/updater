@@ -27,10 +27,13 @@ func applyExplicitSourceOverride(a *app.App, override *config.SourceOverrideConf
 	}
 
 	a.ResolvedSourceOverride = &app.SourceOverride{
-		Kind:       string(override.Kind),
-		Repo:       override.Repo,
-		AppcastURL: override.AppcastURL,
-		Cask:       override.Cask,
+		Kind:               string(override.Kind),
+		Repo:               override.Repo,
+		AppcastURL:         override.AppcastURL,
+		Cask:               override.Cask,
+		VersionSource:      override.VersionSource,
+		VersionPattern:     override.VersionPattern,
+		VersionReplacement: override.VersionReplacement,
 	}
 	a.SourceOverrideActive = true
 	a.SourceOverrideKind = string(override.Kind)

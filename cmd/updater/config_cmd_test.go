@@ -102,8 +102,10 @@ func TestConfigExport_MarshalRoundtrip_SourceOverrides(t *testing.T) {
 	cfg := &config.Config{
 		SourceOverrides: map[string]*config.SourceOverrideConfig{
 			"com.example.github": {
-				Kind: config.SourceOverrideKindGitHub,
-				Repo: "cli/cli",
+				Kind:               config.SourceOverrideKindGitHub,
+				Repo:               "cli/cli",
+				VersionPattern:     `^release-(\d+\.\d+\.\d+)$`,
+				VersionReplacement: "${1}",
 			},
 			"com.example.sparkle": {
 				Kind:       config.SourceOverrideKindSparkle,
@@ -132,6 +134,9 @@ func TestConfigExport_MarshalRoundtrip_SourceOverrides(t *testing.T) {
 	}
 	if got := decoded.SourceOverride("com.example.github"); got == nil || got.Repo != "cli/cli" {
 		t.Fatalf("decoded github override = %#v, want repo cli/cli", got)
+	}
+	if *decoded.SourceOverride("com.example.github") != *cfg.SourceOverride("com.example.github") {
+		t.Fatal("export/import lost version transformation")
 	}
 	if got := decoded.SourceOverride("com.example.sparkle"); got == nil || got.AppcastURL != "https://example.com/appcast.xml" {
 		t.Fatalf("decoded sparkle override = %#v, want appcast URL", got)
