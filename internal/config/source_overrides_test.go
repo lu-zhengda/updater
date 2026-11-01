@@ -153,8 +153,9 @@ func TestMerge_SourceOverrides(t *testing.T) {
 	imported := &Config{
 		SourceOverrides: map[string]*SourceOverrideConfig{
 			"com.example.github": {
-				Kind: SourceOverrideKindGitHub,
-				Repo: "new/repo",
+				Kind:          SourceOverrideKindGitHub,
+				Repo:          "new/repo",
+				VersionSource: "bundle",
 			},
 			"com.example.brew": {
 				Kind: SourceOverrideKindBrew,
@@ -169,6 +170,8 @@ func TestMerge_SourceOverrides(t *testing.T) {
 		t.Fatal("expected github override to exist after merge")
 	} else if got.Repo != "new/repo" {
 		t.Errorf("Repo = %q, want %q", got.Repo, "new/repo")
+	} else if got.VersionSource != "bundle" {
+		t.Errorf("VersionSource = %q, want bundle", got.VersionSource)
 	}
 
 	if got := result.SourceOverride("com.example.sparkle"); got == nil {
@@ -181,6 +184,52 @@ func TestMerge_SourceOverrides(t *testing.T) {
 		t.Fatal("expected brew override to be added after merge")
 	} else if got.Cask != "iterm2" {
 		t.Errorf("Cask = %q, want %q", got.Cask, "iterm2")
+	}
+}
+
+func TestSourceOverrideVersionConfig(t *testing.T) {
+	for _, tc := range []struct {
+		name, fields, wantError string
+	}{
+		{"default", "", ""},
+		{"tag", "version_source: tag", ""},
+		{"bundle", "version_source: bundle", ""},
+		{"transform", "version_pattern: '^0\\.(\\d+\\.\\d+)-alpha$'\n    version_replacement: '1.${1}'", ""},
+		{"unknown source", "version_source: guess", "version_source must be tag or bundle"},
+		{"missing replacement", "version_pattern: '.*'", "must both be non-empty"},
+		{"missing pattern", "version_replacement: '${1}'", "must both be non-empty"},
+		{"invalid pattern", "version_pattern: '('\n    version_replacement: '${1}'", "invalid version_pattern"},
+		{"mixed strategies", "version_source: bundle\n    version_pattern: '(.*)'\n    version_replacement: '${1}'", "require version_source: tag"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, err := Parse([]byte("source_overrides:\n  com.example.app:\n    kind: github\n    repo: example/app\n    " + tc.fields + "\n"))
+			if tc.wantError != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantError) {
+					t.Fatalf("error = %v, want %q", err, tc.wantError)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(t.TempDir(), "config.yaml")
+			if err := cfg.Save(path); err != nil {
+				t.Fatal(err)
+			}
+			reloaded, err := Load(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if *reloaded.SourceOverride("com.example.app") != *cfg.SourceOverride("com.example.app") {
+				t.Fatal("saving config lost version settings")
+			}
+		})
+	}
+	for _, kind := range []string{"sparkle", "brew"} {
+		_, err := Parse([]byte("source_overrides:\n  com.example.app:\n    kind: " + kind + "\n    version_source: bundle\n"))
+		if err == nil || !strings.Contains(err.Error(), "unexpected field") {
+			t.Fatalf("%s accepted GitHub version_source: %v", kind, err)
+		}
 	}
 }
 

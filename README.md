@@ -280,6 +280,63 @@ Notes:
 - Backups are disabled by default because app bundles can be large. Enable **Preferences › Back Up Before Updates** in the menu bar app, or set `max_backups` to a positive per-app retention count. Set it to `0` to disable backups.
 - Use `updater config export` and `updater config import <file>` to move config between machines.
 
+### GitHub release versions that differ from the app
+
+If a release tag differs from the version inside the macOS app, add a
+`source_overrides` entry to `~/.config/updater/config.yaml`. For example:
+
+```yaml
+source_overrides:
+  com.nuvio.media.desktop:
+    kind: github
+    repo: NuvioMedia/NuvioDesktop
+    version_source: bundle
+```
+
+`version_source: bundle` downloads the compatible macOS ZIP or DMG and reads
+`CFBundleShortVersionString` from the app with the matching bundle ID. The app
+is not launched or installed. ZIP metadata is read directly; DMGs are mounted
+read-only and detached afterward. Missing or ambiguous apps, missing versions,
+and download or inspection failures are reported as check errors. Package
+installers (`.pkg`) are not supported for version extraction.
+
+Each check downloads the asset, even when the app is current; installation
+downloads it again and performs the usual security checks. Use this option for
+apps whose bundle version is the reliable source. This overrides any legacy
+`github_mappings` entry for the same bundle ID. Find an app's bundle ID with
+`updater scan`, then verify the result with `updater check`.
+
+Version extraction does not bypass installation checks. Nuvio's official
+`0.1.32-alpha` app is ad-hoc signed without an Apple Developer Team ID: bundle
+mode detects its update, but Updater's automatic installer rejects replacement
+because the installed app cannot establish a trusted developer identity.
+That installation still requires a manual update.
+
+For faster checks, a known relationship between tag and app versions can be
+expressed with a pattern and replacement instead:
+
+```yaml
+source_overrides:
+  com.nuvio.media.desktop:
+    kind: github
+    repo: NuvioMedia/NuvioDesktop
+    version_source: tag
+    version_pattern: '^0\.(\d+\.\d+)-alpha$'
+    version_replacement: '1.${1}'
+```
+
+This example converts `0.1.33-alpha` to `1.1.33`. Patterns use Go regular
+expressions and must match the entire tag after the usual prefix cleanup
+(such as removing `v`). `${1}` inserts the first captured group; named captures
+are also supported. Keep single quotes around these YAML values so backslashes
+are preserved. Both fields are required together, and the result must be a
+valid semantic version. A tag that no longer matches produces an error so the
+rule can be revised. These fields apply only to `version_source: tag`.
+
+The source defaults to `tag`, with no transformation. Both strategies are
+opt-in per app; the repository contains no Nuvio-specific detection rule.
+Neither strategy can distinguish releases with identical bundle versions.
+
 ## Safety Model
 
 - `--dry-run` prints the exact planned actions without making changes.
@@ -319,6 +376,18 @@ make build
 make test
 make clean
 ```
+
+To reproduce issue #18 with an actual Nuvio `0.1.32-alpha` app:
+
+```sh
+UPDATER_TEST_NUVIO_APP=/path/to/Nuvio.app \
+  go test -v ./cmd/updater -run '^TestLiveNuvioDirectInstall$' -count=1
+```
+
+The opt-in test updates only a temporary copy and does not launch the app. It
+requires a successful installation and a clean rescan to pass; the official
+ad-hoc-signed build currently fails at the developer identity check described
+above, after confirming the version-detection fix.
 
 ## License
 

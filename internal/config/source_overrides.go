@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -18,10 +19,13 @@ const (
 
 // SourceOverrideConfig pins a bundle ID to a specific source configuration.
 type SourceOverrideConfig struct {
-	Kind       SourceOverrideKind `yaml:"kind"`
-	Repo       string             `yaml:"repo,omitempty"`
-	AppcastURL string             `yaml:"appcast_url,omitempty"`
-	Cask       string             `yaml:"cask,omitempty"`
+	Kind               SourceOverrideKind `yaml:"kind"`
+	Repo               string             `yaml:"repo,omitempty"`
+	AppcastURL         string             `yaml:"appcast_url,omitempty"`
+	Cask               string             `yaml:"cask,omitempty"`
+	VersionSource      string             `yaml:"version_source,omitempty"`
+	VersionPattern     string             `yaml:"version_pattern,omitempty"`
+	VersionReplacement string             `yaml:"version_replacement,omitempty"`
 }
 
 func (s *SourceOverrideConfig) UnmarshalYAML(node *yaml.Node) error {
@@ -49,6 +53,20 @@ func (s *SourceOverrideConfig) UnmarshalYAML(node *yaml.Node) error {
 		if !validGitHubRepo(raw.Repo) {
 			return fmt.Errorf("github repo must match owner/repo")
 		}
+		if raw.VersionSource != "" && raw.VersionSource != "tag" && raw.VersionSource != "bundle" {
+			return fmt.Errorf("github version_source must be tag or bundle")
+		}
+		if raw.VersionPattern != "" || raw.VersionReplacement != "" {
+			if raw.VersionSource == "bundle" {
+				return fmt.Errorf("version_pattern and version_replacement require version_source: tag")
+			}
+			if strings.TrimSpace(raw.VersionPattern) == "" || strings.TrimSpace(raw.VersionReplacement) == "" {
+				return fmt.Errorf("version_pattern and version_replacement must both be non-empty")
+			}
+			if _, err := regexp.Compile(raw.VersionPattern); err != nil {
+				return fmt.Errorf("invalid version_pattern: %w", err)
+			}
+		}
 	case SourceOverrideKindSparkle:
 		if !validSparkleAppcastURL(raw.AppcastURL) {
 			return fmt.Errorf("sparkle appcast_url must start with https://")
@@ -67,8 +85,11 @@ func sourceOverrideAllowedFields(kind SourceOverrideKind) map[string]bool {
 	switch kind {
 	case SourceOverrideKindGitHub:
 		return map[string]bool{
-			"kind": true,
-			"repo": true,
+			"kind":                true,
+			"repo":                true,
+			"version_source":      true,
+			"version_pattern":     true,
+			"version_replacement": true,
 		}
 	case SourceOverrideKindSparkle:
 		return map[string]bool{

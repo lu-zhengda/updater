@@ -18,6 +18,7 @@ import (
 	"github.com/lu-zhengda/updater/internal/architecture"
 	"github.com/lu-zhengda/updater/internal/checker"
 	"github.com/lu-zhengda/updater/internal/config"
+	"github.com/lu-zhengda/updater/internal/installer"
 	"github.com/lu-zhengda/updater/internal/version"
 )
 
@@ -463,12 +464,14 @@ func BuildCheckers(runner checker.CmdRunner, githubToken string) []checker.Check
 	// A shared client with a timeout so one hung feed server cannot stall an
 	// entire check run (http.DefaultClient never times out).
 	httpClient := &http.Client{Timeout: 30 * time.Second}
+	githubChecker := checker.NewGitHubChecker(httpClient, "", githubToken)
+	githubChecker.ReadBundleVersion = installer.New(runner, nil).ReadBundleVersion
 	return []checker.Checker{
 		checker.NewSparkleChecker(httpClient),
 		checker.NewVendorChecker(httpClient),
 		checker.NewBrewChecker(runner),
 		checker.NewMASChecker(runner),
-		checker.NewGitHubChecker(httpClient, "", githubToken),
+		githubChecker,
 		checker.NewSystemChecker(runner),
 		checker.NewBrewFormulaChecker(runner),
 		checker.NewElectronChecker(httpClient),

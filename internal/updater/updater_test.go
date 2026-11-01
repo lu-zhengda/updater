@@ -878,6 +878,9 @@ func TestBuildCheckers(t *testing.T) {
 			t.Errorf("checkers[%d].Name() = %q, want %q", i, checkers[i].Name(), want)
 		}
 	}
+	if checkers[4].(*checker.GitHubChecker).ReadBundleVersion == nil {
+		t.Fatal("GitHub checker has no bundle version reader")
+	}
 }
 
 // --- CheckAll ---
