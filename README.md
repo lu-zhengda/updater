@@ -14,7 +14,7 @@ Installing gives you both entry points from one binary:
 
 ## Requirements
 
-- macOS (the one truly non-negotiable requirement)
+- macOS 13 Ventura or later
 - Homebrew (recommended)
 - `mas` for Mac App Store checks (installed automatically with the Homebrew cask)
 
@@ -349,7 +349,7 @@ Neither strategy can distinguish releases with identical bundle versions.
 
 ## Build From Source
 
-Requires Go `1.25.7+`.
+Requires Go `1.27.3+`.
 
 ```sh
 git clone https://github.com/lu-zhengda/updater.git

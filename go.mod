@@ -1,6 +1,6 @@
 module github.com/lu-zhengda/updater
 
-go 1.25.7
+go 1.27.3
 
 require (
 	fyne.io/systray v1.12.2
