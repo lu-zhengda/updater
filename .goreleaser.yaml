@@ -12,6 +12,9 @@ builds:
     env:
       # The menu bar app (updater menubar run) uses systray, which needs cgo.
       - CGO_ENABLED=1
+      - CGO_CFLAGS=-O2 -g -mmacosx-version-min=13.0
+      - CGO_CXXFLAGS=-O2 -g -mmacosx-version-min=13.0
+      - CGO_LDFLAGS=-O2 -g -mmacosx-version-min=13.0
     ldflags:
       - -s -w
       - -X main.version={{.Version}}
@@ -71,11 +74,12 @@ homebrew_casks:
     binaries:
       - "#{appdir}/Updater.app/Contents/MacOS/updater"
     custom_block: |
+      depends_on macos: :ventura
       app "Updater.app"
     hooks:
       pre:
-        install: |
-          if OS.mac?
+        install_steps: |
+          on_macos do
             # Replace a manually-placed copy (e.g. from the release tarball);
             # Homebrew refuses to overwrite an app it did not install.
             remove "Updater.app", base: :appdir, recursive: true
