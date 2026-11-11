@@ -3,7 +3,6 @@ package checker
 import (
 	"context"
 	"errors"
-	"io"
 	"os/exec"
 	"strings"
 
@@ -51,12 +50,9 @@ type CmdRunner interface {
 // RealCmdRunner executes real shell commands.
 type RealCmdRunner struct{}
 
-// Run executes a command and returns its stdout. Stderr is suppressed
-// to prevent it from leaking into TUI output.
+// Run returns stdout and captures stderr in ExitError without displaying it.
 func (r *RealCmdRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, name, args...)
-	cmd.Stderr = io.Discard // suppress stderr to avoid TUI corruption
-	return cmd.Output()
+	return exec.CommandContext(ctx, name, args...).Output()
 }
 
 // MockCmdRunner returns canned responses for testing.

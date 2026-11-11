@@ -16,15 +16,23 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/lu-zhengda/updater/internal/checker"
 	"github.com/lu-zhengda/updater/internal/signing"
+	"golang.org/x/sys/unix"
 )
 
 const maxDownloadSize int64 = 4 << 30 // 4 GiB
+
+// ErrPackageAuthorization means the package installer never received permission to run.
+var ErrPackageAuthorization = errors.New("package installation requires administrator authorization")
+
+// ErrAppManagement means macOS denied access to replace an app bundle.
+var ErrAppManagement = errors.New("macOS blocked app replacement; check System Settings → Privacy & Security → App Management for Updater or the app that launched it")
 
 type artifactVerifier interface {
 	VerifyReplacementApp(context.Context, string, string) error
@@ -52,6 +60,9 @@ type Installer struct {
 	runner   checker.CmdRunner
 	client   *http.Client
 	verifier artifactVerifier
+
+	// AllowAuthorizationPrompt is for user-initiated updates in a macOS session.
+	AllowAuthorizationPrompt bool
 }
 
 // New creates a new Installer.
@@ -61,8 +72,9 @@ func New(runner checker.CmdRunner, client *http.Client) *Installer {
 }
 
 // Install downloads the update from downloadURL and installs it, replacing the
-// app at appPath. The format is detected from the URL or Content-Disposition header.
-func (inst *Installer) Install(ctx context.Context, downloadURL, appPath, appName, expectedDigest string) error {
+// app at appPath. beforeReplace can quit a running app before replacing its
+// bundle. A macOS package manages its own lifecycle after authorization.
+func (inst *Installer) Install(ctx context.Context, downloadURL, appPath, appName, expectedDigest string, beforeReplace func()) error {
 	tmpDir, err := os.MkdirTemp("", "updater-install-*")
 	if err != nil {
 		return fmt.Errorf("failed to create temp dir: %w", err)
@@ -77,9 +89,9 @@ func (inst *Installer) Install(ctx context.Context, downloadURL, appPath, appNam
 	ext := strings.ToLower(filepath.Ext(localPath))
 	switch ext {
 	case ".dmg":
-		return inst.installDMG(ctx, localPath, appPath, appName)
+		return inst.installDMG(ctx, localPath, appPath, appName, beforeReplace)
 	case ".zip":
-		return inst.installZIP(ctx, localPath, appPath, appName)
+		return inst.installZIP(ctx, localPath, appPath, appName, beforeReplace)
 	case ".pkg":
 		return inst.installPKG(ctx, localPath, appPath)
 	default:
@@ -192,7 +204,7 @@ func filenameFromResponse(resp *http.Response, rawURL string) (string, error) {
 }
 
 // installDMG mounts a DMG, copies the .app to the target location, and detaches.
-func (inst *Installer) installDMG(ctx context.Context, dmgPath, appPath, appName string) error {
+func (inst *Installer) installDMG(ctx context.Context, dmgPath, appPath, appName string, beforeReplace func()) error {
 	// Mount DMG silently.
 	output, err := inst.runner.Run(ctx, "hdiutil", "attach", "-nobrowse", "-plist", dmgPath)
 	if err != nil {
@@ -214,30 +226,26 @@ func (inst *Installer) installDMG(ctx context.Context, dmgPath, appPath, appName
 		return fmt.Errorf("no .app bundle found in DMG for %s", appName)
 	}
 
-	return inst.replaceApp(ctx, appBundle, appPath)
+	return inst.replaceApp(ctx, appBundle, appPath, beforeReplace)
 }
 
-// replaceApp swaps the app at appPath with srcBundle via a staged copy.
-// A plain `cp -a src dst` would copy src INTO dst when dst already exists
-// (nesting the new bundle inside the old one), so stage next to the target
-// on the same volume, remove the old bundle, and rename into place.
-func (inst *Installer) replaceApp(ctx context.Context, srcBundle, appPath string) error {
-	stagingDir := appPath + ".updater-staging"
+// replaceApp swaps the verified staged copy and the installed bundle atomically.
+func (inst *Installer) replaceApp(ctx context.Context, srcBundle, appPath string, beforeReplace func()) error {
+	stagingDir, err := os.MkdirTemp(filepath.Dir(appPath), ".updater-staging-*")
+	if err != nil {
+		if errors.Is(err, os.ErrPermission) {
+			return fmt.Errorf("%w: %w", ErrAppManagement, err)
+		}
+		return fmt.Errorf("failed to create app staging directory: %w", err)
+	}
+	defer func() {
+		if err := os.RemoveAll(stagingDir); err != nil {
+			fmt.Fprintf(os.Stderr, "  could not remove app staging directory %s: %v\n", stagingDir, err)
+		}
+	}()
 	// Preserve the bundle's name: macOS uses it to resolve the executable in
 	// signed apps such as Muse that omit CFBundleExecutable.
 	staging := filepath.Join(stagingDir, filepath.Base(srcBundle))
-	if _, err := inst.runner.Run(ctx, "rm", "-rf", stagingDir); err != nil {
-		return fmt.Errorf("failed to clear app staging directory: %w", err)
-	}
-	if _, err := inst.runner.Run(ctx, "mkdir", "-p", stagingDir); err != nil {
-		return fmt.Errorf("failed to create app staging directory: %w", err)
-	}
-	keepStaging := false
-	defer func() {
-		if !keepStaging {
-			_, _ = inst.runner.Run(context.WithoutCancel(ctx), "rm", "-rf", stagingDir)
-		}
-	}()
 
 	if _, err := inst.runner.Run(ctx, "cp", "-a", srcBundle, staging); err != nil {
 		return fmt.Errorf("failed to stage new app: %w", err)
@@ -254,12 +262,17 @@ func (inst *Installer) replaceApp(ctx context.Context, srcBundle, appPath string
 	if err := inst.verifier.VerifyReplacementApp(ctx, appPath, staging); err != nil {
 		return fmt.Errorf("downloaded app failed security verification: %w", err)
 	}
-	if _, err := inst.runner.Run(ctx, "rm", "-rf", appPath); err != nil {
-		return &installError{err: fmt.Errorf("failed to remove old app: %w", err), mayHaveModified: true}
+	if beforeReplace != nil {
+		beforeReplace()
 	}
-	if _, err := inst.runner.Run(ctx, "mv", staging, appPath); err != nil {
-		keepStaging = true // preserve the verified replacement for recovery
-		return &installError{err: fmt.Errorf("failed to move new app into place: %w", err), mayHaveModified: true}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := unix.RenamexNp(staging, appPath, unix.RENAME_SWAP); err != nil {
+		if errors.Is(err, os.ErrPermission) {
+			return fmt.Errorf("%w: %w", ErrAppManagement, err)
+		}
+		return fmt.Errorf("failed to swap app bundle: %w", err)
 	}
 	return nil
 }
@@ -312,7 +325,7 @@ func findAppInVolume(ctx context.Context, runner checker.CmdRunner, mountPoint, 
 }
 
 // installZIP extracts a ZIP and copies the .app to the target location.
-func (inst *Installer) installZIP(ctx context.Context, zipPath, appPath, appName string) error {
+func (inst *Installer) installZIP(ctx context.Context, zipPath, appPath, appName string, beforeReplace func()) error {
 	tmpDir, err := os.MkdirTemp("", "updater-zip-*")
 	if err != nil {
 		return fmt.Errorf("failed to create temp dir: %w", err)
@@ -331,16 +344,50 @@ func (inst *Installer) installZIP(ctx context.Context, zipPath, appPath, appName
 		return fmt.Errorf("no .app bundle found in ZIP for %s", appName)
 	}
 
-	return inst.replaceApp(ctx, appBundle, appPath)
+	return inst.replaceApp(ctx, appBundle, appPath, beforeReplace)
 }
 
-// installPKG runs the macOS package installer (requires sudo).
+const authorizePackageScript = `on run argv
+	try
+		do shell script ("/usr/sbin/installer -pkg " & quoted form of (item 1 of argv) & " -target / 2>&1") with administrator privileges
+		return "installed"
+	on error detail number status
+		return (status as text) & ": " & detail
+	end try
+end run`
+
+// installPKG verifies the package before requesting administrator privileges.
 func (inst *Installer) installPKG(ctx context.Context, pkgPath, appPath string) error {
 	if err := inst.verifier.VerifyInstallerPackage(ctx, appPath, pkgPath); err != nil {
 		return fmt.Errorf("downloaded package failed security verification: %w", err)
 	}
-	_, err := inst.runner.Run(ctx, "sudo", "installer", "-pkg", pkgPath, "-target", "/")
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if inst.AllowAuthorizationPrompt {
+		out, err := inst.runner.Run(ctx, "/usr/bin/osascript", "-e", authorizePackageScript, pkgPath)
+		if err == nil {
+			result := strings.TrimSpace(string(out))
+			if result == "installed" {
+				return nil
+			}
+			status, _, _ := strings.Cut(result, ":")
+			switch status {
+			case "-128", "-60006":
+				return fmt.Errorf("%w: cancelled", ErrPackageAuthorization)
+			case "-60005", "-60007":
+				return fmt.Errorf("%w: %s", ErrPackageAuthorization, result)
+			}
+			err = fmt.Errorf("%s", result)
+		}
+		return &installError{err: fmt.Errorf("failed to install PKG: %w", err), mayHaveModified: true}
+	}
+	out, err := inst.runner.Run(ctx, "/usr/bin/sudo", "-n", "/usr/sbin/installer", "-pkg", pkgPath, "-target", "/")
 	if err != nil {
+		var exit *exec.ExitError
+		if len(out) == 0 && errors.As(err, &exit) && strings.TrimSpace(string(exit.Stderr)) == "sudo: a password is required" {
+			return fmt.Errorf("%w; run the update manually", ErrPackageAuthorization)
+		}
 		return &installError{err: fmt.Errorf("failed to install PKG: %w", err), mayHaveModified: true}
 	}
 	return nil

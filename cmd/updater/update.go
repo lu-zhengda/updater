@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
+	"strings"
 	"sync"
 	"text/tabwriter"
 	"time"
@@ -143,6 +145,7 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 	// Backups are opt-in because app bundles can consume substantial disk space.
 	bm := backupManagerForConfig(cfg, runner)
 	inst := installer.New(runner, nil)
+	inst.AllowAuthorizationPrompt = !flagAuto
 
 	// Execute updates. When using --all, skip pinned apps unless explicitly named.
 	isExplicit := targetApp != nil && !flagAll
@@ -155,6 +158,9 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	defer activity.Close()
+	if isExplicit {
+		return performUpdate(cmd, ctx, updatable[0], runner, bm, inst)
+	}
 
 	// Split updates into sequential and parallel groups.
 	sequentialSources := map[string]bool{
@@ -166,11 +172,11 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 
 	var sequential, parallel, instant []*checker.UpdateResult
 	for _, r := range updatable {
-		if !isExplicit && cfg.IsPinned(r.App.BundleID) {
+		if cfg.IsPinned(r.App.BundleID) {
 			fmt.Fprintf(cmd.OutOrStdout(), "Skipping %s (pinned)\n", r.App.Name)
 			continue
 		}
-		if !isExplicit && cfg.Policy(r.App.BundleID) == config.PolicyNotifyOnly {
+		if cfg.Policy(r.App.BundleID) == config.PolicyNotifyOnly {
 			fmt.Fprintf(cmd.OutOrStdout(), "Skipping %s (notify-only)\n", r.App.Name)
 			continue
 		}
@@ -186,9 +192,14 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	update := func(r *checker.UpdateResult) {
+		if err := performUpdate(cmd, ctx, r, runner, bm, inst); err != nil {
+			fmt.Fprintf(cmd.ErrOrStderr(), "  error: %v\n", err)
+		}
+	}
 	// Phase 1: Sequential updates (brew, mas, formula — shared locks).
 	for _, r := range sequential {
-		performUpdate(cmd, ctx, r, runner, bm, inst)
+		update(r)
 	}
 
 	// Phase 2: Parallel updates (sparkle, github, electron — independent).
@@ -201,7 +212,7 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 			go func(r *checker.UpdateResult) {
 				defer wg.Done()
 				defer func() { <-sem }()
-				performUpdate(cmd, ctx, r, runner, bm, inst)
+				update(r)
 			}(r)
 		}
 		wg.Wait()
@@ -209,7 +220,7 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 
 	// Phase 3: Instant actions (system, setapp, toolbox, adobe — just open).
 	for _, r := range instant {
-		performUpdate(cmd, ctx, r, runner, bm, inst)
+		update(r)
 	}
 
 	return nil
@@ -441,19 +452,14 @@ func executeUpdate(ctx context.Context, r *checker.UpdateResult, runner checker.
 }
 
 // performUpdate prints the update status, executes the update, and records the result in history.
-func performUpdate(cmd *cobra.Command, ctx context.Context, r *checker.UpdateResult, runner checker.CmdRunner, bm *backup.Manager, inst *installer.Installer) {
+func performUpdate(cmd *cobra.Command, ctx context.Context, r *checker.UpdateResult, runner checker.CmdRunner, bm *backup.Manager, inst *installer.Installer) error {
 	fmt.Fprintf(cmd.OutOrStdout(), "Updating %s (%s -> %s) via %s...\n",
 		r.App.Name, r.CurrentVersion, r.LatestVersion, canonicalSourceLabel(r.Source, r.SourceOverrideActive))
 
 	updateErr, rolledBack := executeUpdate(ctx, r, runner, bm, inst)
 	if errors.Is(updateErr, checker.ErrUpdateScheduled) {
 		fmt.Fprintln(cmd.OutOrStdout(), checker.ErrUpdateScheduled)
-		return
-	}
-	if errors.Is(updateErr, checker.ErrOpenedExternally) {
-		// Not an error.
-	} else if updateErr != nil {
-		fmt.Fprintf(os.Stderr, "  error: %v\n", updateErr)
+		return nil
 	}
 
 	_ = history.Append(history.DefaultPath(), history.Entry{
@@ -466,15 +472,21 @@ func performUpdate(cmd *cobra.Command, ctx context.Context, r *checker.UpdateRes
 		Success:     updateErr == nil || errors.Is(updateErr, checker.ErrOpenedExternally),
 		RolledBack:  rolledBack,
 	})
+	if errors.Is(updateErr, checker.ErrOpenedExternally) {
+		return nil
+	}
+	return updateErr
 }
 
 // tryDirectInstall downloads r.DownloadURL and installs it over r.App.Path,
-// quitting the app first and reopening it afterwards. If installation fails,
+// quitting and reopening it for direct bundle replacements. If installation fails,
 // hand off to the app or download page while preserving the failure so callers
 // do not record the manual handoff as a completed installation.
 func tryDirectInstall(ctx context.Context, r *checker.UpdateResult, runner checker.CmdRunner, bm *backup.Manager, inst *installer.Installer) (err error, rolledBack bool) {
-	wasRunning := quitAppIfRunning(ctx, r.App, runner)
-	err = inst.Install(ctx, r.DownloadURL, r.App.Path, r.App.Name, r.DownloadDigest)
+	var wasRunning bool
+	err = inst.Install(ctx, r.DownloadURL, r.App.Path, r.App.Name, r.DownloadDigest, func() {
+		wasRunning = quitAppIfRunning(ctx, r.App, runner)
+	})
 	if err == nil {
 		if wasRunning {
 			fmt.Printf("  Reopening %s...\n", r.App.Name)
@@ -489,8 +501,14 @@ func tryDirectInstall(ctx context.Context, r *checker.UpdateResult, runner check
 	if mayRequireRollback && !rolledBack {
 		return err, false // do not launch a possibly damaged app
 	}
-	if ctx.Err() != nil {
+	if ctx.Err() != nil || errors.Is(err, installer.ErrPackageAuthorization) {
 		return err, rolledBack // cancellation is not a request for manual handoff
+	}
+	if errors.Is(err, installer.ErrAppManagement) {
+		if wasRunning {
+			_, _ = runner.Run(ctx, "open", "-a", r.App.Path)
+		}
+		return err, false
 	}
 	// Sparkle/GitHub fall back to the download page; other desktop sources
 	// open the installed app so its own updater can take over.
@@ -536,6 +554,10 @@ func brewUpgrade(ctx context.Context, a *app.App, runner checker.CmdRunner, rein
 		// Reopen if we quit it but upgrade failed.
 		if wasRunning {
 			_, _ = runner.Run(ctx, "open", "-a", a.Path)
+		}
+		var exit *exec.ExitError
+		if errors.As(err, &exit) && (strings.Contains(string(exit.Stderr), "sudo: a password is required") || strings.Contains(string(exit.Stderr), "sudo is disabled by HOMEBREW_NO_SUDO")) {
+			return fmt.Errorf("Homebrew needs administrator approval; run 'brew %s --cask %s' in Terminal: %w", action, a.CaskName, err)
 		}
 		return fmt.Errorf("failed to run brew %s: %w", action, err)
 	}

@@ -171,6 +171,7 @@ func updateFromWindow(state *windowState, bundleID string) (bool, string) {
 	runner := newRunner()
 	bm := backupManagerForConfig(cfg, runner)
 	inst := installer.New(runner, nil)
+	inst.AllowAuthorizationPrompt = true
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()

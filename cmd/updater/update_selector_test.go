@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os/exec"
 	"slices"
 	"strings"
 	"sync"
@@ -121,6 +122,17 @@ func TestRunUpdateAutoSelector(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestRunUpdateBundleIDReportsHomebrewAuthorizationFailure(t *testing.T) {
+	cmd, _, runner, apps := setupSelectorUpdate(t, &config.Config{})
+	flagAuto = false
+	flagBundleID = apps[0].BundleID
+	installErr := &exec.ExitError{Stderr: []byte("sudo: a password is required\n")}
+	runner.Responses["brew upgrade --cask microsoft-teams"] = checker.MockResponse{Err: installErr}
+	if err := runUpdate(cmd, nil); err == nil || !strings.Contains(err.Error(), "run 'brew upgrade --cask microsoft-teams' in Terminal") {
+		t.Fatalf("single-app update must report how to authorize Homebrew, got %v", err)
 	}
 }
 
