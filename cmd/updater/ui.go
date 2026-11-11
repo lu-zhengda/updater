@@ -51,6 +51,7 @@ func runUI(cmd *cobra.Command, _ []string) error {
 	rollbackManager := backup.NewManager(backup.DefaultBaseDir(), cfg.MaxBackupsLimit(), runner)
 	updateBackupManager := backupManagerForConfig(cfg, runner)
 	inst := installer.New(runner, nil)
+	inst.AllowAuthorizationPrompt = true
 
 	pinnedIDs := make(map[string]bool, len(cfg.PinnedApps))
 	for _, id := range cfg.PinnedApps {

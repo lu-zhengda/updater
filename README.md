@@ -93,6 +93,19 @@ updater
 
 Direct downloads prefer the Mac’s native architecture, then universal builds. Explicitly incompatible builds are excluded. Before replacing an app from a DMG or ZIP, the updater also checks that its executable supports the native architecture, even when filenames omit it.
 
+When you manually update an app using a verified macOS installer package
+(`.pkg`), macOS can ask for administrator approval. Scheduled updates and
+`--auto` never show this prompt: package installation only runs if `sudo`
+already allows it without prompting. Updater does not store your password or
+grant itself permanent administrator access. Apps with a built-in automatic
+updater, such as standalone Tailscale, can manage their own updates separately.
+
+For direct DMG and ZIP updates, macOS can remember approval in **System
+Settings → Privacy & Security → App Management** for Updater or the terminal
+app that runs it. If macOS blocks a replacement, the installed bundle stays
+intact. Homebrew-managed casks still use Homebrew's authentication; if it
+needs a password, run the indicated Homebrew command in Terminal.
+
 Electron discovery reads structured metadata from `Resources/app` and `app.asar`,
 including archives with unpacked metadata files and apps with renamed frameworks.
 Embedded `sparkleFeedUrl` fields (including app-prefixed names such as

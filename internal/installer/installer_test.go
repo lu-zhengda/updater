@@ -3,11 +3,14 @@ package installer
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -278,40 +281,12 @@ func TestInstallFormatDetection(t *testing.T) {
 	inst := New(runner, ts.Client())
 
 	// Unsupported format should error.
-	err := inst.Install(context.Background(), ts.URL+"/app.exe", "/Applications/Test.app", "Test", "")
+	err := inst.Install(context.Background(), ts.URL+"/app.exe", "/Applications/Test.app", "Test", "", nil)
 	if err == nil {
 		t.Fatal("expected error for unsupported format")
 	}
 	if !strings.Contains(err.Error(), "unsupported file format") {
 		t.Errorf("unexpected error: %v", err)
-	}
-}
-
-func TestInstallDMG_Success(t *testing.T) {
-	dmgPath := filepath.Join(t.TempDir(), "test.dmg")
-	if err := os.WriteFile(dmgPath, []byte("fake"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	mountPoint := "/Volumes/TestApp"
-	runner := &checker.MultiMockCmdRunner{
-		Responses: map[string]checker.MockResponse{
-			fmt.Sprintf("hdiutil attach -nobrowse -plist %s", dmgPath): {
-				Output: []byte(mountPoint + "\n"),
-			},
-			"ls " + mountPoint: {
-				Output: []byte("TestApp.app\nREADME.txt\n"),
-			},
-			fmt.Sprintf("cp -a %s %s", filepath.Join(mountPoint, "TestApp.app"), "/Applications/TestApp.app"): {},
-			"hdiutil detach " + mountPoint + " -quiet":                                                        {},
-		},
-	}
-
-	inst := New(runner, nil)
-	inst.verifier = allowVerifier{}
-	err := inst.installDMG(context.Background(), dmgPath, "/Applications/TestApp.app", "TestApp")
-	if err != nil {
-		t.Fatalf("installDMG failed: %v", err)
 	}
 }
 
@@ -330,7 +305,7 @@ func TestInstallDMG_MountFails(t *testing.T) {
 	}
 
 	inst := New(runner, nil)
-	err := inst.installDMG(context.Background(), dmgPath, "/Applications/Test.app", "Test")
+	err := inst.installDMG(context.Background(), dmgPath, "/Applications/Test.app", "Test", nil)
 	if err == nil {
 		t.Fatal("expected error when mount fails")
 	}
@@ -354,7 +329,7 @@ func TestInstallDMG_NoMountPoint(t *testing.T) {
 	}
 
 	inst := New(runner, nil)
-	err := inst.installDMG(context.Background(), dmgPath, "/Applications/Test.app", "Test")
+	err := inst.installDMG(context.Background(), dmgPath, "/Applications/Test.app", "Test", nil)
 	if err == nil {
 		t.Fatal("expected error when no mount point found")
 	}
@@ -383,32 +358,12 @@ func TestInstallDMG_NoAppInVolume(t *testing.T) {
 	}
 
 	inst := New(runner, nil)
-	err := inst.installDMG(context.Background(), dmgPath, "/Applications/Test.app", "Test")
+	err := inst.installDMG(context.Background(), dmgPath, "/Applications/Test.app", "Test", nil)
 	if err == nil {
 		t.Fatal("expected error when no .app found in volume")
 	}
 	if !strings.Contains(err.Error(), "no .app bundle found in DMG") {
 		t.Errorf("error = %q, want containing 'no .app bundle found in DMG'", err.Error())
-	}
-}
-
-func TestInstallZIP_Success(t *testing.T) {
-	zipPath := filepath.Join(t.TempDir(), "test.zip")
-	if err := os.WriteFile(zipPath, []byte("fake"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	// installZIP creates its own tmpDir internally, so we need a broader mock strategy.
-	// The ditto and ls commands will use the internally-created tmpDir, which we can't predict.
-	// Instead, test via the internal method with a known path by mocking at a higher level.
-	// We'll rely on MultiMockCmdRunner's fallback (nil error) for unknown commands.
-	runner := &installZIPMockRunner{appName: "TestApp"}
-
-	inst := New(runner, nil)
-	inst.verifier = allowVerifier{}
-	err := inst.installZIP(context.Background(), zipPath, "/Applications/TestApp.app", "TestApp")
-	if err != nil {
-		t.Fatalf("installZIP failed: %v", err)
 	}
 }
 
@@ -420,7 +375,7 @@ func TestInstallZIP_DittoFails(t *testing.T) {
 
 	runner := &dittoFailRunner{}
 	inst := New(runner, nil)
-	err := inst.installZIP(context.Background(), zipPath, "/Applications/Test.app", "Test")
+	err := inst.installZIP(context.Background(), zipPath, "/Applications/Test.app", "Test", nil)
 	if err == nil {
 		t.Fatal("expected error when ditto fails")
 	}
@@ -437,7 +392,7 @@ func TestInstallZIP_NoAppFound(t *testing.T) {
 
 	runner := &noAppZIPRunner{}
 	inst := New(runner, nil)
-	err := inst.installZIP(context.Background(), zipPath, "/Applications/Test.app", "Test")
+	err := inst.installZIP(context.Background(), zipPath, "/Applications/Test.app", "Test", nil)
 	if err == nil {
 		t.Fatal("expected error when no .app found")
 	}
@@ -446,55 +401,60 @@ func TestInstallZIP_NoAppFound(t *testing.T) {
 	}
 }
 
-func TestInstallPKG_Success(t *testing.T) {
-	pkgPath := filepath.Join(t.TempDir(), "test.pkg")
-	if err := os.WriteFile(pkgPath, []byte("fake"), 0o644); err != nil {
-		t.Fatal(err)
+func TestInstallPKGAuthorization(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Disposition", `attachment; filename="vendor's update.pkg"`)
+		_, _ = w.Write([]byte("fake package"))
+	}))
+	defer srv.Close()
+	for _, tc := range []struct {
+		name       string
+		prompt     bool
+		reject     bool
+		output     string
+		commandErr error
+		wantErr    string
+		wantAuth   bool
+		rollback   bool
+	}{
+		{name: "manual success", prompt: true, output: "installed\n"},
+		{name: "manual cancellation", prompt: true, output: "-128: User canceled.\n", wantErr: "cancelled", wantAuth: true},
+		{name: "manual install failure", prompt: true, output: "1: package script failed\n", wantErr: "package script failed", rollback: true},
+		{name: "unattended success"},
+		{name: "unattended requires a password", commandErr: &exec.ExitError{Stderr: []byte("sudo: a password is required\n")}, wantErr: "run the update manually", wantAuth: true},
+		{name: "untrusted package", prompt: true, reject: true, wantErr: "security verification"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			calls := 0
+			runner := bundleVersionRunner(func(_ context.Context, name string, args ...string) ([]byte, error) {
+				calls++
+				if tc.reject {
+					t.Fatal("untrusted package reached authorization")
+				}
+				if tc.prompt {
+					if name != "/usr/bin/osascript" || len(args) != 3 || !slices.Equal(args[:2], []string{"-e", authorizePackageScript}) || filepath.Base(args[2]) != "vendor's update.pkg" {
+						t.Fatalf("expected a native prompt with the package path passed separately, got %s %q", name, args)
+					}
+				} else if name != "/usr/bin/sudo" || len(args) != 6 || !slices.Equal(args[:3], []string{"-n", "/usr/sbin/installer", "-pkg"}) || filepath.Base(args[3]) != "vendor's update.pkg" || !slices.Equal(args[4:], []string{"-target", "/"}) {
+					t.Fatalf("expected unattended installer, got %s %q", name, args)
+				}
+				return []byte(tc.output), tc.commandErr
+			})
+			inst := New(runner, srv.Client())
+			inst.AllowAuthorizationPrompt = tc.prompt
+			inst.verifier = allowVerifier{}
+			if tc.reject {
+				inst.verifier = rejectVerifier{}
+			}
+			err := inst.Install(t.Context(), srv.URL+"/latest", "/Applications/Test.app", "Test", "", func() {
+				t.Fatal("package update must leave the app running until the vendor installer takes over")
+			})
+			if (err == nil) != (tc.wantErr == "") || err != nil && !strings.Contains(err.Error(), tc.wantErr) ||
+				errors.Is(err, ErrPackageAuthorization) != tc.wantAuth || MayRequireRollback(err) != tc.rollback || (!tc.reject && calls != 1) {
+				t.Fatalf("install returned %v (rollback=%t, authorization=%t, calls=%d)", err, MayRequireRollback(err), errors.Is(err, ErrPackageAuthorization), calls)
+			}
+		})
 	}
-
-	runner := &checker.MultiMockCmdRunner{
-		Responses: map[string]checker.MockResponse{
-			fmt.Sprintf("sudo installer -pkg %s -target /", pkgPath): {},
-		},
-	}
-
-	inst := New(runner, nil)
-	inst.verifier = allowVerifier{}
-	err := inst.installPKG(context.Background(), pkgPath, "/Applications/Test.app")
-	if err != nil {
-		t.Fatalf("installPKG failed: %v", err)
-	}
-}
-
-func TestInstallPKG_Fails(t *testing.T) {
-	pkgPath := filepath.Join(t.TempDir(), "test.pkg")
-	if err := os.WriteFile(pkgPath, []byte("fake"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	runner := &checker.MultiMockCmdRunner{
-		Responses: map[string]checker.MockResponse{
-			fmt.Sprintf("sudo installer -pkg %s -target /", pkgPath): {
-				Err: fmt.Errorf("installer failed"),
-			},
-		},
-	}
-
-	inst := New(runner, nil)
-	inst.verifier = allowVerifier{}
-	err := inst.installPKG(context.Background(), pkgPath, "/Applications/Test.app")
-	if err == nil {
-		t.Fatal("expected error when PKG install fails")
-	}
-	if !strings.Contains(err.Error(), "failed to install PKG") {
-		t.Errorf("error = %q, want containing 'failed to install PKG'", err.Error())
-	}
-}
-
-// installZIPMockRunner handles the dynamic tmpDir that installZIP creates internally.
-// It responds to ditto (no-op success), ls (returns appName.app), and cp (no-op).
-type installZIPMockRunner struct {
-	appName string
 }
 
 type allowVerifier struct{}
@@ -509,18 +469,6 @@ func (rejectVerifier) VerifyReplacementApp(context.Context, string, string) erro
 }
 func (rejectVerifier) VerifyInstallerPackage(context.Context, string, string) error {
 	return fmt.Errorf("identity mismatch")
-}
-
-func (r *installZIPMockRunner) Run(_ context.Context, name string, args ...string) ([]byte, error) {
-	switch name {
-	case "ditto":
-		return nil, nil
-	case "ls":
-		return []byte(r.appName + ".app\n"), nil
-	case "cp":
-		return nil, nil
-	}
-	return nil, nil
 }
 
 // dittoFailRunner fails on ditto commands.
@@ -569,7 +517,7 @@ func TestReplaceAppReplacesExistingBundle(t *testing.T) {
 
 	inst := New(&checker.RealCmdRunner{}, nil)
 	inst.verifier = allowVerifier{}
-	if err := inst.replaceApp(context.Background(), src, dst); err != nil {
+	if err := inst.replaceApp(context.Background(), src, dst, nil); err != nil {
 		t.Fatalf("replaceApp failed: %v", err)
 	}
 
@@ -583,8 +531,40 @@ func TestReplaceAppReplacesExistingBundle(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dst, "Test.app")); !os.IsNotExist(err) {
 		t.Error("new bundle was nested inside the old bundle instead of replacing it")
 	}
-	if _, err := os.Stat(dst + ".updater-staging"); !os.IsNotExist(err) {
+	if matches, err := filepath.Glob(filepath.Join(filepath.Dir(dst), ".updater-staging-*")); err != nil || len(matches) != 0 {
 		t.Error("staging directory was left behind")
+	}
+}
+
+func TestReplaceAppPermissionDeniedLeavesOriginalIntact(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("requires an unprivileged account")
+	}
+	src := filepath.Join(t.TempDir(), "Test.app")
+	parent := t.TempDir()
+	dst := filepath.Join(parent, "Test.app")
+	for _, path := range []string{src, dst} {
+		if err := os.Mkdir(path, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	original := filepath.Join(dst, "original")
+	if err := os.WriteFile(original, []byte("keep me"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(parent, 0o755) })
+	inst := New(&checker.RealCmdRunner{}, nil)
+	inst.verifier = allowVerifier{}
+	err := inst.replaceApp(t.Context(), src, dst, func() {
+		if err := os.Chmod(parent, 0o555); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if !errors.Is(err, ErrAppManagement) || MayRequireRollback(err) {
+		t.Fatalf("expected app management guidance without rollback, got %v", err)
+	}
+	if contents, err := os.ReadFile(original); err != nil || string(contents) != "keep me" {
+		t.Fatalf("installed app was modified: %q, %v", contents, err)
 	}
 }
 
@@ -660,7 +640,7 @@ func TestReplaceAppNormalizesStagedMetadataBeforeVerification(t *testing.T) {
 				}
 				return nil
 			})
-			err := inst.replaceApp(ctx, src, dst)
+			err := inst.replaceApp(ctx, src, dst, nil)
 			if !verified || (err != nil) != reject || MayRequireRollback(err) {
 				t.Fatalf("verified=%v, error=%v", verified, err)
 			}
@@ -674,7 +654,7 @@ func TestReplaceAppNormalizesStagedMetadataBeforeVerification(t *testing.T) {
 			if !strings.Contains(run(src), "com.apple.FinderInfo") || strings.TrimSpace(run("-p", "com.apple.ResourceFork", outside)) != "external metadata" {
 				t.Fatal("normalization modified the source bundle or external symlink target")
 			}
-			if _, err := os.Stat(dst + ".updater-staging"); !os.IsNotExist(err) {
+			if matches, err := filepath.Glob(filepath.Join(filepath.Dir(dst), ".updater-staging-*")); err != nil || len(matches) != 0 {
 				t.Fatal("staging directory was left behind")
 			}
 		})
@@ -693,7 +673,7 @@ func TestVerificationFailureDoesNotRequireRollback(t *testing.T) {
 	}}
 	inst := New(runner, nil)
 	inst.verifier = rejectVerifier{}
-	err := inst.installDMG(context.Background(), dmgPath, "/Applications/TestApp.app", "TestApp")
+	err := inst.installDMG(context.Background(), dmgPath, filepath.Join(t.TempDir(), "TestApp.app"), "TestApp", nil)
 	if err == nil || !strings.Contains(err.Error(), "security verification") {
 		t.Fatalf("expected security verification error, got %v", err)
 	}

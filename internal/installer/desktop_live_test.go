@@ -32,7 +32,7 @@ func TestLiveDesktopDMGInstall(t *testing.T) {
 				t.Fatal(err)
 			}
 			inst := New(runner, nil)
-			if err := inst.installDMG(ctx, filepath.Join(dir, tc.dmg), target, tc.name); err != nil {
+			if err := inst.installDMG(ctx, filepath.Join(dir, tc.dmg), target, tc.name, nil); err != nil {
 				t.Fatal(err)
 			}
 			// Recheck the final bundle after the staged copy is renamed into place.
