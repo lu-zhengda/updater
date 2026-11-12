@@ -280,8 +280,14 @@ ok "missing app"
 
 new_case 1.2.3
 reset_env
-export UPDATER_DMG_TEST=1 UPDATER_DMG_TOOLS="$bin" UPDATER_DMG_STATE="$state" NOTARIZE=1
-if sh "$script" "$app" 1.2.3 "$out" >"$state/stdout" 2>"$state/stderr"; then
+if env -u APPSTORE_API_KEY_PATH -u APPSTORE_API_KEY_ID -u APPSTORE_API_ISSUER_ID \
+	-u MACOS_SIGNING_IDENTITY -u MACOS_KEYCHAIN_PATH \
+	UPDATER_DMG_TEST=1 UPDATER_DMG_TOOLS="$bin" UPDATER_DMG_STATE="$state" NOTARIZE=1 \
+	sh "$script" "$app" 1.2.3 "$out" >"$state/stdout" 2>"$state/stderr"; then
+	echo "---- stdout ----" >&2
+	cat "$state/stdout" >&2
+	echo "---- stderr ----" >&2
+	cat "$state/stderr" >&2
 	fail "notarization without credentials was accepted"
 fi
 if [ -s "$state/log" ]; then

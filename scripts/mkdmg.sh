@@ -112,19 +112,26 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# exit, not return. macOS /bin/sh is bash 3.2: a failing ${var:?} inside a
+# function returns from the function, and set -e does not then abort the
+# script when that function was called from an if body.
+require_nonempty() {
+	if [ -z "$2" ]; then
+		echo "$1 is required when NOTARIZE=1" >&2
+		exit 1
+	fi
+}
+
 require_notarize_credentials() {
 	APPSTORE_API_KEY_ID=$(printf '%s' "${APPSTORE_API_KEY_ID:-}")
 	APPSTORE_API_ISSUER_ID=$(printf '%s' "${APPSTORE_API_ISSUER_ID:-}")
 	export APPSTORE_API_KEY_ID APPSTORE_API_ISSUER_ID
 
-	: "${APPSTORE_API_KEY_PATH:?APPSTORE_API_KEY_PATH is required when NOTARIZE=1}"
-	: "${APPSTORE_API_KEY_ID:?APPSTORE_API_KEY_ID is required when NOTARIZE=1}"
-	: "${APPSTORE_API_ISSUER_ID:?APPSTORE_API_ISSUER_ID is required when NOTARIZE=1}"
+	require_nonempty APPSTORE_API_KEY_PATH "${APPSTORE_API_KEY_PATH:-}"
+	require_nonempty APPSTORE_API_KEY_ID "$APPSTORE_API_KEY_ID"
+	require_nonempty APPSTORE_API_ISSUER_ID "$APPSTORE_API_ISSUER_ID"
+	require_nonempty MACOS_SIGNING_IDENTITY "$SIGNING_IDENTITY"
 
-	if [ -z "$SIGNING_IDENTITY" ]; then
-		echo "MACOS_SIGNING_IDENTITY is required when NOTARIZE=1" >&2
-		exit 1
-	fi
 	if [ ! -x "$XCRUN" ] || [ ! -x "$SPCTL" ]; then
 		echo "xcrun and spctl are required when NOTARIZE=1" >&2
 		exit 1
