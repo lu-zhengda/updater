@@ -238,6 +238,108 @@ reset_env() {
 	unset UPDATER_DMG_STAPLE_SLEEP || true
 }
 
+write_pem() {
+	printf '%s\n' '-----BEGIN PRIVATE KEY-----' 'SUPER_SECRET_TEST_KEY' '-----END PRIVATE KEY-----' >"$1"
+}
+
+prepare_notarize() {
+	write_pem "$state/AuthKey.p8"
+	reset_env
+	export UPDATER_DMG_TEST=1
+	export UPDATER_DMG_TOOLS="$bin"
+	export UPDATER_DMG_STATE="$state"
+	export NOTARIZE=1
+	export APPSTORE_API_KEY_PATH="$state/AuthKey.p8"
+	export APPSTORE_API_KEY_ID=KEYID
+	export APPSTORE_API_ISSUER_ID=ISSUER
+	export MACOS_SIGNING_IDENTITY='Developer ID Application: Test (TEAMID)'
+}
+
+hide_notarize_tools() {
+	rm -f "$bin/xcrun" "$bin/spctl"
+}
+
+plant_usr_bin() {
+	usr_bin=$state/usr-bin
+	mkdir -p "$usr_bin"
+	printf '%s\n' '#!/bin/sh' 'echo hardcoded-tool >&2' 'exit 97' >"$usr_bin/xcrun"
+	cp "$usr_bin/xcrun" "$usr_bin/spctl"
+	chmod 644 "$usr_bin/xcrun" "$usr_bin/spctl"
+}
+
+plant_path_bin() {
+	pathbin=$state/path-bin
+	mkdir -p "$pathbin"
+	install_mocks "$pathbin"
+	for tool in xcrun spctl; do
+		mv "$pathbin/$tool" "$pathbin/$tool.real"
+		cat >"$pathbin/$tool" <<EOF
+#!/bin/sh
+set -eu
+printf '%s\n' "\$0" >>"\$UPDATER_DMG_STATE/used-$tool"
+exec "$pathbin/$tool.real" "\$@"
+EOF
+		chmod 755 "$pathbin/$tool"
+	done
+}
+
+assert_used_tool() {
+	tool=$1
+	want=$2
+	file=$state/used-$tool
+	if [ ! -s "$file" ]; then
+		fail "$tool was not executed"
+	fi
+	while IFS= read -r line; do
+		if [ "$line" != "$want" ]; then
+			echo "got [$line] want [$want]" >&2
+			fail "$tool was not taken from PATH"
+		fi
+	done <"$file"
+}
+
+assert_path_notarized() {
+	if [ ! -f "$out/Updater-1.2.3.dmg" ]; then
+		echo "---- stdout ----" >&2
+		cat "$state/stdout" >&2
+		echo "---- stderr ----" >&2
+		cat "$state/stderr" >&2
+		fail "PATH notarize tools did not build a dmg"
+	fi
+	if ! grep -F 'notarized and stapled ' "$state/stdout" >/dev/null; then
+		echo "---- stdout ----" >&2
+		cat "$state/stdout" >&2
+		echo "---- stderr ----" >&2
+		cat "$state/stderr" >&2
+		fail "PATH notarize tools did not staple the dmg"
+	fi
+	assert_used_tool xcrun "$pathbin/xcrun"
+	assert_used_tool spctl "$pathbin/spctl"
+	if grep -F 'SUPER_SECRET_TEST_KEY' "$state/stdout" "$state/stderr" >/dev/null; then
+		fail "secret material was printed"
+	fi
+}
+
+assert_tool_error() {
+	if ! grep -F 'xcrun and spctl are required when NOTARIZE=1' "$state/stderr" >/dev/null; then
+		echo "---- stdout ----" >&2
+		cat "$state/stdout" >&2
+		echo "---- stderr ----" >&2
+		cat "$state/stderr" >&2
+		fail "expected a missing xcrun/spctl error"
+	fi
+	if [ -s "$state/log" ]; then
+		cat "$state/log" >&2
+		fail "missing notarize tools still ran a packaging command"
+	fi
+	if [ -e "$out/Updater-1.2.3.dmg" ]; then
+		fail "missing notarize tools still wrote a dmg"
+	fi
+	if grep -F 'SUPER_SECRET_TEST_KEY' "$state/stdout" "$state/stderr" >/dev/null; then
+		fail "secret material was printed"
+	fi
+}
+
 # --- release config still publishes this exact filename ---
 
 goreleaser=$root/.goreleaser.yaml
@@ -256,6 +358,17 @@ if ! grep -F 'ids:' -A 2 "$goreleaser" | grep -F 'updater-archive' >/dev/null; t
 	fail "cask no longer selects the tarball archive"
 fi
 ok "goreleaser filename contract"
+
+if grep -E 'XCRUN=/usr/bin/xcrun|SPCTL=/usr/bin/spctl' "$script" >/dev/null; then
+	fail "mkdmg.sh still assigns /usr/bin/xcrun or /usr/bin/spctl"
+fi
+if ! grep -F 'resolve_command xcrun' "$script" >/dev/null; then
+	fail "xcrun is not resolved from PATH"
+fi
+if ! grep -F 'resolve_command spctl' "$script" >/dev/null; then
+	fail "spctl is not resolved from PATH"
+fi
+ok "xcrun and spctl come from PATH"
 
 # --- argument checks ---
 
@@ -474,6 +587,125 @@ if grep -F 'xcrun stapler staple' "$state/log" >/dev/null; then
 	fail "rejected notarization stapled the image"
 fi
 ok "rejected notarization fails and requests the log"
+
+# --- PATH lookup. v0.24.1 died here ---
+# notarize-app.sh runs bare xcrun and spctl. Those commands succeed on the
+# release runner when /usr/bin/xcrun or /usr/bin/spctl is missing or not
+# executable (spctl is /usr/sbin/spctl; xcrun follows the developer dir).
+# A later executable PATH entry must be used. If nothing on the search
+# path is executable, notarization still fails closed.
+
+new_case 1.2.3
+chmod a-x "$bin/xcrun" "$bin/spctl"
+plant_path_bin
+prepare_notarize
+if ! env PATH="$pathbin:$PATH" /bin/sh "$script" "$app" 1.2.3 "$out" >"$state/stdout" 2>"$state/stderr"; then
+	echo "---- stdout ----" >&2
+	cat "$state/stdout" >&2
+	echo "---- stderr ----" >&2
+	cat "$state/stderr" >&2
+	fail "non-executable tools-dir xcrun and spctl hid the PATH tools"
+fi
+assert_path_notarized
+ok "non-executable xcrun and spctl fall through to PATH"
+
+new_case 1.2.3
+hide_notarize_tools
+plant_usr_bin
+plant_path_bin
+prepare_notarize
+if ! env PATH="$usr_bin:$pathbin:$PATH" /bin/sh "$script" "$app" 1.2.3 "$out" >"$state/stdout" 2>"$state/stderr"; then
+	echo "---- stdout ----" >&2
+	cat "$state/stdout" >&2
+	echo "---- stderr ----" >&2
+	cat "$state/stderr" >&2
+	fail "non-executable /usr/bin xcrun and spctl hid the PATH tools"
+fi
+assert_path_notarized
+ok "non-executable /usr/bin xcrun and spctl still notarize via PATH"
+
+new_case 1.2.3
+hide_notarize_tools
+plant_usr_bin
+rm -f "$usr_bin/xcrun" "$usr_bin/spctl"
+plant_path_bin
+prepare_notarize
+if ! env PATH="$usr_bin:$pathbin:$PATH" /bin/sh "$script" "$app" 1.2.3 "$out" >"$state/stdout" 2>"$state/stderr"; then
+	echo "---- stdout ----" >&2
+	cat "$state/stdout" >&2
+	echo "---- stderr ----" >&2
+	cat "$state/stderr" >&2
+	fail "missing /usr/bin xcrun and spctl hid the PATH tools"
+fi
+assert_path_notarized
+ok "missing /usr/bin xcrun and spctl still notarize via PATH"
+
+new_case 1.2.3
+hide_notarize_tools
+plant_usr_bin
+prepare_notarize
+if env PATH="$usr_bin" /bin/sh "$script" "$app" 1.2.3 "$out" >"$state/stdout" 2>"$state/stderr"; then
+	fail "non-executable xcrun and spctl were accepted"
+fi
+assert_tool_error
+ok "non-executable xcrun and spctl fail closed"
+
+new_case 1.2.3
+hide_notarize_tools
+mkdir -p "$state/empty-bin"
+prepare_notarize
+if env PATH="$state/empty-bin" /bin/sh "$script" "$app" 1.2.3 "$out" >"$state/stdout" 2>"$state/stderr"; then
+	fail "missing xcrun and spctl were accepted"
+fi
+assert_tool_error
+ok "missing xcrun and spctl fail closed"
+
+new_case 1.2.3
+hide_notarize_tools
+plant_path_bin
+rm -f "$pathbin/spctl" "$pathbin/spctl.real"
+prepare_notarize
+if env PATH="$pathbin" /bin/sh "$script" "$app" 1.2.3 "$out" >"$state/stdout" 2>"$state/stderr"; then
+	fail "missing spctl was accepted"
+fi
+assert_tool_error
+ok "missing spctl fails closed"
+
+# Production branch, when this machine has the absolute macOS tools.
+# The release hook does not set UPDATER_DMG_TEST. xcrun still has to come
+# from PATH rather than /usr/bin/xcrun.
+if [ -x /usr/bin/hdiutil ] && [ -x /usr/bin/ditto ] && [ -x /usr/bin/codesign ] && [ -x /usr/libexec/PlistBuddy ]; then
+	new_case 9.9.9
+	hide_notarize_tools
+	plant_path_bin
+	write_pem "$state/AuthKey.p8"
+	reset_env
+	unset UPDATER_DMG_TEST || true
+	unset UPDATER_DMG_TOOLS || true
+	export UPDATER_DMG_STATE="$state"
+	export NOTARIZE=1
+	export APPSTORE_API_KEY_PATH="$state/AuthKey.p8"
+	export APPSTORE_API_KEY_ID=KEYID
+	export APPSTORE_API_ISSUER_ID=ISSUER
+	export MACOS_SIGNING_IDENTITY='Developer ID Application: Test (TEAMID)'
+	env PATH="$pathbin:$PATH" /bin/sh "$script" "$app" 9.9.9 "$out" >"$state/stdout" 2>"$state/stderr" || true
+	if grep -F 'xcrun and spctl are required when NOTARIZE=1' "$state/stderr" >/dev/null; then
+		echo "---- stderr ----" >&2
+		cat "$state/stderr" >&2
+		fail "production lookup still requires /usr/bin/xcrun and /usr/bin/spctl"
+	fi
+	if [ ! -s "$state/used-xcrun" ]; then
+		echo "---- stdout ----" >&2
+		cat "$state/stdout" >&2
+		echo "---- stderr ----" >&2
+		cat "$state/stderr" >&2
+	fi
+	assert_used_tool xcrun "$pathbin/xcrun"
+	if grep -F 'SUPER_SECRET_TEST_KEY' "$state/stdout" "$state/stderr" >/dev/null; then
+		fail "secret material was printed"
+	fi
+	ok "production notarize tools come from PATH"
+fi
 
 # --- real hdiutil, still without a signing identity or notarization ---
 
