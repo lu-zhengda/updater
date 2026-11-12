@@ -1,7 +1,8 @@
 name: Release
 
-# Tag pushes only. Branch pushes and pull requests stay on ci.yml so this
-# GitHub-hosted macOS job does not spend runner minutes except on a release.
+# Pushed v* tags. Branch pushes do not run this file.
+# A tag created with GITHUB_TOKEN does not start this workflow. The merge
+# workflow calls the publish job itself for that reason.
 on:
   push:
     tags:
@@ -10,151 +11,25 @@ on:
 permissions:
   contents: write
 
+# Shared with release-on-merge.yml so a tag push and a merge publish do not
+# sign at the same time. queue: max keeps later runs waiting instead of
+# cancelling them. actionlint 1.7.12 does not know this key yet.
+concurrency:
+  group: updater-release
+  queue: max
+
 jobs:
   release:
-    # GitHub-hosted image. Do not point this at a self-hosted runner.
-    runs-on: macos-latest
-    timeout-minutes: 90
-    defaults:
-      run:
-        shell: bash
-    env:
-      CGO_ENABLED: "1"
-      MACOS_SIGNING_IDENTITY: "Developer ID Application: Zhengda Lu (XY7H3QGJ2T)"
-      NOTARIZE: "1"
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version: "1.27.x"
-
-      - name: Vet
-        run: go vet ./...
-
-      - name: Test
-        run: go test -race ./...
-
-      - name: Import Developer ID certificate
-        env:
-          MACOS_KEYCHAIN_PATH: ${{ runner.temp }}/updater-signing.keychain-db
-          DEVELOPER_ID_P12_PATH: ${{ runner.temp }}/updater-developer-id.p12
-          APPSTORE_API_KEY_PATH: ${{ runner.temp }}/updater-authkey.p8
-          MACOS_CERT_P12_BASE64: ${{ secrets.MACOS_CERT_P12_BASE64 }}
-          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
-          APPSTORE_API_KEY_P8_BASE64: ${{ secrets.APPSTORE_API_KEY_P8_BASE64 }}
-          APPSTORE_API_KEY_ID: ${{ secrets.APPSTORE_API_KEY_ID }}
-          APPSTORE_API_ISSUER_ID: ${{ secrets.APPSTORE_API_ISSUER_ID }}
-          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
-        run: |
-          set -euo pipefail
-          umask 077
-
-          require_nonempty() {
-            if [ -z "$2" ]; then
-              echo "$1 is empty"
-              exit 1
-            fi
-          }
-          require_nonempty MACOS_CERT_P12_BASE64 "$MACOS_CERT_P12_BASE64"
-          require_nonempty MACOS_CERT_PASSWORD "$MACOS_CERT_PASSWORD"
-          require_nonempty APPSTORE_API_KEY_P8_BASE64 "$APPSTORE_API_KEY_P8_BASE64"
-          require_nonempty APPSTORE_API_KEY_ID "$APPSTORE_API_KEY_ID"
-          require_nonempty APPSTORE_API_ISSUER_ID "$APPSTORE_API_ISSUER_ID"
-          require_nonempty HOMEBREW_TAP_TOKEN "$HOMEBREW_TAP_TOKEN"
-
-          # Workflow commands treat % as an escape. Mask the value GitHub has not
-          # already redacted (a trimmed password, or the generated keychain password).
-          add_mask() {
-            escaped="$1"
-            escaped="${escaped//%/%25}"
-            escaped="${escaped//$'\r'/%0D}"
-            escaped="${escaped//$'\n'/%0A}"
-            echo "::add-mask::${escaped}"
-          }
-
-          # Drop a trailing newline from a secret file without printing it.
-          MACOS_CERT_PASSWORD="$(printf '%s' "$MACOS_CERT_PASSWORD")"
-          add_mask "$MACOS_CERT_PASSWORD"
-
-          KEYCHAIN_PASSWORD="$(openssl rand -hex 32)"
-          if [ "${#KEYCHAIN_PASSWORD}" -ne 64 ]; then
-            echo "failed to generate a keychain password"
-            exit 1
-          fi
-          add_mask "$KEYCHAIN_PASSWORD"
-
-          rm_p12() {
-            rm -f "$DEVELOPER_ID_P12_PATH"
-          }
-          trap rm_p12 EXIT
-
-          # `openssl enc` is the flag set both LibreSSL (GitHub's macOS image) and OpenSSL accept.
-          printf '%s' "$MACOS_CERT_P12_BASE64" | tr -d '[:space:]' | openssl enc -d -base64 -A -out "$DEVELOPER_ID_P12_PATH"
-          printf '%s' "$APPSTORE_API_KEY_P8_BASE64" | tr -d '[:space:]' | openssl enc -d -base64 -A -out "$APPSTORE_API_KEY_PATH"
-          chmod 600 "$DEVELOPER_ID_P12_PATH" "$APPSTORE_API_KEY_PATH"
-
-          if [ ! -s "$DEVELOPER_ID_P12_PATH" ]; then
-            echo "MACOS_CERT_P12_BASE64 decoded to an empty file"
-            exit 1
-          fi
-          if ! grep -q -- "-----BEGIN PRIVATE KEY-----" "$APPSTORE_API_KEY_PATH"; then
-            echo "APPSTORE_API_KEY_P8_BASE64 did not decode to a PKCS#8 PEM private key"
-            exit 1
-          fi
-
-          security create-keychain -p "$KEYCHAIN_PASSWORD" "$MACOS_KEYCHAIN_PATH"
-          security set-keychain-settings -lut 21600 "$MACOS_KEYCHAIN_PATH"
-          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$MACOS_KEYCHAIN_PATH"
-          security import "$DEVELOPER_ID_P12_PATH" \
-            -k "$MACOS_KEYCHAIN_PATH" \
-            -P "$MACOS_CERT_PASSWORD" \
-            -f pkcs12 \
-            -T /usr/bin/codesign
-          security set-key-partition-list \
-            -S apple-tool:,apple:,codesign: \
-            -s \
-            -k "$KEYCHAIN_PASSWORD" \
-            "$MACOS_KEYCHAIN_PATH" >/dev/null
-          security list-keychains -d user -s "$MACOS_KEYCHAIN_PATH"
-          security default-keychain -s "$MACOS_KEYCHAIN_PATH"
-
-          identities="$(security find-identity -p codesigning -v "$MACOS_KEYCHAIN_PATH")"
-          printf '%s\n' "$identities"
-          if ! printf '%s\n' "$identities" | grep -F "$MACOS_SIGNING_IDENTITY" >/dev/null; then
-            echo "codesigning identity not found in the temporary keychain"
-            exit 1
-          fi
-
-      - name: Release
-        uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
-        with:
-          distribution: goreleaser
-          version: v2.20.1
-          args: release --clean
-        env:
-          MACOS_KEYCHAIN_PATH: ${{ runner.temp }}/updater-signing.keychain-db
-          APPSTORE_API_KEY_PATH: ${{ runner.temp }}/updater-authkey.p8
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
-          APPSTORE_API_KEY_ID: ${{ secrets.APPSTORE_API_KEY_ID }}
-          APPSTORE_API_ISSUER_ID: ${{ secrets.APPSTORE_API_ISSUER_ID }}
-
-      - name: Delete temporary keychain and API key
-        if: always()
-        env:
-          MACOS_KEYCHAIN_PATH: ${{ runner.temp }}/updater-signing.keychain-db
-          DEVELOPER_ID_P12_PATH: ${{ runner.temp }}/updater-developer-id.p12
-          APPSTORE_API_KEY_PATH: ${{ runner.temp }}/updater-authkey.p8
-        run: |
-          set -euo pipefail
-          if [ -n "${MACOS_KEYCHAIN_PATH:-}" ] && [ -f "$MACOS_KEYCHAIN_PATH" ]; then
-            security delete-keychain "$MACOS_KEYCHAIN_PATH"
-          fi
-          rm -f "${DEVELOPER_ID_P12_PATH:-}" "${APPSTORE_API_KEY_PATH:-}"
-          if [ -f "${MACOS_KEYCHAIN_PATH:-/nonexistent}" ] || [ -f "${DEVELOPER_ID_P12_PATH:-/nonexistent}" ] || [ -f "${APPSTORE_API_KEY_PATH:-/nonexistent}" ]; then
-            echo "signing material still present after cleanup"
-            exit 1
-          fi
+    permissions:
+      contents: write
+    uses: ./.github/workflows/release-publish.yml
+    with:
+      tag: ${{ github.ref_name }}
+      expected_sha: ${{ github.sha }}
+    secrets:
+      MACOS_CERT_P12_BASE64: ${{ secrets.MACOS_CERT_P12_BASE64 }}
+      MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+      APPSTORE_API_KEY_P8_BASE64: ${{ secrets.APPSTORE_API_KEY_P8_BASE64 }}
+      APPSTORE_API_KEY_ID: ${{ secrets.APPSTORE_API_KEY_ID }}
+      APPSTORE_API_ISSUER_ID: ${{ secrets.APPSTORE_API_ISSUER_ID }}
+      HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}

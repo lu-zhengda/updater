@@ -1,6 +1,17 @@
 # Releasing
 
-Pushing a tag that matches `v*` runs [`.github/workflows/release.yml`](../.github/workflows/release.yml) on the GitHub-hosted `macos-latest` runner with cgo enabled. The workflow imports the Developer ID certificate into a temporary keychain, runs GoReleaser, and publishes the existing Homebrew cask. Branch pushes and pull requests do not start this job. It does not use a self-hosted runner, and it does not need tools installed on a personal Mac: Go and GoReleaser are set up in the job, and `codesign`, `notarytool`, `stapler`, `python3`, and `openssl` come from the GitHub-hosted image.
+Publishing a GitHub Release and updating the Homebrew cask always runs the same GitHub-hosted `macos-latest` job, [`.github/workflows/release-publish.yml`](../.github/workflows/release-publish.yml), with cgo enabled. That job imports the Developer ID certificate into a temporary keychain, runs GoReleaser, and publishes the existing Homebrew cask. It does not use a self-hosted runner, and it does not need tools installed on a personal Mac: Go and GoReleaser are set up in the job, and `codesign`, `notarytool`, `stapler`, `python3`, and `openssl` come from the GitHub-hosted image.
+
+Two workflows call that job:
+
+- [`.github/workflows/release-on-merge.yml`](../.github/workflows/release-on-merge.yml) runs when a pull request is merged to `main`. It reads the pull request labels, and when exactly one semver label is present it creates an annotated tag on the merge commit and then calls the publish job.
+- [`.github/workflows/release.yml`](../.github/workflows/release.yml) runs when a tag matching `v*` is pushed. A tag pushed from a clone still publishes this way.
+
+`GITHUB_TOKEN` cannot start the tag workflow by pushing a tag. The merge workflow therefore calls the publish job with `workflow_call` instead of waiting for that push. Signing, notarization, and the Homebrew cask update stay in the publish job on both paths. Secret names are unchanged.
+
+A branch push, a closed pull request that was not merged, and a push straight to `main` with no merged pull request do not publish. The decision uses the pull request's labels, which a bare push does not have.
+
+Merge publishes and manual tag publishes share one concurrency group. A second publish waits. It does not cancel a run that is already signing, and it does not replace a tag.
 
 GoReleaser still builds from [`.goreleaser.yaml`](../.goreleaser.yaml): darwin amd64 and arm64, one universal binary. The universal-binary post hook then:
 
@@ -74,14 +85,37 @@ After `gh secret set` succeeds, delete the local password file and the `.p8` fro
 
 ## Cut a release
 
+Add exactly one of these labels to the pull request before it is merged to `main`. The bump is standard SemVer from the latest stable `vX.Y.Z` tag in the repository at merge time. Pre-release tags are not a base version. The source tree is not edited; GoReleaser reads the version from the tag.
+
+| Label | Bump | From `v0.23.0` |
+| --- | --- | --- |
+| `semver:patch` | patch | `v0.23.1` |
+| `semver:minor` | minor | `v0.24.0` |
+| `semver:major` | major | `v1.0.0` |
+
+The example column is that rule applied to `v0.23.0`. The base at merge time is whatever the latest stable tag is then.
+
+- No semver label: the workflow succeeds and does not create a tag or a release. Docs-only and workflow-only pull requests stay unlabeled.
+- More than one semver label: the workflow fails and does not guess a bump.
+- The merge commit already has a tag, or the computed tag already exists: the workflow fails and does not move or replace the tag.
+- The new tag is an annotated `vX.Y.Z` tag on the merge commit. A squash merge tags the squash commit on `main`.
+
+Other labels may sit beside the one semver label. They do not change the bump.
+
+If the tag is created and the publish job then fails, re-run that failed job. It checks out the existing tag and publishes. Re-running the whole merge workflow stops, because the tag already exists and the workflow will not move it.
+
+### Manual tag
+
+A `v*` tag pushed from a clone still runs the same publish job, including a version the labels would not choose:
+
 ```sh
 git tag vX.Y.Z
 git push origin vX.Y.Z
 ```
 
-The tag push creates the GitHub Release and updates the cask. Do not create the release or the tap commit by hand.
+Do not create the GitHub Release or the tap commit by hand. The publish job does both. The job fails if notarization's status is anything other than `Accepted`. On failure it prints `xcrun notarytool log` for that submission. After a successful notarization it runs `xcrun stapler staple`, `xcrun stapler validate`, and `spctl --assess --type execute -vv`.
 
-The job fails if notarization's status is anything other than `Accepted`. On failure it prints `xcrun notarytool log` for that submission. After a successful notarization it runs `xcrun stapler staple`, `xcrun stapler validate`, and `spctl --assess --type execute -vv`.
+Secret names, the signing identity, and the notarization inputs are unchanged.
 
 ## Signature
 
