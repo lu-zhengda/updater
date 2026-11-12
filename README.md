@@ -382,6 +382,10 @@ If building from source and you want Mac App Store checks, install `mas`:
 brew install mas
 ```
 
+## Releasing
+
+Tagged releases are signed and notarized on GitHub Actions. See [docs/RELEASING.md](docs/RELEASING.md).
+
 ## Developer Commands
 
 ```sh

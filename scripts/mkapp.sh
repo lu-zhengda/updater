@@ -5,7 +5,10 @@
 # Produces <output-dir>/Updater.app with the binary, Info.plist, and icon.
 #
 # Set MACOS_SIGNING_IDENTITY to an Apple-issued signing identity for a stable
-# designated requirement across builds. Local builds fall back to ad-hoc
+# designated requirement across builds. That path signs the Mach-O and then
+# the bundle with the hardened runtime, a secure timestamp, and
+# packaging/entitlements.plist. Set MACOS_KEYCHAIN_PATH to the temporary
+# keychain created by the release workflow. Local builds fall back to ad-hoc
 # bundle signing so the executable, Info.plist, and resources still form one
 # coherent code object.
 set -eu
@@ -28,6 +31,33 @@ plutil -lint "$APP/Contents/Info.plist" >/dev/null
 
 BUNDLE_ID="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Contents/Info.plist")"
 SIGNING_IDENTITY="${MACOS_SIGNING_IDENTITY:--}"
+ENTITLEMENTS="$ROOT/packaging/entitlements.plist"
+
+# Sign the nested Mach-O first, then the bundle, so the bundle seal covers the
+# signed executable. Entitlements are passed on both: the final bundle
+# signature is what Gatekeeper records, and it must carry them too.
+codesign_target() {
+	if [ -n "${MACOS_KEYCHAIN_PATH:-}" ]; then
+		/usr/bin/codesign \
+			--force \
+			--sign "$SIGNING_IDENTITY" \
+			--keychain "$MACOS_KEYCHAIN_PATH" \
+			--identifier "$BUNDLE_ID" \
+			--options runtime \
+			--timestamp \
+			--entitlements "$ENTITLEMENTS" \
+			"$1"
+	else
+		/usr/bin/codesign \
+			--force \
+			--sign "$SIGNING_IDENTITY" \
+			--identifier "$BUNDLE_ID" \
+			--options runtime \
+			--timestamp \
+			--entitlements "$ENTITLEMENTS" \
+			"$1"
+	fi
+}
 
 if [ "$SIGNING_IDENTITY" = "-" ]; then
 	/usr/bin/codesign \
@@ -37,13 +67,13 @@ if [ "$SIGNING_IDENTITY" = "-" ]; then
 		"$APP"
 	SIGNING_DESCRIPTION="ad-hoc"
 else
-	/usr/bin/codesign \
-		--force \
-		--sign "$SIGNING_IDENTITY" \
-		--identifier "$BUNDLE_ID" \
-		--options runtime \
-		--timestamp \
-		"$APP"
+	if [ ! -f "$ENTITLEMENTS" ]; then
+		echo "missing entitlements: $ENTITLEMENTS" >&2
+		exit 1
+	fi
+	plutil -lint "$ENTITLEMENTS" >/dev/null
+	codesign_target "$APP/Contents/MacOS/updater"
+	codesign_target "$APP"
 	SIGNING_DESCRIPTION="$SIGNING_IDENTITY"
 fi
 

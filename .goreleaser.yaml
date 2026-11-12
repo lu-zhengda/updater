@@ -24,8 +24,15 @@ universal_binaries:
     replace: true
     hooks:
       post:
-        # Assemble Updater.app around the universal binary; archived below.
+        # Both hooks run in this pipe, which GoReleaser finishes before it
+        # builds archives. The tarball (and the cask checksum of that tarball)
+        # therefore contains the signed, stapled app.
+        #
+        # mkapp.sh signs the Mach-O and the bundle when MACOS_SIGNING_IDENTITY
+        # is set. notarize-app.sh submits, staples, and validates only when
+        # NOTARIZE=1. The release workflow sets both.
         - sh scripts/mkapp.sh "{{ .Path }}" "{{ .Version }}" dist
+        - sh scripts/notarize-app.sh dist/Updater.app
 
 archives:
   - id: updater-archive
