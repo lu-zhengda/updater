@@ -14,6 +14,9 @@ jobs:
   release:
     # GitHub-hosted image. Do not point this at a self-hosted runner.
     runs-on: macos-latest
+    # Secrets below are environment secrets. GitHub waits for the release
+    # environment's required reviewer before this job starts.
+    environment: release
     timeout-minutes: 90
     defaults:
       run:
@@ -26,6 +29,16 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+
+      - name: Require the tag commit on main
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::Refusing to release ${GITHUB_REF_NAME}: ${GITHUB_SHA} is not on origin/main. Push the commit to main before tagging it. Prerelease tags are not exempt."
+            exit 1
+          fi
+          echo "${GITHUB_SHA} is on origin/main"
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
