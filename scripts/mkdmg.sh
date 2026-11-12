@@ -25,6 +25,13 @@
 # NOTARIZE=1, so local builds and goreleaser check do not need Apple
 # credentials.
 #
+# xcrun and spctl are resolved from PATH, the same way notarize-app.sh
+# runs those commands. The release image does not provide executable
+# copies at /usr/bin/xcrun and /usr/bin/spctl (spctl is /usr/sbin/spctl,
+# and xcrun follows the active developer directory). Requiring those
+# absolute paths aborted the v0.24.1 DMG hook after notarization had
+# already succeeded.
+#
 # UPDATER_DMG_TEST=1 is a test seam. The release job does not set it.
 set -eu
 
@@ -59,24 +66,59 @@ case $VERSION in
 	;;
 esac
 
+# First executable PATH entry for $1, skipping non-executable files.
+# A bare `xcrun` in notarize-app.sh does the same search: a missing or
+# non-executable /usr/bin copy does not hide a later match.
+resolve_command() {
+	_resolve_name=$1
+	_resolve_rest=${PATH:-}
+	while :; do
+		case $_resolve_rest in
+		*:*)
+			_resolve_dir=${_resolve_rest%%:*}
+			_resolve_rest=${_resolve_rest#*:}
+			;;
+		*)
+			_resolve_dir=$_resolve_rest
+			_resolve_rest=
+			;;
+		esac
+		if [ -z "$_resolve_dir" ]; then
+			_resolve_dir=.
+		fi
+		if [ -f "$_resolve_dir/$_resolve_name" ] && [ -x "$_resolve_dir/$_resolve_name" ]; then
+			printf '%s\n' "$_resolve_dir/$_resolve_name"
+			return 0
+		fi
+		if [ -z "$_resolve_rest" ]; then
+			break
+		fi
+	done
+	return 1
+}
+
 if [ "${UPDATER_DMG_TEST:-}" = "1" ]; then
 	: "${UPDATER_DMG_TOOLS:?UPDATER_DMG_TOOLS is required when UPDATER_DMG_TEST=1}"
 	HDIUTIL=$UPDATER_DMG_TOOLS/hdiutil
 	DITTO=$UPDATER_DMG_TOOLS/ditto
 	CODESIGN=$UPDATER_DMG_TOOLS/codesign
-	XCRUN=$UPDATER_DMG_TOOLS/xcrun
-	SPCTL=$UPDATER_DMG_TOOLS/spctl
 	PLISTBUDDY=$UPDATER_DMG_TOOLS/PlistBuddy
 	staple_sleep=${UPDATER_DMG_STAPLE_SLEEP:-15}
+	# Search the tools directory first so an executable mock wins over a
+	# system xcrun. A missing or non-executable file there still falls
+	# through to PATH.
+	_tool_path=$UPDATER_DMG_TOOLS:${PATH:-}
 else
 	HDIUTIL=/usr/bin/hdiutil
 	DITTO=/usr/bin/ditto
 	CODESIGN=/usr/bin/codesign
-	XCRUN=/usr/bin/xcrun
-	SPCTL=/usr/bin/spctl
 	PLISTBUDDY=/usr/libexec/PlistBuddy
 	staple_sleep=15
+	_tool_path=${PATH:-}
 fi
+
+XCRUN=$(PATH="$_tool_path" resolve_command xcrun || true)
+SPCTL=$(PATH="$_tool_path" resolve_command spctl || true)
 
 for tool in "$HDIUTIL" "$DITTO" "$CODESIGN" "$PLISTBUDDY"; do
 	if [ ! -x "$tool" ]; then
