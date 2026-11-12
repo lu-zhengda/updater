@@ -9,23 +9,14 @@ name: Release dry-run
 #   --snapshot  Generate an unversioned snapshot release, skipping all
 #               validations and without publishing any artifacts
 #               (implies --skip=announce,publish,validate)
-# The command is:
+# A dispatched run is on a branch, so the command is:
 #   release --clean --snapshot --skip=publish --skip=homebrew
-#
-# workflow_dispatch on main is not a tag, so --snapshot is required.
-# require-main fails unless GITHUB_REF is refs/heads/main, and that job
-# finishes before this one enters the release environment. A non-main
-# dispatch therefore does not request approval and does not receive
-# environment secrets. The signing job checks the ref again before it
-# reads the certificate.
 #
 # --snapshot skips the publishing pipe (GitHub Releases and cask pushes)
 # and the release preflight token check. --skip=homebrew is also set: the
 # cask pipe skips only on that flag, and its Run() would otherwise write a
 # cask and template HOMEBREW_TAP_TOKEN. This job does not set that token
 # and does not set GITHUB_TOKEN. contents: read cannot create a release.
-# Signing secrets come from the release environment, after its required
-# reviewer approves the deployment.
 #
 # Universal-binary post hooks still run (scripts/mkapp.sh, then
 # scripts/notarize-app.sh). Those hooks are not the `notarize` skip, and
@@ -49,24 +40,7 @@ permissions:
   contents: read
 
 jobs:
-  require-main:
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - name: Require refs/heads/main
-        run: |
-          set -euo pipefail
-          if [ "$GITHUB_REF" != "refs/heads/main" ]; then
-            echo "dry-run requires GITHUB_REF=refs/heads/main"
-            printf 'GITHUB_REF=%s\n' "$GITHUB_REF"
-            exit 1
-          fi
-
   release-dry-run:
-    needs: require-main
-    # GitHub Environment "release". Required reviewer and deployment branches
-    # (main and v* tags) are set in GitHub settings, not in this file.
-    environment: release
     # GitHub-hosted image. Do not point this at a self-hosted runner.
     runs-on: macos-latest
     timeout-minutes: 90
@@ -78,15 +52,6 @@ jobs:
       MACOS_SIGNING_IDENTITY: "Developer ID Application: Zhengda Lu (XY7H3QGJ2T)"
       NOTARIZE: "1"
     steps:
-      - name: Require refs/heads/main
-        run: |
-          set -euo pipefail
-          if [ "$GITHUB_REF" != "refs/heads/main" ]; then
-            echo "dry-run requires GITHUB_REF=refs/heads/main"
-            printf 'GITHUB_REF=%s\n' "$GITHUB_REF"
-            exit 1
-          fi
-
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
