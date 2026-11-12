@@ -1,6 +1,6 @@
 # Releasing
 
-Publishing a GitHub Release and updating the Homebrew cask always runs the same GitHub-hosted `macos-latest` job, [`.github/workflows/release-publish.yml`](../.github/workflows/release-publish.yml), with cgo enabled. That job imports the Developer ID certificate into a temporary keychain, runs GoReleaser, and publishes the existing Homebrew cask. It does not use a self-hosted runner, and it does not need tools installed on a personal Mac: Go and GoReleaser are set up in the job, and `codesign`, `notarytool`, `stapler`, `python3`, and `openssl` come from the GitHub-hosted image.
+Publishing a GitHub Release and updating the Homebrew cask always runs the same GitHub-hosted `macos-latest` job, [`.github/workflows/release-publish.yml`](../.github/workflows/release-publish.yml), with cgo enabled. That job imports the Developer ID certificate into a temporary keychain, runs GoReleaser, and publishes the existing Homebrew cask. It does not use a self-hosted runner, and it does not need tools installed on a personal Mac: Go and GoReleaser are set up in the job, and `codesign`, `notarytool`, `stapler`, `hdiutil`, `ditto`, `python3`, and `openssl` come from the GitHub-hosted image.
 
 Two workflows call that job:
 
@@ -17,8 +17,11 @@ GoReleaser still builds from [`.goreleaser.yaml`](../.goreleaser.yaml): darwin a
 
 1. `scripts/mkapp.sh` assembles `dist/Updater.app` and, when `MACOS_SIGNING_IDENTITY` is set, signs the Mach-O and the bundle.
 2. `scripts/notarize-app.sh` notarizes and staples that bundle when `NOTARIZE=1`.
+3. `scripts/mkdmg.sh` builds `dist/Updater-<version>.dmg` from that app, signs the disk image, and, when `NOTARIZE=1`, notarizes and staples the image.
 
-Those hooks run before GoReleaser creates archives. The cask keeps using `HOMEBREW_TAP_TOKEN` and the `updater_<version>_darwin.tar.gz` archive. The checksum in the cask is the checksum of that archive, so it matches the stapled app inside it. The zip uploaded to the notary service is temporary and is not a release asset.
+Those hooks finish before GoReleaser creates archives or checksums. The cask keeps using `HOMEBREW_TAP_TOKEN` and the `updater_<version>_darwin.tar.gz` archive. The checksum in the cask is the checksum of that archive, so it matches the stapled app inside it. `checksums.txt` lists that archive and `Updater-<version>.dmg`. The zip uploaded for the app notarization is temporary and is not a release asset. The DMG is a release asset, named the same way as the hand-cut `Updater-0.23.0.dmg`.
+
+GoReleaser v2.20.1's documented `dmg` section is Pro-only. The open-source `goreleaser` binary this workflow runs has no DMG pipe, and that Pro section packages a binary or a Pro app bundle rather than the already stapled `dist/Updater.app`. `scripts/mkdmg.sh` is the step that publishes the image.
 
 `make app` is unchanged for local development: it ad-hoc signs unless you export `MACOS_SIGNING_IDENTITY`.
 
@@ -113,7 +116,7 @@ git tag vX.Y.Z
 git push origin vX.Y.Z
 ```
 
-Do not create the GitHub Release or the tap commit by hand. The publish job does both. The job fails if notarization's status is anything other than `Accepted`. On failure it prints `xcrun notarytool log` for that submission. After a successful notarization it runs `xcrun stapler staple`, `xcrun stapler validate`, and `spctl --assess --type execute -vv`.
+Do not create the GitHub Release or the tap commit by hand. The publish job does both. The app and the DMG are separate notarizations. The job fails unless both statuses are `Accepted`. On failure it prints `xcrun notarytool log` for that submission. After the app is accepted it staples the bundle and runs `xcrun stapler validate` and `spctl --assess --type execute -vv`. After the DMG is accepted it staples the image and runs `xcrun stapler validate`, `codesign --verify`, and `spctl --assess --type open --context context:primary-signature`.
 
 Secret names, the signing identity, and the notarization inputs are unchanged.
 
@@ -127,6 +130,8 @@ Entitlements:
 - `com.apple.security.automation.apple-events` — notifications, moving an app to the Trash, and package-install prompts go through `osascript`. The hardened runtime blocks Apple Events without this entitlement.
 
 Library validation stays on. The binary links Apple system frameworks (Cocoa, WebKit) and does not load a third-party dylib. `com.apple.security.get-task-allow` is not set; notarization rejects it.
+
+`scripts/mkdmg.sh` copies that stapled app with `ditto`, adds a symlink to `/Applications`, and creates a UDZO APFS image with volume name `Updater`. It signs the image with `codesign --force --sign <identity> --timestamp`. A disk image is not an executable, so this signature does not use the hardened runtime or the app entitlements. `--keychain` is the same temporary keychain. When `NOTARIZE=1`, the script submits the DMG itself to `notarytool` (it is not zipped), staples the ticket onto the image, and mounts the image to check that the app inside still verifies, is stapled, and passes `spctl --assess --type execute`. The app and the image are separate notarizations, so a download of either one can be checked offline.
 
 The workflow's keychain steps:
 

@@ -24,15 +24,22 @@ universal_binaries:
     replace: true
     hooks:
       post:
-        # Both hooks run in this pipe, which GoReleaser finishes before it
-        # builds archives. The tarball (and the cask checksum of that tarball)
-        # therefore contains the signed, stapled app.
+        # These hooks run in this pipe, which GoReleaser finishes before it
+        # builds archives or checksums. The tarball (and the cask checksum of
+        # that tarball) therefore contains the signed, stapled app. mkdmg.sh
+        # then builds dist/Updater-<version>.dmg from that same app, so the
+        # checksum and the uploaded image are the signed, stapled DMG.
         #
         # mkapp.sh signs the Mach-O and the bundle when MACOS_SIGNING_IDENTITY
-        # is set. notarize-app.sh submits, staples, and validates only when
-        # NOTARIZE=1. The release workflow sets both.
+        # is set. notarize-app.sh and mkdmg.sh submit, staple, and validate
+        # only when NOTARIZE=1. The release workflow sets both.
+        #
+        # Open-source GoReleaser v2.20.1 has no DMG pipe. The dmg section in
+        # current docs is Pro-only and does not package this already stapled
+        # bundle. The filename below is the release asset name.
         - sh scripts/mkapp.sh "{{ .Path }}" "{{ .Version }}" dist
         - sh scripts/notarize-app.sh dist/Updater.app
+        - sh scripts/mkdmg.sh dist/Updater.app "{{ .Version }}" dist
 
 archives:
   - id: updater-archive
@@ -50,6 +57,16 @@ archives:
 
 checksum:
   name_template: "checksums.txt"
+  extra_files:
+    # Same path mkdmg.sh writes. Checksums only; the cask still hashes the
+    # tarball selected by updater-archive.
+    - glob: ./dist/Updater-{{ .Version }}.dmg
+
+# Uploads the DMG next to the tarball and checksums.txt. The file is not an
+# archive, so homebrew_casks below keeps its updater-archive URL.
+release:
+  extra_files:
+    - glob: ./dist/Updater-{{ .Version }}.dmg
 
 changelog:
   sort: asc
