@@ -366,8 +366,10 @@ if [ "$found" != "$allowed" ]; then
 	printf '%s\n' "$found" >&2
 	fail "unexpected secret name"
 fi
-if [ -f "$wf/release-dry-run.yml" ]; then
-	fail "dry-run workflow must stay deleted"
+# release-dry-run.yml is still on main until PR 25 deletes it. This branch
+# must not add another copy under a new name or change that file.
+if git diff --name-only "$(git merge-base HEAD origin/main 2>/dev/null || echo HEAD)" HEAD -- .github/workflows/release-dry-run.yml | grep -q .; then
+	fail "this branch changes release-dry-run.yml; PR 25 owns that file"
 fi
 ok "workflow contract"
 
