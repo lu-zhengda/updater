@@ -7,14 +7,13 @@ package main
 
 // The window process runs from an LSUIElement bundle, which macOS does not
 // activate on launch — the window would order behind other apps while still
-// grabbing key focus. Promote to a regular app and activate explicitly
-// (both the modern NSRunningApplication path and the legacy NSApp one, for
-// pre/post-Sonoma cooperative-activation behavior).
+// grabbing key focus. Promote to a regular app and activate it, bringing
+// all of its windows forward.
 static void updaterActivateApp(void) {
 	[NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
+	[NSApp activate];
 	[[NSRunningApplication currentApplication]
-		activateWithOptions:(NSApplicationActivateAllWindows | NSApplicationActivateIgnoringOtherApps)];
-	[NSApp activateIgnoringOtherApps:YES];
+		activateWithOptions:NSApplicationActivateAllWindows];
 }
 
 static void updaterRaiseWindow(void *win) {
