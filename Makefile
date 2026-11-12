@@ -5,9 +5,9 @@ LDFLAGS := -s -w -X main.version=$(VERSION)
 PREFIX  := /usr/local
 
 # Keep cgo's deployment target aligned with packaging/Info.plist.
-export CGO_CFLAGS   ?= -O2 -g -mmacosx-version-min=13.0
-export CGO_CXXFLAGS ?= -O2 -g -mmacosx-version-min=13.0
-export CGO_LDFLAGS  ?= -O2 -g -mmacosx-version-min=13.0
+export CGO_CFLAGS   ?= -O2 -g -mmacosx-version-min=26.0
+export CGO_CXXFLAGS ?= -O2 -g -mmacosx-version-min=26.0
+export CGO_LDFLAGS  ?= -O2 -g -mmacosx-version-min=26.0
 
 .PHONY: build app install install-app uninstall clean test
 

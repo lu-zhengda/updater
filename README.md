@@ -14,7 +14,7 @@ Installing gives you both entry points from one binary:
 
 ## Requirements
 
-- macOS 13 Ventura or later
+- macOS 26 Tahoe or later
 - Homebrew (recommended)
 - `mas` for Mac App Store checks (installed automatically with the Homebrew cask)
 

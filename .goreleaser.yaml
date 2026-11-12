@@ -12,9 +12,9 @@ builds:
     env:
       # The menu bar app (updater menubar run) uses systray, which needs cgo.
       - CGO_ENABLED=1
-      - CGO_CFLAGS=-O2 -g -mmacosx-version-min=13.0
-      - CGO_CXXFLAGS=-O2 -g -mmacosx-version-min=13.0
-      - CGO_LDFLAGS=-O2 -g -mmacosx-version-min=13.0
+      - CGO_CFLAGS=-O2 -g -mmacosx-version-min=26.0
+      - CGO_CXXFLAGS=-O2 -g -mmacosx-version-min=26.0
+      - CGO_LDFLAGS=-O2 -g -mmacosx-version-min=26.0
     ldflags:
       - -s -w
       - -X main.version={{.Version}}
@@ -81,7 +81,7 @@ homebrew_casks:
     binaries:
       - "#{appdir}/Updater.app/Contents/MacOS/updater"
     custom_block: |
-      depends_on macos: :ventura
+      depends_on macos: :tahoe
       app "Updater.app"
     hooks:
       pre:
