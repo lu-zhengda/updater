@@ -234,14 +234,13 @@ func homebrewCaskWaitMessage(target string) string {
 	return fmt.Sprintf("Homebrew doesn't have Updater %s yet; try again in a few minutes", versionpkg.ReleaseVersion(target))
 }
 
-// refreshUpdaterTap updates Homebrew's checkout of the Updater tap before
-// brew info. brew info does not auto-update. brew update fetches every tap
-// and a positional argument is rerun as brew upgrade, so it cannot name one
-// tap. brew upgrade auto-updates by execing brew update --auto-update, which
-// is that same full fetch and skips when Homebrew's own FETCH_HEAD is newer
-// than the auto-update interval. brew update-reset on the tap repository
-// fetches and resets only that git checkout. A failure is ignored: the
-// version guard still runs on whatever brew info reports.
+// refreshUpdaterTap fast-forwards Homebrew's checkout of the Updater tap
+// before brew info. brew info does not auto-update. brew update cannot name
+// one tap, and brew update-reset would discard local commits. Fetch the
+// tracked upstream and merge it with --ff-only. A failure (diverged, offline,
+// or not a git checkout) is ignored: brew info still runs, and the version
+// guard still decides. This is not brew update, so HOMEBREW_NO_AUTO_UPDATE is
+// left unset and brew upgrade keeps its own auto-update.
 func refreshUpdaterTap(ctx context.Context, runner checker.CmdRunner) {
 	if err := ctx.Err(); err != nil {
 		return
@@ -251,10 +250,24 @@ func refreshUpdaterTap(ctx context.Context, runner checker.CmdRunner) {
 		return
 	}
 	repo := strings.TrimSpace(string(out))
-	if repo == "" || ctx.Err() != nil {
+	if repo == "" || strings.Contains(repo, "\n") || ctx.Err() != nil {
 		return
 	}
-	_, _ = runner.Run(ctx, "brew", "update-reset", repo)
+	upstream, err := runner.Run(ctx, "git", "-C", repo, "rev-parse", "--abbrev-ref", "@{upstream}")
+	if err != nil {
+		return
+	}
+	remote, branch, ok := strings.Cut(strings.TrimSpace(string(upstream)), "/")
+	if !ok || remote == "" || branch == "" || ctx.Err() != nil {
+		return
+	}
+	if _, err := runner.Run(ctx, "git", "-C", repo, "fetch", "--quiet", remote, branch); err != nil {
+		return
+	}
+	if ctx.Err() != nil {
+		return
+	}
+	_, _ = runner.Run(ctx, "git", "-C", repo, "merge", "--ff-only", "--quiet", "FETCH_HEAD")
 }
 
 func readCaskVersion(ctx context.Context, runner checker.CmdRunner) (string, error) {

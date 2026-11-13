@@ -58,6 +58,10 @@ type selfUpgradeTestRunner struct {
 	bundle                       string
 	brew, fail, managed, stopped bool
 	failRefresh                  bool
+	failFetch                    bool
+	diverged                     bool
+	realGit                      bool
+	tapRepo                      string
 	refreshed                    bool
 	caskVersion                  string
 	staleCask                    string
@@ -108,9 +112,12 @@ func probeUpdateLockHeld(t *testing.T) {
 	}
 }
 
-func (r *selfUpgradeTestRunner) Run(_ context.Context, name string, args ...string) ([]byte, error) {
+func (r *selfUpgradeTestRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
 	key := name + " " + strings.Join(args, " ")
 	r.calls = append(r.calls, key)
+	if strings.Contains(key, "update-reset") || strings.Contains(key, " reset") || strings.Contains(key, "reset --hard") {
+		r.t.Fatalf("tap refresh reset the checkout: %s", key)
+	}
 	switch {
 	case key == "brew list --cask "+updaterCask:
 		if r.brew {
@@ -121,14 +128,13 @@ func (r *selfUpgradeTestRunner) Run(_ context.Context, name string, args ...stri
 		if r.failRefresh {
 			return nil, errors.New("tap repository unavailable")
 		}
-		return []byte("/opt/homebrew/Library/Taps/lu-zhengda/homebrew-tap\n"), nil
-	case strings.HasPrefix(key, "brew update-reset "):
-		probeUpdateLockHeld(r.t)
-		if r.failRefresh {
-			return nil, errors.New("tap refresh failed")
+		repo := r.tapRepo
+		if repo == "" {
+			repo = "/opt/homebrew/Library/Taps/lu-zhengda/homebrew-tap"
 		}
-		r.refreshed = true
-		return nil, nil
+		return []byte(repo + "\n"), nil
+	case name == "git":
+		return r.runGit(ctx, args)
 	case strings.HasPrefix(key, "brew info --cask --json=v2 "):
 		probeUpdateLockHeld(r.t)
 		version := r.caskVersion
@@ -173,6 +179,50 @@ func (r *selfUpgradeTestRunner) Run(_ context.Context, name string, args ...stri
 		return nil, nil
 	default:
 		return nil, fmt.Errorf("unexpected command %s", key)
+	}
+}
+
+func (r *selfUpgradeTestRunner) runGit(ctx context.Context, args []string) ([]byte, error) {
+	if len(args) < 3 || args[0] != "-C" {
+		return nil, fmt.Errorf("unexpected git %s", strings.Join(args, " "))
+	}
+	probeUpdateLockHeld(r.t)
+	if r.realGit {
+		cmd := exec.CommandContext(ctx, "git", args...)
+		out, err := cmd.CombinedOutput()
+		if err == nil && args[2] == "merge" {
+			r.refreshed = true
+		}
+		return out, err
+	}
+	switch args[2] {
+	case "rev-parse":
+		return []byte("origin/main\n"), nil
+	case "fetch":
+		if r.failFetch {
+			return nil, errors.New("fetch failed")
+		}
+		return nil, nil
+	case "merge":
+		if !slices.Contains(args, "--ff-only") {
+			return nil, fmt.Errorf("tap merge must be fast-forward only: %s", strings.Join(args, " "))
+		}
+		if r.diverged {
+			return []byte("fatal: Not possible to fast-forward, aborting.\n"), errors.New("exit status 128")
+		}
+		r.refreshed = true
+		return nil, nil
+	default:
+		return nil, fmt.Errorf("unexpected git %s", strings.Join(args, " "))
+	}
+}
+
+func assertNoTapReset(t *testing.T, calls []string) {
+	t.Helper()
+	for _, call := range calls {
+		if strings.Contains(call, "update-reset") || strings.Contains(call, " reset") || strings.Contains(call, "reset --hard") {
+			t.Fatalf("tap refresh reset the checkout: %s in %v", call, calls)
+		}
 	}
 }
 
@@ -568,15 +618,17 @@ func (r *recoverRunner) Run(_ context.Context, name string, args ...string) ([]b
 
 func TestSelfUpgradeRefreshesStaleTap(t *testing.T) {
 	for _, tc := range []struct {
-		name        string
-		failRefresh bool
-		stale, live string
-		wantUpgrade bool
+		name                  string
+		failRefresh, diverged bool
+		failFetch             bool
+		stale, live           string
+		wantUpgrade           bool
 	}{
-		// brew info reports the installed cask until update-reset, then the release.
+		// brew info reports the installed cask until the fast-forward, then the release.
 		{name: "stale tap then release", stale: "0.24.5", live: "0.24.6", wantUpgrade: true},
 		{name: "refresh failure still reads a current cask", failRefresh: true, live: "2.0.0", wantUpgrade: true},
-		{name: "refresh failure leaves a stale cask waiting", failRefresh: true, stale: "0.24.5", live: "0.24.5"},
+		{name: "offline fetch leaves a stale cask waiting", failFetch: true, stale: "0.24.5", live: "0.24.5"},
+		{name: "diverged tap keeps local commits", diverged: true, stale: "0.24.5", live: "0.24.5"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv("HOME", t.TempDir())
@@ -592,29 +644,45 @@ func TestSelfUpgradeRefreshesStaleTap(t *testing.T) {
 				return &checker.GitHubRelease{TagName: tag}, nil
 			}
 			verifySelfUpgrade = func(context.Context, string, string) error { return nil }
+			var tapHead string
 			runner := &selfUpgradeTestRunner{
-				t: t, bundle: bundle, brew: true, failRefresh: tc.failRefresh,
+				t: t, bundle: bundle, brew: true, failRefresh: tc.failRefresh, failFetch: tc.failFetch, diverged: tc.diverged,
 				caskVersion: tc.live, staleCask: tc.stale, brewVersion: tc.live,
 			}
+			if tc.diverged {
+				runner.tapRepo, tapHead = divergedTapCheckout(t)
+				runner.realGit = true
+			}
 			message, err := applySelfUpgrade(context.Background(), bundle, runner)
-			var infoAt, resetAt = -1, -1
+			assertNoTapReset(t, runner.calls)
+			var infoAt, mergeAt = -1, -1
 			upgraded := false
 			for i, call := range runner.calls {
 				switch {
-				case strings.HasPrefix(call, "brew update-reset "):
-					resetAt = i
+				case strings.Contains(call, "merge --ff-only"):
+					mergeAt = i
 				case strings.HasPrefix(call, "brew info "):
 					infoAt = i
 				case strings.HasPrefix(call, "brew upgrade "):
 					upgraded = true
 				}
 			}
-			if tc.failRefresh {
-				if resetAt >= 0 {
-					t.Fatalf("refresh continued after the repository lookup failed: %v", runner.calls)
+			switch {
+			case tc.failRefresh && mergeAt >= 0:
+				t.Fatalf("refresh continued after the repository lookup failed: %v", runner.calls)
+			case tc.failFetch && mergeAt >= 0:
+				t.Fatalf("merged after fetch failed: %v", runner.calls)
+			case !tc.failRefresh && !tc.failFetch && (mergeAt < 0 || infoAt < mergeAt):
+				t.Fatalf("fast-forward must finish before brew info: %v", runner.calls)
+			}
+			if tc.wantUpgrade {
+				fetch := "git -C " + runner.tapRepo + " fetch --quiet origin main"
+				if runner.tapRepo == "" {
+					fetch = "git -C /opt/homebrew/Library/Taps/lu-zhengda/homebrew-tap fetch --quiet origin main"
 				}
-			} else if resetAt < 0 || infoAt < resetAt {
-				t.Fatalf("tap refresh must finish before brew info: %v", runner.calls)
+				if !slices.Contains(runner.calls, fetch) {
+					t.Fatalf("fetch did not follow the tracked branch: %v", runner.calls)
+				}
 			}
 			info, readErr := readUpdaterBundle(bundle)
 			if tc.wantUpgrade {
@@ -627,8 +695,61 @@ func TestSelfUpgradeRefreshesStaleTap(t *testing.T) {
 			if err != nil || message != want || upgraded || readErr != nil || info.Version != "0.24.5" {
 				t.Fatalf("message=%q err=%v upgraded=%t bundle=%+v read=%v", message, err, upgraded, info, readErr)
 			}
+			if tc.diverged {
+				if got := gitOutput(t, runner.tapRepo, "rev-parse", "HEAD"); got != tapHead {
+					t.Fatalf("diverged tap HEAD changed from %s to %s", tapHead, got)
+				}
+				body, readErr := os.ReadFile(filepath.Join(runner.tapRepo, "LOCAL"))
+				if readErr != nil || string(body) != "keep me\n" {
+					t.Fatalf("local tap edit: %q %v", body, readErr)
+				}
+			}
 		})
 	}
+}
+
+func divergedTapCheckout(t *testing.T) (string, string) {
+	t.Helper()
+	origin := t.TempDir()
+	gitRun(t, origin, "init", "-b", "main")
+	if err := os.WriteFile(filepath.Join(origin, "README"), []byte("base\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, origin, "add", "README")
+	gitRun(t, origin, "commit", "-m", "base")
+	local := t.TempDir()
+	cmd := exec.Command("git", "clone", origin, local)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("clone: %v\n%s", err, out)
+	}
+	if err := os.WriteFile(filepath.Join(local, "LOCAL"), []byte("keep me\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, local, "add", "LOCAL")
+	gitRun(t, local, "commit", "-m", "local edit")
+	head := gitOutput(t, local, "rev-parse", "HEAD")
+	if err := os.WriteFile(filepath.Join(origin, "README"), []byte("upstream\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, origin, "add", "README")
+	gitRun(t, origin, "commit", "-m", "upstream")
+	return local, head
+}
+
+func gitRun(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	gitOutput(t, dir, args...)
+}
+
+func gitOutput(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	base := []string{"-C", dir, "-c", "user.email=updater@localhost", "-c", "user.name=Updater"}
+	cmd := exec.Command("git", append(base, args...)...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %s: %v\n%s", args, err, out)
+	}
+	return strings.TrimSpace(string(out))
 }
 
 func TestCleanStaleSelfStages(t *testing.T) {
