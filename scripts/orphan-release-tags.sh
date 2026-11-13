@@ -46,7 +46,14 @@ else
 		awk '{print $2}' |
 		sed -n 's#refs/tags/\(v[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)$#\1#p' |
 		sort -u)
+	if [ -z "${GH_TOKEN:-}" ] && [ -n "${GITHUB_TOKEN:-}" ]; then
+		GH_TOKEN=$GITHUB_TOKEN
+		export GH_TOKEN
+	fi
 	releases=$(gh api --paginate "repos/$repo/releases?per_page=100" --jq '.[].tag_name' | sed '/^$/d')
+	if [ -z "$releases" ]; then
+		fail "could not read GitHub Releases for $repo"
+	fi
 fi
 
 allowed=$(read_allowlist || true)
