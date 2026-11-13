@@ -15,7 +15,7 @@ This directory is the maintained source for proving that a person can install an
 - Run `sh .cursor/skills/verify-updater/scripts/verify-updater.sh <version>`.
 - The script prints `PASS` or `FAIL` and the command output for each check.
 - A FAIL stays a FAIL. Do not edit the cask, strip quarantine, or skip a command to turn it into a pass.
-- The menu-bar Update click is a separate entry point from `updater upgrade`. Do not report the click as verified because the CLI moved the version.
+- The menu-bar Update click is not driven. `menu-update` runs the command that click executes. Do not report the click as verified because that command moved the version.
 
 ## Proof and skip reporting
 
@@ -31,4 +31,4 @@ Each feature file has an H1, one paragraph, then four H2 sections: `Sub-features
 
 - [Install from the DMG](./install-from-dmg.md) covers the Release assets, the quarantined disk image, the app inside it, and launching that app.
 - [Homebrew cask](./homebrew-cask.md) covers the tap cask checksum and `brew upgrade` / `brew install` of `lu-zhengda/tap/updater`.
-- [Update Updater](./self-update.md) covers `updater upgrade` moving an older signed bundle to the published version.
+- [Update Updater](./self-update.md) covers `updater upgrade` and the menu-bar `update --bundle-id` command moving an older signed bundle to the published version.

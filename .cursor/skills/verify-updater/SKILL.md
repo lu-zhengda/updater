@@ -24,7 +24,7 @@ The version argument is `0.24.2` or `v0.24.2`. Omitted, the script uses the late
 
 The script is ready when it prints `RESULT pass=N fail=M` and exits. Exit `0` means every check passed. Any FAIL is exit `1`.
 
-`updater upgrade` from an app bundle schedules a helper and returns immediately with `self-update started; Updater will restart when ready`. The helper downloads `updater_<version>_darwin.tar.gz` for a copy that is not the Homebrew cask, checks the checksum and the Developer ID team, and replaces that bundle. A cask install runs `brew upgrade --cask lu-zhengda/tap/updater` instead. The menu bar **Update** action and `updater update --bundle-id com.updater.app` call the same helper. The harness drives `upgrade` on a temp copy of the previous published bundle so it does not replace `/Applications/Updater.app` as the self-update proof.
+`updater upgrade` from an app bundle schedules a helper and returns immediately with `self-update started; Updater will restart when ready`. The helper downloads `updater_<version>_darwin.tar.gz` for a copy that is not the Homebrew cask, checks the checksum and the Developer ID team, and replaces that bundle. A cask install runs `brew upgrade --cask lu-zhengda/tap/updater` instead. The menu bar **Update** action runs `<bundle>/Contents/MacOS/updater update --bundle-id <id>` (`cmd/updater/menubar_app.go`). The harness drives that command for `com.updater.app` on an older published bundle placed in `~/Applications`, after moving `/Applications/Updater.app` aside so discovery selects the older one. Clicking the status-item menu needs Accessibility permission for UI scripting, which this check does not request. `updater upgrade` remains the separate self-update proof.
 
 The menu-bar app starts when the binary is launched with no arguments and stdin is not a terminal (`cmd/updater/main.go`).
 
@@ -34,7 +34,7 @@ The menu-bar app starts when the binary is launched with no arguments and stdin 
 sh .cursor/skills/verify-updater/scripts/verify-updater.sh --doctor
 ```
 
-Doctor is read-only. It checks macOS and the tools the harness uses (`gh`, `curl`, `codesign`, `stapler`, `spctl`, `lipo`, `hdiutil`, `xattr`, `ditto`, `brew`, `python3`, `PlistBuddy`). It prints `brew info --cask lu-zhengda/tap/updater` and does not install, mount, or launch. Exit `1` only when a tool or macOS is missing. A cask that Homebrew cannot load is still worth driving: the brew checks record that failure.
+Doctor is read-only. It checks macOS and the tools the harness uses (`gh`, `curl`, `codesign`, `stapler`, `spctl`, `syspolicy_check`, `lipo`, `hdiutil`, `xattr`, `ditto`, `brew`, `python3`, `PlistBuddy`, `/usr/bin/log`). It prints `brew info --cask lu-zhengda/tap/updater` and does not install, mount, or launch. Exit `1` only when a tool or macOS is missing. A cask that Homebrew cannot load is still worth driving: the brew checks record that failure.
 
 Run doctor before a full proof, and again after a failed run whose process or mount was left behind. One full proof at a time. The self-update helper takes `~/.config/updater/update.lock`, and the log and history files are shared with the real app.
 
@@ -45,7 +45,8 @@ The feature map in `features/` is the source for the user journeys. The script r
 1. `release-published`, `release-assets`, `release-checksums`
 2. `dmg-trust`, `app-trust`, `launch`
 3. `self-update` on a temp copy of the previous published tarball
-4. `cask-metadata`, `brew-upgrade`, `brew-install`
+4. `menu-update`: `update --bundle-id com.updater.app` from the older bundle in `~/Applications`
+5. `cask-metadata`, `brew-upgrade`, `brew-install`
 
 `brew upgrade` runs before `brew install` so an older Homebrew receipt is still in place for the upgrade. The install and upgrade commands are only:
 
@@ -86,6 +87,7 @@ The script traps exit and:
 - sends SIGTERM, then SIGKILL, only to Updater processes that were not running when the script started and whose command line matches the temp bundle or `updater-self-helper-`
 - deletes helper directories created during the run
 - deletes its temp work directory
+- restores `/Applications/Updater.app` and `~/Applications/Updater.app` if the menu-bar update check moved them
 - restores `/Applications/Updater.app` from a `ditto` backup if a failed self-update or brew command changed or removed it
 - restores `Casks/updater.rb` in the Homebrew tap if a downgrade swapped it
 

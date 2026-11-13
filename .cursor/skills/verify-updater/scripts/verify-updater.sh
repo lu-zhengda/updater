@@ -75,6 +75,9 @@ cleanup() {
 			rm -rf "$dir"
 		done
 	fi
+	if [ -n "$work" ] && [ -d "$work/menu-aside" ]; then
+		restore_menu_paths
+	fi
 	if [ -n "$work" ] && [ -d "$work" ]; then
 		rm -rf "$work"
 	fi
@@ -126,7 +129,7 @@ quit_new_matching() {
 
 require_tools() {
 	missing=0
-	for tool in gh curl shasum codesign stapler spctl lipo hdiutil xattr ditto tar python3 open uuidgen awk; do
+	for tool in gh curl shasum codesign stapler spctl syspolicy_check lipo hdiutil xattr ditto tar python3 open uuidgen awk; do
 		if ! command -v "$tool" >/dev/null 2>&1; then
 			say "missing tool: $tool"
 			missing=1
@@ -138,6 +141,10 @@ require_tools() {
 	fi
 	if [ ! -x /usr/libexec/PlistBuddy ]; then
 		say "missing tool: /usr/libexec/PlistBuddy"
+		missing=1
+	fi
+	if [ ! -x /usr/bin/log ]; then
+		say "missing tool: /usr/bin/log"
 		missing=1
 	fi
 	uname_s=$(uname -s)
@@ -290,7 +297,7 @@ find_new_pid() {
 	path=$1
 	ps -axo pid=,command= | while IFS= read -r line; do
 		case $line in
-		*"$path"*)
+		*"$path"*|*"AppTranslocation/"*"Updater.app/Contents/MacOS/updater"*)
 			set -- $line
 			if pid_is_new "$1"; then
 				printf '%s\n' "$1"
@@ -647,6 +654,43 @@ check_app_trust() {
 	return "$ok"
 }
 
+restore_menu_paths() {
+	home_app=$HOME/Applications/Updater.app
+	if [ -f "$work/menu-aside/placed-home" ]; then
+		rm -rf "$home_app"
+	fi
+	if [ -d "$work/menu-aside/home-Updater.app" ]; then
+		mkdir -p "$HOME/Applications"
+		rm -rf "$home_app"
+		mv "$work/menu-aside/home-Updater.app" "$home_app"
+	fi
+	if [ -d "$work/menu-aside/applications-Updater.app" ]; then
+		rm -rf "$INSTALLED_APP"
+		mv "$work/menu-aside/applications-Updater.app" "$INSTALLED_APP"
+	fi
+}
+
+gatekeeper_log_rejects() {
+	run_timed 25 "$work/gk-log" /usr/bin/log show --style compact --last 2m \
+		--predicate 'subsystem == "com.apple.syspolicy.exec" OR subsystem == "com.apple.syspolicy"'
+	say "log show exit=$run_to_status"
+	say_file "$work/gk-log.out"
+	say_file "$work/gk-log.err"
+	if [ "$run_to_status" -ne 0 ]; then
+		say "Gatekeeper log was not readable; syspolicy_check and spctl are the assessment"
+		return 0
+	fi
+	if grep -F 'com.updater.app' "$work/gk-log.out" | grep -E -i 'reject|denied|violat|assessment denied' >/dev/null; then
+		say "Gatekeeper log recorded a rejection for com.updater.app"
+		return 1
+	fi
+	if grep -F 'com.updater.app' "$work/gk-log.out" | grep -F 'Prompt shown' >/dev/null; then
+		say "Gatekeeper logged a prompt for com.updater.app; the process still has to be running"
+	fi
+	say "Gatekeeper log has no rejection for com.updater.app"
+	return 0
+}
+
 check_launch() {
 	if [ -z "$mounted_app" ] || [ ! -d "$mounted_app" ]; then
 		say "no mounted app to launch"
@@ -657,9 +701,33 @@ check_launch() {
 	ditto "$mounted_app" "$launch"
 	apply_quarantine "$launch"
 	bin=$launch/Contents/MacOS/updater
+	qvalue=$(xattr -p com.apple.quarantine "$launch" 2>/dev/null || true)
+	say "copied app quarantine=$qvalue"
+	case $qvalue in
+	0083\;*\;Safari\;*) ;;
+	*)
+		say "quarantine xattr is not the browser-download flag"
+		return 1
+		;;
+	esac
+
+	run_to "$work/syspolicy" syspolicy_check distribution --verbose "$launch"
+	say "syspolicy_check distribution exit=$run_to_status"
+	say_file "$work/syspolicy.out"
+	say_file "$work/syspolicy.err"
+	if [ "$run_to_status" -ne 0 ]; then
+		return 1
+	fi
+	run_to "$work/launch-spctl" spctl --assess --type execute --verbose "$launch"
+	say "spctl --assess --type execute exit=$run_to_status"
+	say_file "$work/launch-spctl.out"
+	say_file "$work/launch-spctl.err"
+	if [ "$run_to_status" -ne 0 ]; then
+		return 1
+	fi
+
 	method=
 	pid=
-
 	run_timed 20 "$work/open" open -n "$launch"
 	say "open -n exit=$run_to_status"
 	say_file "$work/open.out"
@@ -671,20 +739,15 @@ check_launch() {
 		click_gatekeeper_open
 		if pid=$(wait_for_new_pid "$bin" 12); then
 			method="open -n after clicking the Gatekeeper Open button"
-		else
-			say "Gatekeeper first-launch dialog was not completed headlessly."
-			say "Checked instead: start the quarantined Mach-O directly. stdin is not a terminal, so the bundle takes the menu-bar path."
-			"$bin" </dev/null >"$work/direct.out" 2>"$work/direct.err" &
-			sleep 1
-			if pid=$(wait_for_new_pid "$bin" 12); then
-				method="direct exec of the quarantined binary; the LaunchServices first-open dialog was not clicked"
-			fi
-			say "direct exec stderr:"
-			say_file "$work/direct.err"
 		fi
 	fi
 	if [ -z "$method" ] || [ -z "$pid" ]; then
-		say "quarantined app process did not stay running"
+		say "LaunchServices did not keep the quarantined app running"
+		say "The raw Mach-O was not executed. A first-open dialog that System Events cannot click needs Accessibility permission for the process running this script."
+		return 1
+	fi
+	if ! gatekeeper_log_rejects; then
+		kill -TERM "$pid" 2>/dev/null || true
 		return 1
 	fi
 	say "running pid=$pid method=$method"
@@ -703,6 +766,102 @@ check_launch() {
 	kill -KILL "$pid" 2>/dev/null || true
 	say "quit pid=$pid with SIGKILL after SIGTERM"
 	say "launch method: $method"
+	return 0
+}
+
+check_menu_update() {
+	prev=$(previous_version) || {
+		say "no older published release for the menu-bar update path"
+		return 1
+	}
+	say "menu-bar update uses older bundle $prev"
+	base=https://github.com/$REPO/releases/download/v$prev
+	mkdir -p "$work/menu-old"
+	if ! download "$base/checksums.txt" "$work/menu-old/checksums.txt"; then
+		say "download failed: v$prev checksums.txt"
+		return 1
+	fi
+	tar_name=updater_${prev}_darwin.tar.gz
+	if ! download "$base/$tar_name" "$work/menu-old/$tar_name"; then
+		say "download failed: $tar_name"
+		return 1
+	fi
+	expected=$(checksum_for "$work/menu-old/checksums.txt" "$tar_name")
+	actual=$(sha256_file "$work/menu-old/$tar_name")
+	say "menu older tarball expected=$expected actual=$actual"
+	if [ -z "$expected" ] || [ "$expected" != "$actual" ]; then
+		return 1
+	fi
+	mkdir -p "$work/menu-old/root"
+	tar -xzf "$work/menu-old/$tar_name" -C "$work/menu-old/root"
+	old_app=$work/menu-old/root/Updater.app
+	if [ ! -d "$old_app" ]; then
+		say "older tarball has no Updater.app"
+		return 1
+	fi
+	old_ver=$(bundle_version "$old_app" 2>/dev/null || printf '%s' missing)
+	say "menu older CFBundleShortVersionString=$old_ver"
+	if [ "$old_ver" = "$version" ]; then
+		say "older bundle is already $version"
+		return 1
+	fi
+	expect=$version
+	latest_tag=$(gh api "repos/$REPO/releases/latest" --jq '.tag_name' 2>/dev/null || true)
+	if [ -n "$latest_tag" ]; then
+		latest=$(normalize_version "$latest_tag")
+		if [ "$latest" != "$version" ]; then
+			expect=$latest
+			say "the menu-bar path installs the latest release $expect; this run's version is $version"
+		fi
+	fi
+
+	mkdir -p "$work/menu-aside" "$HOME/Applications"
+	home_app=$HOME/Applications/Updater.app
+	if [ -d "$home_app" ]; then
+		mv "$home_app" "$work/menu-aside/home-Updater.app" || return 1
+	fi
+	if [ -d "$INSTALLED_APP" ]; then
+		mv "$INSTALLED_APP" "$work/menu-aside/applications-Updater.app" || return 1
+	fi
+	: >"$work/menu-aside/placed-home"
+	ditto "$old_app" "$home_app" || return 1
+	placed=$(bundle_version "$home_app" 2>/dev/null || printf '%s' missing)
+	say "placed $placed at $home_app and moved $INSTALLED_APP aside so discovery finds this bundle"
+	bin=$home_app/Contents/MacOS/updater
+	say "command: $bin update --bundle-id com.updater.app"
+	say "that is the command the menu-bar Update item runs"
+	"$bin" update --bundle-id com.updater.app >"$work/menu-update.out" 2>"$work/menu-update.err" &
+	menu_pid=$!
+	deadline=$(( $(date +%s) + 180 ))
+	got=$placed
+	while [ "$(date +%s)" -lt "$deadline" ]; do
+		got=$(bundle_version "$home_app" 2>/dev/null || printf '%s' missing)
+		if [ "$got" = "$expect" ]; then
+			break
+		fi
+		if [ -n "${menu_pid:-}" ] && ! kill -0 "$menu_pid" 2>/dev/null; then
+			wait "$menu_pid" || true
+			menu_pid=
+		fi
+		sleep 2
+	done
+	if [ -n "${menu_pid:-}" ] && kill -0 "$menu_pid" 2>/dev/null; then
+		kill -TERM "$menu_pid" 2>/dev/null || true
+		sleep 1
+		kill -KILL "$menu_pid" 2>/dev/null || true
+	fi
+	say "menu update stdout:"
+	say_file "$work/menu-update.out"
+	say "menu update stderr:"
+	say_file "$work/menu-update.err"
+	say "bundle version after menu update=$got expected=$expect"
+	quit_new_matching "$home_app"
+	quit_new_matching "updater-self-helper-"
+	restore_menu_paths
+	rm -f "$work/menu-aside/placed-home"
+	if [ "$got" != "$expect" ]; then
+		return 1
+	fi
 	return 0
 }
 
@@ -1067,6 +1226,17 @@ main() {
 		restore_installed_app_if_changed || true
 	fi
 	record "$self_status" self-update
+
+	say "CHECK menu-update"
+	set +e
+	check_menu_update
+	menu_status=$?
+	set -e
+	restore_menu_paths
+	if [ "$menu_status" -ne 0 ]; then
+		restore_installed_app_if_changed || true
+	fi
+	record "$menu_status" menu-update
 
 	say "CHECK cask-metadata"
 	set +e

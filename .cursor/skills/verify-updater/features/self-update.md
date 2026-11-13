@@ -6,6 +6,7 @@ Updater can replace itself. An older signed copy, asked to upgrade, ends on the 
 
 - `older-bundle` installs the newest older published Release that has `updater_<version>_darwin.tar.gz`, checks that archive's checksum, and reads a signed `Updater.app` from it.
 - `self-update` runs that bundle's `upgrade` command and waits until its `CFBundleShortVersionString` is the target version.
+- `menu-update` runs `update --bundle-id com.updater.app` from a second copy of that older bundle. That is the command the menu-bar **Update** item executes.
 
 ## How to get to it (user POV)
 
@@ -25,6 +26,7 @@ Preconditions:
 - **Install that bundle in temp.** `curl` the tarball and `checksums.txt`, match `shasum -a 256`, and `tar -xzf` it. `Updater.app` is at the archive root. `codesign -dvv` is recorded. `CFBundleShortVersionString` is the older version.
 - **Upgrade.** Run `<temp>/Updater.app/Contents/MacOS/updater upgrade`. A bundle install schedules a detached helper (`self-upgrade <bundle>`) and prints `self-update started; Updater will restart when ready`. Poll the temp bundle's plist for up to 180 seconds.
 - **Confirm.** The temp bundle's `CFBundleShortVersionString` equals the target. New lines in `~/.config/updater/logs/self-update.log` are part of the transcript. `/Applications/Updater.app` is unchanged. `PASS self-update`.
+- **Menu-bar Update command.** Download the same older tarball again. Move `~/Applications/Updater.app` and `/Applications/Updater.app` aside, put the older bundle at `~/Applications/Updater.app`, and run its `Contents/MacOS/updater update --bundle-id com.updater.app`. Discovery scans `/Applications` first, so the Applications copy has to be out of the way or the command updates that one instead. Poll the home bundle until its version is the latest GitHub Release (the helper installs latest, which is the version under test when that is current). Restore both apps. `PASS menu-update`.
 - **Stop the helper.** SIGTERM, then SIGKILL if needed, for new processes whose command contains the temp bundle or `updater-self-helper-`. Remove helper directories created during the run.
 
 ## Gotchas
@@ -33,5 +35,5 @@ Preconditions:
 - A Homebrew cask path runs `brew upgrade --cask lu-zhengda/tap/updater` inside the helper. The temp bundle is not the cask, so this journey uses the tarball replacement path. The Homebrew feature covers the cask path.
 - The helper refuses the replacement unless the old app has a Developer ID team and the downloaded app matches that team, bundle id, and Gatekeeper's execute assessment. An ad-hoc older bundle failing here is a FAIL, not a prompt to disable the check.
 - The helper appends `~/.config/updater/logs/self-update.log` and `~/.local/share/updater/history.json`. Cleanup does not delete them.
-- The menu-bar click, the updates window, and YOLO Mode are not headless. Say they were not driven. Do not report `PASS` for them because `upgrade` succeeded.
+- The menu-bar click, the updates window, and YOLO Mode are not headless. The status item lives in `SystemUIServer` / the menu bar extra, and clicking it needs an Accessibility (TCC) grant for the process that runs UI scripting. This script does not prompt for that grant. The automated path is the same argv the menu item uses: `update --bundle-id com.updater.app` from the older bundle. Do not report the click itself as `PASS`.
 - `upgrade` on a loose binary under `/opt/homebrew` prints `Installed via Homebrew` and does not replace the app. Drive the `Updater.app` bundle, not that symlink.
