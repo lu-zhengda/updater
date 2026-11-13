@@ -153,20 +153,16 @@ mutations = [
         "name": "leave a missing app unrestored",
         "file": "cmd/updater/self_upgrade.go",
         "old": """	backup, err := findUpdaterBackup(bundle)
-	if err != nil || backup == "" {
+	if err != nil {
 		return false, err
 	}
-	// Hold the same exclusive lock as brew. A helper still inside brew keeps
-	// the backup; this waits, then looks again.
-	lock, err := updateActivityLock(ctx, true)""",
+	stages, err := listSelfStages(bundle)""",
         "new": """	return false, nil
 	backup, err := findUpdaterBackup(bundle)
-	if err != nil || backup == "" {
+	if err != nil {
 		return false, err
 	}
-	// Hold the same exclusive lock as brew. A helper still inside brew keeps
-	// the backup; this waits, then looks again.
-	lock, err := updateActivityLock(ctx, true)""",
+	stages, err := listSelfStages(bundle)""",
         "args": [
             "go", "test", "-count=1", "-timeout", "180s",
             "-run", "TestRecoverStrandedUpdater",

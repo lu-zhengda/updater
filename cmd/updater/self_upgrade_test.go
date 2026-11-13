@@ -2,6 +2,7 @@ package main
 
 import (
 	"archive/tar"
+	"bufio"
 	"bytes"
 	"compress/gzip"
 	"context"
@@ -56,7 +57,10 @@ type selfUpgradeTestRunner struct {
 	t                            *testing.T
 	bundle                       string
 	brew, fail, managed, stopped bool
+	failRefresh                  bool
+	refreshed                    bool
 	caskVersion                  string
+	staleCask                    string
 	brewVersion                  string
 	calls                        []string
 }
@@ -74,6 +78,23 @@ func TestMain(m *testing.M) {
 		}
 		os.Exit(1)
 	}
+	// macOS flock is per process, so a second open in this process does not
+	// conflict. A child holds the stage lock the way the self-update helper does.
+	if path := os.Getenv("UPDATER_STAGE_HOLD"); path != "" {
+		f, err := os.OpenFile(path, os.O_RDWR, 0)
+		if err != nil {
+			os.Exit(2)
+		}
+		if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+			os.Exit(2)
+		}
+		if _, err := os.Stdout.Write([]byte("held\n")); err != nil {
+			os.Exit(2)
+		}
+		_ = os.Stdout.Sync()
+		time.Sleep(time.Minute)
+		os.Exit(0)
+	}
 	os.Exit(m.Run())
 }
 
@@ -83,7 +104,7 @@ func probeUpdateLockHeld(t *testing.T) {
 	cmd := exec.Command(os.Args[0], "-test.run=^$")
 	cmd.Env = append([]string{"UPDATER_LOCK_PROBE=" + path}, os.Environ()...)
 	if err := cmd.Run(); err != nil {
-		t.Fatalf("update.lock was not held across brew: %v", err)
+		t.Fatalf("update.lock was not held: %v", err)
 	}
 }
 
@@ -96,12 +117,30 @@ func (r *selfUpgradeTestRunner) Run(_ context.Context, name string, args ...stri
 			return []byte(r.bundle + "\n"), nil
 		}
 		return nil, errors.New("not installed via brew")
+	case key == "brew --repository "+updaterTap:
+		if r.failRefresh {
+			return nil, errors.New("tap repository unavailable")
+		}
+		return []byte("/opt/homebrew/Library/Taps/lu-zhengda/homebrew-tap\n"), nil
+	case strings.HasPrefix(key, "brew update-reset "):
+		probeUpdateLockHeld(r.t)
+		if r.failRefresh {
+			return nil, errors.New("tap refresh failed")
+		}
+		r.refreshed = true
+		return nil, nil
 	case strings.HasPrefix(key, "brew info --cask --json=v2 "):
+		probeUpdateLockHeld(r.t)
 		version := r.caskVersion
 		if version == "" {
 			version = "2.0.0"
 		}
+		if r.staleCask != "" && !r.refreshed {
+			version = r.staleCask
+		}
 		return []byte(`{"casks":[{"token":"updater","version":"` + version + `"}]}`), nil
+	case name == "/usr/bin/codesign":
+		return nil, nil
 	case name == "/usr/bin/ditto":
 		return nil, os.CopyFS(args[1], os.DirFS(args[0]))
 	case key == "brew upgrade --cask "+updaterCask:
@@ -412,7 +451,7 @@ func TestSelfUpgradeRefusesLowCaskVersion(t *testing.T) {
 			}
 			verifySelfUpgrade = func(context.Context, string, string) error { return nil }
 			runner := &selfUpgradeTestRunner{t: t, bundle: bundle, brew: true, caskVersion: tc.cask, brewVersion: tc.cask}
-			_, err := applySelfUpgrade(context.Background(), bundle, runner)
+			message, err := applySelfUpgrade(context.Background(), bundle, runner)
 			upgraded := false
 			for _, call := range runner.calls {
 				if strings.HasPrefix(call, "brew upgrade ") {
@@ -426,8 +465,9 @@ func TestSelfUpgradeRefusesLowCaskVersion(t *testing.T) {
 				}
 				return
 			}
-			if err == nil || upgraded || readErr != nil || info.Version != tc.installed {
-				t.Fatalf("err=%v upgraded=%t bundle=%+v read=%v", err, upgraded, info, readErr)
+			const want = "Homebrew doesn't have Updater 3.0.0 yet; try again in a few minutes"
+			if err != nil || message != want || upgraded || readErr != nil || info.Version != tc.installed {
+				t.Fatalf("message=%q err=%v upgraded=%t bundle=%+v read=%v", message, err, upgraded, info, readErr)
 			}
 		})
 	}
@@ -524,6 +564,223 @@ func (r *recoverRunner) Run(_ context.Context, name string, args ...string) ([]b
 		return []byte("code object is not signed at all"), errors.New("exit status 1")
 	}
 	return nil, fmt.Errorf("unexpected command %s", name)
+}
+
+func TestSelfUpgradeRefreshesStaleTap(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		failRefresh bool
+		stale, live string
+		wantUpgrade bool
+	}{
+		// brew info reports the installed cask until update-reset, then the release.
+		{name: "stale tap then release", stale: "0.24.5", live: "0.24.6", wantUpgrade: true},
+		{name: "refresh failure still reads a current cask", failRefresh: true, live: "2.0.0", wantUpgrade: true},
+		{name: "refresh failure leaves a stale cask waiting", failRefresh: true, stale: "0.24.5", live: "0.24.5"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("HOME", t.TempDir())
+			bundle := filepath.Join(t.TempDir(), "Updater.app")
+			writeSelfBundle(t, bundle, "0.24.5")
+			oldRelease, oldVerify := selfUpgradeRelease, verifySelfUpgrade
+			t.Cleanup(func() { selfUpgradeRelease, verifySelfUpgrade = oldRelease, oldVerify })
+			tag := "v0.24.6"
+			if tc.live == "2.0.0" {
+				tag = "v2.0.0"
+			}
+			selfUpgradeRelease = func(string) (*checker.GitHubRelease, error) {
+				return &checker.GitHubRelease{TagName: tag}, nil
+			}
+			verifySelfUpgrade = func(context.Context, string, string) error { return nil }
+			runner := &selfUpgradeTestRunner{
+				t: t, bundle: bundle, brew: true, failRefresh: tc.failRefresh,
+				caskVersion: tc.live, staleCask: tc.stale, brewVersion: tc.live,
+			}
+			message, err := applySelfUpgrade(context.Background(), bundle, runner)
+			var infoAt, resetAt = -1, -1
+			upgraded := false
+			for i, call := range runner.calls {
+				switch {
+				case strings.HasPrefix(call, "brew update-reset "):
+					resetAt = i
+				case strings.HasPrefix(call, "brew info "):
+					infoAt = i
+				case strings.HasPrefix(call, "brew upgrade "):
+					upgraded = true
+				}
+			}
+			if tc.failRefresh {
+				if resetAt >= 0 {
+					t.Fatalf("refresh continued after the repository lookup failed: %v", runner.calls)
+				}
+			} else if resetAt < 0 || infoAt < resetAt {
+				t.Fatalf("tap refresh must finish before brew info: %v", runner.calls)
+			}
+			info, readErr := readUpdaterBundle(bundle)
+			if tc.wantUpgrade {
+				if err != nil || !upgraded || readErr != nil || info.Version != tc.live {
+					t.Fatalf("message=%q err=%v upgraded=%t bundle=%+v read=%v calls=%v", message, err, upgraded, info, readErr, runner.calls)
+				}
+				return
+			}
+			want := "Homebrew doesn't have Updater 0.24.6 yet; try again in a few minutes"
+			if err != nil || message != want || upgraded || readErr != nil || info.Version != "0.24.5" {
+				t.Fatalf("message=%q err=%v upgraded=%t bundle=%+v read=%v", message, err, upgraded, info, readErr)
+			}
+		})
+	}
+}
+
+func TestCleanStaleSelfStages(t *testing.T) {
+	t.Run("signed app drops backups and leftovers", func(t *testing.T) {
+		t.Setenv("HOME", t.TempDir())
+		parent := t.TempDir()
+		bundle := filepath.Join(parent, "Updater.app")
+		writeSelfBundle(t, bundle, "2.0.0")
+		writeStageFile(t, parent, ".updater-self-843450262", "")
+		writeStageFile(t, parent, ".updater-self-3414085168", "release-old.tar.gz")
+		writeSelfBundle(t, filepath.Join(parent, ".updater-self-prev", "Previous.app"), "1.0.0")
+		busy := filepath.Join(parent, ".updater-self-busy")
+		if err := os.MkdirAll(busy, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		lockPath := filepath.Join(busy, selfStageLockName)
+		if err := os.WriteFile(lockPath, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		holder := exec.Command(os.Args[0], "-test.run=^$")
+		holder.Env = append(os.Environ(), "UPDATER_STAGE_HOLD="+lockPath)
+		holderOut, err := holder.StdoutPipe()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := holder.Start(); err != nil {
+			t.Fatal(err)
+		}
+		defer func() {
+			_ = holder.Process.Kill()
+			_ = holder.Wait()
+		}()
+		if line, err := bufio.NewReader(holderOut).ReadString('\n'); err != nil || line != "held\n" {
+			t.Fatalf("stage holder: %q %v", line, err)
+		}
+		restored, err := recoverStrandedUpdater(context.Background(), bundle, &recoverRunner{signed: true})
+		if err != nil || restored {
+			t.Fatalf("restored=%t err=%v", restored, err)
+		}
+		info, readErr := readUpdaterBundle(bundle)
+		if readErr != nil || info.Version != "2.0.0" {
+			t.Fatalf("bundle: %+v, %v", info, readErr)
+		}
+		if _, statErr := os.Stat(busy); statErr != nil {
+			t.Fatalf("in-use stage was removed: %v", statErr)
+		}
+		for _, name := range []string{".updater-self-843450262", ".updater-self-3414085168", ".updater-self-prev"} {
+			if _, statErr := os.Lstat(filepath.Join(parent, name)); !os.IsNotExist(statErr) {
+				t.Fatalf("%s still present: %v", name, statErr)
+			}
+		}
+	})
+
+	t.Run("missing app keeps a restorable backup and drops junk", func(t *testing.T) {
+		t.Setenv("HOME", t.TempDir())
+		parent := t.TempDir()
+		bundle := filepath.Join(parent, "Updater.app")
+		writeStageFile(t, parent, ".updater-self-843450262", "")
+		writeStageFile(t, parent, ".updater-self-3414085168", "release-old.tar.gz")
+		if err := os.MkdirAll(filepath.Join(parent, ".updater-self-bogus", "Previous.app"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(parent, ".updater-self-bogus", "Previous.app", "note"), []byte("no"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		older := filepath.Join(parent, ".updater-self-old", "Previous.app")
+		newer := filepath.Join(parent, ".updater-self-new", "Previous.app")
+		writeSelfBundle(t, older, "1.0.0")
+		writeSelfBundle(t, newer, "1.1.0")
+		oldTime := time.Now().Add(-2 * time.Hour)
+		newTime := time.Now().Add(-time.Hour)
+		if err := os.Chtimes(older, oldTime, oldTime); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chtimes(newer, newTime, newTime); err != nil {
+			t.Fatal(err)
+		}
+		restored, err := recoverStrandedUpdater(context.Background(), bundle, &recoverRunner{signed: false})
+		if err != nil || !restored {
+			t.Fatalf("restored=%t err=%v", restored, err)
+		}
+		info, readErr := readUpdaterBundle(bundle)
+		if readErr != nil || info.Version != "1.1.0" {
+			t.Fatalf("bundle: %+v, %v", info, readErr)
+		}
+		kept, readErr := readUpdaterBundle(older)
+		if readErr != nil || kept.Version != "1.0.0" {
+			t.Fatalf("older backup: %+v, %v", kept, readErr)
+		}
+		for _, name := range []string{".updater-self-843450262", ".updater-self-3414085168", ".updater-self-bogus", ".updater-self-new"} {
+			if _, statErr := os.Lstat(filepath.Join(parent, name)); !os.IsNotExist(statErr) {
+				t.Fatalf("%s still present: %v", name, statErr)
+			}
+		}
+	})
+
+	t.Run("unsigned app is restored and junk is removed", func(t *testing.T) {
+		t.Setenv("HOME", t.TempDir())
+		parent := t.TempDir()
+		bundle := filepath.Join(parent, "Updater.app")
+		writeSelfBundle(t, bundle, "9.0.0")
+		writeStageFile(t, parent, ".updater-self-3414085168", "release-old.tar.gz")
+		writeSelfBundle(t, filepath.Join(parent, ".updater-self-prev", "Previous.app"), "1.0.0")
+		restored, err := recoverStrandedUpdater(context.Background(), bundle, &recoverRunner{signed: false})
+		if err != nil || !restored {
+			t.Fatalf("restored=%t err=%v", restored, err)
+		}
+		info, readErr := readUpdaterBundle(bundle)
+		if readErr != nil || info.Version != "1.0.0" {
+			t.Fatalf("bundle: %+v, %v", info, readErr)
+		}
+		if _, statErr := os.Lstat(filepath.Join(parent, ".updater-self-3414085168")); !os.IsNotExist(statErr) {
+			t.Fatalf("tarball stage still present: %v", statErr)
+		}
+	})
+
+	t.Run("self-upgrade removes leftovers before an up-to-date return", func(t *testing.T) {
+		t.Setenv("HOME", t.TempDir())
+		parent := t.TempDir()
+		bundle := filepath.Join(parent, "Updater.app")
+		writeSelfBundle(t, bundle, "1.0.0")
+		writeStageFile(t, parent, ".updater-self-843450262", "")
+		writeStageFile(t, parent, ".updater-self-3414085168", "release-old.tar.gz")
+		oldRelease := selfUpgradeRelease
+		t.Cleanup(func() { selfUpgradeRelease = oldRelease })
+		selfUpgradeRelease = func(string) (*checker.GitHubRelease, error) {
+			return &checker.GitHubRelease{TagName: "v1.0.0"}, nil
+		}
+		message, err := applySelfUpgrade(context.Background(), bundle, &selfUpgradeTestRunner{t: t, bundle: bundle})
+		if err != nil || message != "Updater is already up to date (1.0.0)" {
+			t.Fatalf("message=%q err=%v", message, err)
+		}
+		for _, name := range []string{".updater-self-843450262", ".updater-self-3414085168"} {
+			if _, statErr := os.Lstat(filepath.Join(parent, name)); !os.IsNotExist(statErr) {
+				t.Fatalf("%s still present: %v", name, statErr)
+			}
+		}
+	})
+}
+
+func writeStageFile(t *testing.T, parent, dir, name string) {
+	t.Helper()
+	path := filepath.Join(parent, dir)
+	if err := os.MkdirAll(path, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if name == "" {
+		return
+	}
+	if err := os.WriteFile(filepath.Join(path, name), []byte("leftover"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestSelfUpgradeArchiveRejectsUnsafeEntries(t *testing.T) {

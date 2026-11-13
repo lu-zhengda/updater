@@ -26,7 +26,14 @@ import (
 	"howett.net/plist"
 )
 
-const updaterCask = "lu-zhengda/tap/updater"
+const (
+	updaterCask = "lu-zhengda/tap/updater"
+	updaterTap  = "lu-zhengda/tap"
+	// Held while a self-update is using the stage directory. Cleanup skips a
+	// stage whose lock is held, including the download that runs before
+	// update.lock. A crash drops the flock, so the next run can remove it.
+	selfStageLockName = ".inuse"
+)
 
 func init() {
 	rootCmd.AddCommand(&cobra.Command{
@@ -207,7 +214,11 @@ var verifySelfUpgrade = func(ctx context.Context, installed, candidate string) e
 // caskVersionAllowed is the guard in front of `brew upgrade --cask`.
 // Homebrew's cask version and the GitHub tag are not the same number.
 // Refuse a cask version lower than the target release or the installed app
-// so brew is never asked to install that downgrade.
+// so brew is never asked to install that downgrade. A cask that is newer
+// than the installed app but still lower than the target is refused too:
+// it is not the release. Running brew would install it, the post-check
+// would roll it back, and a kill before that check would leave it in place.
+// The next launch would then see a signed app and drop the backup.
 func caskVersionAllowed(cask, target, installed string) bool {
 	target = versionpkg.ReleaseVersion(target)
 	installed = versionpkg.ReleaseVersion(installed)
@@ -215,6 +226,35 @@ func caskVersionAllowed(cask, target, installed string) bool {
 		return false
 	}
 	return true
+}
+
+// homebrewCaskWaitMessage is the result when the tap does not yet have a
+// cask version the guard can accept. That is not a failed install.
+func homebrewCaskWaitMessage(target string) string {
+	return fmt.Sprintf("Homebrew doesn't have Updater %s yet; try again in a few minutes", versionpkg.ReleaseVersion(target))
+}
+
+// refreshUpdaterTap updates Homebrew's checkout of the Updater tap before
+// brew info. brew info does not auto-update. brew update fetches every tap
+// and a positional argument is rerun as brew upgrade, so it cannot name one
+// tap. brew upgrade auto-updates by execing brew update --auto-update, which
+// is that same full fetch and skips when Homebrew's own FETCH_HEAD is newer
+// than the auto-update interval. brew update-reset on the tap repository
+// fetches and resets only that git checkout. A failure is ignored: the
+// version guard still runs on whatever brew info reports.
+func refreshUpdaterTap(ctx context.Context, runner checker.CmdRunner) {
+	if err := ctx.Err(); err != nil {
+		return
+	}
+	out, err := runner.Run(ctx, "brew", "--repository", updaterTap)
+	if err != nil {
+		return
+	}
+	repo := strings.TrimSpace(string(out))
+	if repo == "" || ctx.Err() != nil {
+		return
+	}
+	_, _ = runner.Run(ctx, "brew", "update-reset", repo)
 }
 
 func readCaskVersion(ctx context.Context, runner checker.CmdRunner) (string, error) {
@@ -261,11 +301,19 @@ func findUpdaterBackup(bundle string) (string, error) {
 // recoverStrandedUpdater restores the ditto backup when the installed app is
 // missing or not Developer ID signed. A kill during `brew upgrade` does not
 // run the in-process rollback; the next self-upgrade run and the next launch
-// do. The backup is the Previous.app left in the stage directory.
+// do. The backup is the Previous.app left in the stage directory. The same
+// lock covers removal of stage directories recovery does not need.
 func recoverStrandedUpdater(ctx context.Context, bundle string, runner checker.CmdRunner) (bool, error) {
 	backup, err := findUpdaterBackup(bundle)
-	if err != nil || backup == "" {
+	if err != nil {
 		return false, err
+	}
+	stages, err := listSelfStages(bundle)
+	if err != nil {
+		return false, err
+	}
+	if backup == "" && len(stages) == 0 {
+		return false, nil
 	}
 	// Hold the same exclusive lock as brew. A helper still inside brew keeps
 	// the backup; this waits, then looks again.
@@ -274,21 +322,118 @@ func recoverStrandedUpdater(ctx context.Context, bundle string, runner checker.C
 		return false, err
 	}
 	defer lock.Close()
+	installedOK, err := installedUpdaterOK(ctx, bundle, runner)
+	if err != nil {
+		return false, err
+	}
+	// A restorable Previous.app stays while the app is missing or unsigned.
+	// An empty stage, a leftover tarball, or a backup the signed app no
+	// longer needs is removed. A stage whose flock is held is left alone.
+	if err := removeStaleSelfStages(bundle, !installedOK); err != nil {
+		return false, err
+	}
+	if installedOK {
+		return false, nil
+	}
 	backup, err = findUpdaterBackup(bundle)
 	if err != nil || backup == "" {
 		return false, err
 	}
-	if _, statErr := os.Lstat(bundle); statErr == nil {
-		if sigErr := verifyInstalledBundle(ctx, bundle, runner); sigErr == nil {
-			return false, nil
-		}
-	} else if !os.IsNotExist(statErr) {
-		return false, statErr
-	}
 	if _, _, err = restoreUpdaterBundle(bundle, backup, filepath.Join(filepath.Dir(backup), "Failed.app")); err != nil {
 		return false, err
 	}
+	if err := removeStaleSelfStages(bundle, true); err != nil {
+		return true, err
+	}
 	return true, nil
+}
+
+// installedUpdaterOK reports whether the bundle is present and Developer ID
+// signed. A missing or unsigned app is not an error: recovery may restore it.
+func installedUpdaterOK(ctx context.Context, bundle string, runner checker.CmdRunner) (bool, error) {
+	if _, err := os.Lstat(bundle); err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	if err := verifyInstalledBundle(ctx, bundle, runner); err != nil {
+		if ctx.Err() != nil {
+			return false, ctx.Err()
+		}
+		return false, nil
+	}
+	return true, nil
+}
+
+func listSelfStages(bundle string) ([]string, error) {
+	return filepath.Glob(filepath.Join(filepath.Dir(bundle), ".updater-self-*"))
+}
+
+func restorablePrevious(dir string) bool {
+	_, err := readUpdaterBundle(filepath.Join(dir, "Previous.app"))
+	return err == nil
+}
+
+func holdSelfStage(dir string) (*os.File, error) {
+	f, err := os.OpenFile(filepath.Join(dir, selfStageLockName), os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+		f.Close()
+		return nil, err
+	}
+	return f, nil
+}
+
+// selfStageBusy reports whether another process holds the stage flock.
+// A missing lock file is not busy. A crash releases the flock.
+func selfStageBusy(dir string) bool {
+	f, err := os.Open(filepath.Join(dir, selfStageLockName))
+	if err != nil {
+		return !os.IsNotExist(err)
+	}
+	defer f.Close()
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		return true
+	}
+	_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+	return false
+}
+
+// removeStaleSelfStages deletes .updater-self-* directories beside the bundle.
+// keepRestorable leaves a directory whose Previous.app can still be restored.
+func removeStaleSelfStages(bundle string, keepRestorable bool) error {
+	dirs, err := listSelfStages(bundle)
+	if err != nil {
+		return err
+	}
+	for _, dir := range dirs {
+		info, statErr := os.Lstat(dir)
+		if statErr != nil {
+			continue
+		}
+		if !info.IsDir() {
+			if rmErr := os.Remove(dir); rmErr != nil && !os.IsNotExist(rmErr) {
+				return rmErr
+			}
+			continue
+		}
+		if selfStageBusy(dir) {
+			continue
+		}
+		if keepRestorable && restorablePrevious(dir) {
+			continue
+		}
+		if rmErr := os.RemoveAll(dir); rmErr != nil {
+			return rmErr
+		}
+	}
+	return nil
 }
 
 func recoverLauncherBundle() {
@@ -335,12 +480,18 @@ func applySelfUpgrade(ctx context.Context, bundle string, runner checker.CmdRunn
 	if err != nil {
 		return "", fmt.Errorf("cannot stage self-update beside app: %w", err)
 	}
+	hold, holdErr := holdSelfStage(stage)
+	if holdErr != nil {
+		_ = os.RemoveAll(stage)
+		return "", holdErr
+	}
 	// Keep the old app only if rollback itself fails.
 	keepRecovery := false
 	defer func() {
 		if !keepRecovery {
 			_ = os.RemoveAll(stage)
 		}
+		_ = hold.Close()
 	}()
 	brew := isUpdaterCask(ctx, bundle, runner)
 	candidate := filepath.Join(stage, "Updater.app")
@@ -379,12 +530,15 @@ func applySelfUpgrade(ctx context.Context, bundle string, runner checker.CmdRunn
 	// is running. Brew installs the cask; this process does not copy a bundle
 	// into the Caskroom or rewrite the receipt.
 	if brew {
+		// The tap refresh and the version read both run under update.lock.
+		// A refresh that fails still falls through to brew info.
+		refreshUpdaterTap(ctx, runner)
 		cask, caskErr := readCaskVersion(ctx, runner)
 		if caskErr != nil {
 			return "", caskErr
 		}
 		if !caskVersionAllowed(cask, latest, installed.Version) {
-			return "", fmt.Errorf("refusing brew upgrade: cask version %s is lower than target %s or installed %s", cask, latest, versionpkg.ReleaseVersion(installed.Version))
+			return homebrewCaskWaitMessage(latest), nil
 		}
 	}
 	if !brew {

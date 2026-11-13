@@ -31,7 +31,8 @@ func runningFromAppBundle() bool {
 
 func main() {
 	// A killed `brew upgrade` can remove Updater.app. The next launch restores
-	// the ditto backup when that backup is still beside the app.
+	// the ditto backup when that backup is still beside the app, and removes
+	// stage directories that recovery does not need.
 	recoverLauncherBundle()
 
 	// Launched as Updater.app (Finder, `open`, login item): run the menu bar
