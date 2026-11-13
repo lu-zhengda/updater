@@ -37,6 +37,10 @@ universal_binaries:
         # Open-source GoReleaser v2.20.1 has no DMG pipe. The dmg section in
         # current docs is Pro-only and does not package this already stapled
         # bundle. The filename below is the release asset name.
+        # completions/ is gitignored. Generate it from this binary before
+        # the archive glob completions/* runs, or the tarball omits the
+        # files the Homebrew cask links.
+        - sh scripts/completions.sh "{{ .Path }}" completions
         - sh scripts/mkapp.sh "{{ .Path }}" "{{ .Version }}" dist
         - sh scripts/notarize-app.sh dist/Updater.app
         - sh scripts/mkdmg.sh dist/Updater.app "{{ .Version }}" dist
