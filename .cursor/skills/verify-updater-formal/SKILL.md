@@ -100,7 +100,7 @@ Not in the model, and not claimed:
 - `FuzzParseBrewInfo` in `internal/checker`
 - `FuzzChecksumForAsset` in `cmd/updater`
 
-Job `Test` runs `go test -race`, which includes the fuzz seeds and the regression tests. This script is the formal job. It was not added to `.github/workflows/ci.yml` because the push credential has `repo` and not `workflow`, and GitHub rejects a workflow edit from that credential. Add this job when a credential with `workflow` can push it. It is cheap: TLC finishes in seconds, and fuzz is four targets at 10 seconds.
+Job `Test` runs `go test -race`, which includes the fuzz seeds and the regression tests. This script is CI job `formal` in `.github/workflows/ci.yml`. It runs on pull requests and on pushes to `main`, on `macos-latest`, with `timeout-minutes: 15`. TLC finishes in seconds, and fuzz is four targets at 10 seconds.
 
 ```yaml
 formal:
