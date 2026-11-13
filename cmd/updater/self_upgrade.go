@@ -22,6 +22,7 @@ import (
 	"github.com/lu-zhengda/updater/internal/signing"
 	versionpkg "github.com/lu-zhengda/updater/internal/version"
 	"github.com/spf13/cobra"
+	"golang.org/x/sys/unix"
 	"howett.net/plist"
 )
 
@@ -324,16 +325,11 @@ func applySelfUpgrade(ctx context.Context, bundle string, runner checker.CmdRunn
 			}
 		}
 		if err != nil {
-			// Preserve any failed installation before restoring the complete old app.
-			if _, statErr := os.Lstat(bundle); statErr == nil {
-				if moveErr := os.Rename(bundle, filepath.Join(stage, "Failed.app")); moveErr != nil {
-					keepRecovery = true
-					return "", errors.Join(err, fmt.Errorf("recovery copy remains at %s: %w", backup, moveErr))
-				}
+			var restoreErr error
+			rolledBack, keepRecovery, restoreErr = restoreUpdaterBundle(bundle, backup, filepath.Join(stage, "Failed.app"))
+			if restoreErr != nil && !rolledBack {
+				return "", errors.Join(err, fmt.Errorf("recovery copy remains at %s: %w", backup, restoreErr))
 			}
-			restoreErr := os.Rename(backup, bundle)
-			rolledBack = restoreErr == nil
-			keepRecovery = !rolledBack
 			return "", errors.Join(err, restoreErr)
 		}
 	} else {
@@ -347,15 +343,41 @@ func applySelfUpgrade(ctx context.Context, bundle string, runner checker.CmdRunn
 	return "Updated Updater to " + latest, nil
 }
 
+// replaceUpdaterBundle exchanges the installed bundle and the staged candidate
+// with one renamex_np(RENAME_SWAP), the same swap installDMG uses. Two
+// os.Rename calls could be killed after the installed app moved aside and
+// before the candidate took its place, leaving no Updater.app at that path.
+// A failed swap leaves the installed app where it was, so there is nothing
+// to roll back. The previous app then sits at candidate; parking it at
+// backup is bookkeeping. The installed path already holds the new app.
 func replaceUpdaterBundle(bundle, candidate, backup string) (error, bool) {
-	if err := os.Rename(bundle, backup); err != nil {
+	if err := unix.RenamexNp(candidate, bundle, unix.RENAME_SWAP); err != nil {
 		return err, false
 	}
-	if err := os.Rename(candidate, bundle); err != nil {
-		restoreErr := os.Rename(backup, bundle)
-		return errors.Join(err, restoreErr), restoreErr == nil
+	if err := os.Rename(candidate, backup); err != nil {
+		return nil, false
 	}
 	return nil, false
+}
+
+// restoreUpdaterBundle puts the ditto backup back at the installed path after
+// a failed Homebrew upgrade. When the failed bundle is still there, one
+// RENAME_SWAP exchanges it with the backup. Moving the failed bundle aside
+// and then moving the backup in could be killed with neither at the path.
+func restoreUpdaterBundle(bundle, backup, failed string) (rolledBack, keepRecovery bool, err error) {
+	if _, statErr := os.Lstat(bundle); statErr == nil {
+		if swapErr := unix.RenamexNp(backup, bundle, unix.RENAME_SWAP); swapErr != nil {
+			return false, true, swapErr
+		}
+		if moveErr := os.Rename(backup, failed); moveErr != nil {
+			return true, true, nil
+		}
+		return true, false, nil
+	}
+	if restoreErr := os.Rename(backup, bundle); restoreErr != nil {
+		return false, true, restoreErr
+	}
+	return true, false, nil
 }
 
 // Match executable plus UI arguments, never a substring of the helper's argv.

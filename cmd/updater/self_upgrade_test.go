@@ -238,11 +238,14 @@ func TestSelfUpgradeGuardrails(t *testing.T) {
 	if result.HasUpdate {
 		t.Fatal("local build was offered its matching release")
 	}
-	if err, rolledBack := replaceUpdaterBundle(old, candidate, backup); err == nil || !rolledBack {
-		t.Fatalf("failed swap did not roll back: %v, %t", err, rolledBack)
+	if err, rolledBack := replaceUpdaterBundle(old, candidate, backup); err == nil || rolledBack {
+		t.Fatalf("missing candidate displaced the installed app: %v, rolledBack=%t", err, rolledBack)
 	}
 	if info, err := readUpdaterBundle(old); err != nil || info.Version != "1.0.0" {
 		t.Fatalf("lost previous app: %+v, %v", info, err)
+	}
+	if _, statErr := os.Stat(backup); !os.IsNotExist(statErr) {
+		t.Fatalf("backup appeared without a swap: %v", statErr)
 	}
 	alias := filepath.Join(t.TempDir(), "Updater.app")
 	if err := os.Symlink(old, alias); err != nil {
@@ -273,6 +276,79 @@ func TestSelfUpgradeGuardrails(t *testing.T) {
 		t.Fatal(err)
 	}
 	exclusive.Close()
+}
+
+func TestReplaceUpdaterBundleSwaps(t *testing.T) {
+	dir := t.TempDir()
+	installed := filepath.Join(dir, "Updater.app")
+	candidate := filepath.Join(dir, "Candidate.app")
+	backup := filepath.Join(dir, "Previous.app")
+	writeSelfBundle(t, installed, "1.0.0")
+	writeSelfBundle(t, candidate, "2.0.0")
+	if err, rolledBack := replaceUpdaterBundle(installed, candidate, backup); err != nil || rolledBack {
+		t.Fatalf("swap: %v, rolledBack=%t", err, rolledBack)
+	}
+	got, err := readUpdaterBundle(installed)
+	if err != nil || got.Version != "2.0.0" {
+		t.Fatalf("installed: %+v, %v", got, err)
+	}
+	prev, err := readUpdaterBundle(backup)
+	if err != nil || prev.Version != "1.0.0" {
+		t.Fatalf("previous: %+v, %v", prev, err)
+	}
+	if _, err := os.Stat(candidate); !os.IsNotExist(err) {
+		t.Fatalf("candidate path still occupied: %v", err)
+	}
+
+	// Parking the previous app is not a rollback. The app now at the installed
+	// path stays there when the backup directory cannot be created.
+	nested := filepath.Join(dir, "missing", "Previous.app")
+	if err, rolledBack := replaceUpdaterBundle(installed, backup, nested); err != nil || rolledBack {
+		t.Fatalf("swap with unparkable backup: %v, rolledBack=%t", err, rolledBack)
+	}
+	got, err = readUpdaterBundle(installed)
+	if err != nil || got.Version != "1.0.0" {
+		t.Fatalf("installed after unparkable swap: %+v, %v", got, err)
+	}
+	if _, err := os.Stat(nested); !os.IsNotExist(err) {
+		t.Fatalf("backup created: %v", err)
+	}
+}
+
+func TestRestoreUpdaterBundleSwaps(t *testing.T) {
+	dir := t.TempDir()
+	bundle := filepath.Join(dir, "Updater.app")
+	backup := filepath.Join(dir, "Previous.app")
+	failed := filepath.Join(dir, "Failed.app")
+	writeSelfBundle(t, bundle, "2.0.0")
+	writeSelfBundle(t, backup, "1.0.0")
+	rolledBack, keepRecovery, err := restoreUpdaterBundle(bundle, backup, failed)
+	if err != nil || !rolledBack || keepRecovery {
+		t.Fatalf("restore: rolledBack=%t keep=%t err=%v", rolledBack, keepRecovery, err)
+	}
+	got, readErr := readUpdaterBundle(bundle)
+	if readErr != nil || got.Version != "1.0.0" {
+		t.Fatalf("restored: %+v, %v", got, readErr)
+	}
+	bad, readErr := readUpdaterBundle(failed)
+	if readErr != nil || bad.Version != "2.0.0" {
+		t.Fatalf("failed install: %+v, %v", bad, readErr)
+	}
+	if _, statErr := os.Stat(backup); !os.IsNotExist(statErr) {
+		t.Fatalf("backup path still occupied: %v", statErr)
+	}
+
+	writeSelfBundle(t, bundle, "2.0.0")
+	// A new failed-app path: the old two-rename rollback would move the live
+	// bundle there before noticing the backup is missing.
+	rolledBack, keepRecovery, err = restoreUpdaterBundle(bundle, filepath.Join(dir, "missing.app"), filepath.Join(dir, "Failed-again.app"))
+	if err == nil || rolledBack || !keepRecovery {
+		t.Fatalf("missing backup: rolledBack=%t keep=%t err=%v", rolledBack, keepRecovery, err)
+	}
+	got, readErr = readUpdaterBundle(bundle)
+	if readErr != nil || got.Version != "2.0.0" {
+		t.Fatalf("bundle moved without a backup: %+v, %v", got, readErr)
+	}
 }
 
 func TestSelfUpgradeArchiveRejectsUnsafeEntries(t *testing.T) {

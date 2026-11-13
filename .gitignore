@@ -24,5 +24,6 @@ plans/
 
 # Local scratch
 .tmp/
+.cursor/skills/verify-updater-formal/.cache/
 .firecrawl/
 /AGENTS.local.md

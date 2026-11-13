@@ -172,13 +172,13 @@ func parseBrewInfo(data []byte) (brewCaskArtifact, error) {
 
 	cask := resp.Casks[0]
 	v := cask.Version
-	if v == "" {
-		return brewCaskArtifact{}, fmt.Errorf("empty version in brew info response")
-	}
-
 	// Strip composite build number suffix (e.g., "4.60.1,218372" → "4.60.1").
+	// A comma with nothing before it is not a version.
 	if idx := strings.IndexByte(v, ','); idx != -1 {
 		v = v[:idx]
+	}
+	if v == "" {
+		return brewCaskArtifact{}, fmt.Errorf("empty version in brew info response")
 	}
 
 	artifact := brewCaskArtifact{Version: v, DownloadURL: cask.URL}
