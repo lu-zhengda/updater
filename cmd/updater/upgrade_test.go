@@ -36,6 +36,20 @@ func TestIsBrewInstall(t *testing.T) {
 	}
 }
 
+func TestChecksumForAssetRejectsInvalid(t *testing.T) {
+	name := "updater_1.2.3_darwin.tar.gz"
+	for _, line := range []string{
+		"abcd  " + name,
+		strings.Repeat("g", 64) + "  " + name,
+		strings.Repeat("a", 63) + "  " + name,
+		strings.Repeat("a", 65) + "  " + name,
+	} {
+		if _, err := checksumForAsset([]byte(line+"\n"), name); err == nil {
+			t.Fatalf("accepted %q", line)
+		}
+	}
+}
+
 func TestChecksumForAsset(t *testing.T) {
 	want := strings.Repeat("a", 64)
 	data := []byte(want + "  updater_1.2.3_darwin.tar.gz\n")

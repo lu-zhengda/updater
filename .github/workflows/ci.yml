@@ -43,3 +43,21 @@ jobs:
           make app
           codesign --verify --deep --strict --verbose=2 Updater.app
           codesign -dvv Updater.app 2>&1 | grep -F "Identifier=com.updater.app"
+
+  formal:
+    runs-on: macos-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.27.x"
+
+      - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Formal check
+        run: sh .cursor/skills/verify-updater-formal/scripts/run.sh
