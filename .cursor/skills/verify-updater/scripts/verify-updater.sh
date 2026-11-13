@@ -43,8 +43,18 @@ mounted_app=
 app_snapshot_version=
 tap_cask=
 cask_backup=
+tracked_file=
 pass=0
 fail=0
+
+# Remember a path this run created so the exit trap can remove it.
+track() {
+	[ -n "${1:-}" ] || return 0
+	if [ -z "$tracked_file" ]; then
+		tracked_file=$(mktemp "${TMPDIR:-/tmp}/verify-updater-tracked.XXXXXX")
+	fi
+	printf '%s\n' "$1" >> "$tracked_file"
+}
 
 say() {
 	printf '%s\n' "$*" | tee -a "$evidence" >&2
@@ -56,31 +66,84 @@ say_file() {
 	fi
 }
 
-cleanup() {
-	rc=$?
+# Paths this script creates, one per line, sorted and unique.
+list_helper_dirs() {
+	tmp_root=${TMPDIR:-/tmp}
+	find "$tmp_root" /tmp -maxdepth 1 -name 'updater-self-helper-*' -print 2>/dev/null | sort -u
+}
+
+list_self_stages() {
+	find /Applications "$HOME/Applications" -maxdepth 1 -name '.updater-self-*' -print 2>/dev/null | sort -u
+}
+
+list_script_temps() {
+	tmp_root=${TMPDIR:-/tmp}
+	find "$tmp_root" /tmp -maxdepth 1 -name 'verify-updater*' -print 2>/dev/null | sort -u
+}
+
+# Drop temps this run created. Safe to call twice. Does not delete the evidence log.
+remove_run_artifacts() {
 	set +e
-	if [ -n "$mountpoint" ] && [ -d "$mountpoint" ]; then
-		hdiutil detach "$mountpoint" -force >/dev/null 2>&1
-		rmdir "$mountpoint" 2>/dev/null
-	fi
 	if [ -n "$cask_backup" ] && [ -f "$cask_backup" ] && [ -n "$tap_cask" ]; then
 		cp "$cask_backup" "$tap_cask"
 	fi
-	if [ -n "$work" ] && [ -d "$work/pids-at-start" ] || [ -n "$work" ] && [ -f "$work/pids-at-start" ]; then
+	if [ -n "$work" ] && [ -f "$work/pids-at-start" ]; then
 		quit_new_matching "Updater.app/Contents/MacOS/updater"
-	fi
-	if [ -n "$work" ] && [ -f "$work/helper-dirs-after" ] && [ -f "$work/helper-dirs-before" ]; then
-		new_helpers=$(comm -13 "$work/helper-dirs-before" "$work/helper-dirs-after" || true)
-		for dir in $new_helpers; do
-			rm -rf "$dir"
-		done
+		quit_new_matching "updater-self-helper-"
 	fi
 	if [ -n "$work" ] && [ -d "$work/menu-aside" ]; then
 		restore_menu_paths
 	fi
-	if [ -n "$work" ] && [ -d "$work" ]; then
-		rm -rf "$work"
+	if [ -n "$work" ] && [ -f "$work/helpers-at-start" ]; then
+		now=$(mktemp "${TMPDIR:-/tmp}/verify-updater-helpers.XXXXXX")
+		track "$now"
+		list_helper_dirs > "$now" || true
+		comm -13 "$work/helpers-at-start" "$now" | while IFS= read -r dir; do
+			[ -n "$dir" ] || continue
+			rm -rf "$dir"
+		done
+		rm -f "$now"
 	fi
+	if [ -n "$work" ] && [ -f "$work/stages-at-start" ]; then
+		now=$(mktemp "${TMPDIR:-/tmp}/verify-updater-stages.XXXXXX")
+		track "$now"
+		list_self_stages > "$now" || true
+		comm -13 "$work/stages-at-start" "$now" | while IFS= read -r dir; do
+			[ -n "$dir" ] || continue
+			rm -rf "$dir"
+		done
+		rm -f "$now"
+	fi
+	if [ -n "$mountpoint" ] && [ -d "$mountpoint" ]; then
+		hdiutil detach "$mountpoint" -force >/dev/null 2>&1 || true
+	fi
+	if [ -n "$tracked_file" ] && [ -f "$tracked_file" ]; then
+		while IFS= read -r path; do
+			[ -n "$path" ] || continue
+			[ "$path" = "$tracked_file" ] && continue
+			case $path in
+			*verify-updater-mount.*)
+				hdiutil detach "$path" -force >/dev/null 2>&1 || true
+				;;
+			esac
+		done < "$tracked_file"
+		while IFS= read -r path; do
+			[ -n "$path" ] || continue
+			[ "$path" = "$tracked_file" ] && continue
+			rm -rf "$path"
+		done < "$tracked_file"
+		rm -f "$tracked_file"
+	fi
+	tracked_file=
+	work=
+	mountpoint=
+	return 0
+}
+
+cleanup() {
+	rc=$?
+	set +e
+	remove_run_artifacts
 	exit "$rc"
 }
 
@@ -564,12 +627,14 @@ check_dmg_trust() {
 		ok=1
 	fi
 	mountpoint=$(mktemp -d "${TMPDIR:-/tmp}/verify-updater-mount.XXXXXX")
+	track "$mountpoint"
 	run_to "$work/hdiutil" hdiutil attach -nobrowse -readonly -mountpoint "$mountpoint" "$dmg"
 	say "hdiutil attach exit=$run_to_status"
 	say_file "$work/hdiutil.out"
 	say_file "$work/hdiutil.err"
 	if [ "$run_to_status" -ne 0 ]; then
 		ok=1
+		rmdir "$mountpoint" 2>/dev/null || true
 		mountpoint=
 		return "$ok"
 	fi
@@ -1134,14 +1199,86 @@ check_self_update() {
 	return 0
 }
 
+repo_root() {
+	script_dir=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
+	CDPATH= cd -- "$script_dir/../../../.." && pwd
+}
+
+allowlist_file() {
+	script_dir=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
+	printf '%s\n' "$script_dir/cleanup-allowlist.txt"
+}
+
+path_allowed() {
+	path=$1
+	allow=$(allowlist_file)
+	[ -f "$allow" ] || return 1
+	while IFS= read -r pat || [ -n "$pat" ]; do
+		case $pat in
+		'' | '#'*) continue ;;
+		esac
+		case $path in
+		$pat) return 0 ;;
+		esac
+		if [ "$pat" = ".DS_Store" ]; then
+			case $path in
+			.DS_Store | */.DS_Store) return 0 ;;
+			esac
+		fi
+	done < "$allow"
+	return 1
+}
+
+# After temps are removed: no stage dirs, no temps this script names, and no
+# unexpected untracked or ignored files in the repo outside the allowlist.
+check_no_strays() {
+	ok=0
+	stages=$(list_self_stages || true)
+	if [ -n "$stages" ]; then
+		say "leftover .updater-self-* directories:"
+		printf '%s\n' "$stages" | sed 's/^/  /' | tee -a "$evidence" >&2
+		ok=1
+	fi
+	root=$(repo_root) || {
+		say "verify-updater.sh is not inside the updater repo"
+		return 1
+	}
+	status_file=$(mktemp "${TMPDIR:-/tmp}/verify-updater-status.XXXXXX")
+	git -C "$root" status --ignored --porcelain -uall > "$status_file" 2>/dev/null || true
+	while IFS= read -r line || [ -n "$line" ]; do
+		[ -n "$line" ] || continue
+		xy=$(printf '%s' "$line" | cut -c1-2)
+		path=$(printf '%s' "$line" | cut -c4-)
+		case $xy in
+		'??' | '!!') ;;
+		*) continue ;;
+		esac
+		if ! path_allowed "$path"; then
+			say "unexpected workspace file ($xy): $path"
+			ok=1
+		fi
+	done < "$status_file"
+	rm -f "$status_file"
+	temps=$(list_script_temps || true)
+	if [ -n "$temps" ]; then
+		say "leftover verify-updater temp paths:"
+		printf '%s\n' "$temps" | sed 's/^/  /' | tee -a "$evidence" >&2
+		ok=1
+	fi
+	return "$ok"
+}
+
 main() {
 	evidence_dir=${VERIFY_UPDATER_EVIDENCE_DIR:-$HOME/Library/Logs/verify-updater}
 	mkdir -p "$evidence_dir"
 	evidence=$evidence_dir/$(date -u +%Y%m%dT%H%M%SZ).log
 	: > "$evidence"
 	work=$(mktemp -d "${TMPDIR:-/tmp}/verify-updater.XXXXXX")
+	track "$work"
 	trap cleanup EXIT INT TERM
 	snapshot_pids
+	list_helper_dirs > "$work/helpers-at-start" || true
+	list_self_stages > "$work/stages-at-start" || true
 	say "evidence=$evidence"
 	say "work=$work"
 	say "CHECK doctor"
@@ -1159,19 +1296,23 @@ main() {
 		say "brew info --cask $CASK:"
 		say_file "$work/doctor-brew.out"
 		say_file "$work/doctor-brew.err"
-		say "doctor only; no release checks were run"
-		trap - EXIT INT TERM
-		rm -rf "$work"
-		work=
-		exit 0
+	say "doctor only; no release checks were run"
+	remove_run_artifacts
+	say "CHECK cleanup"
+	if check_no_strays; then
+		say "PASS cleanup"
+	else
+		say "FAIL cleanup"
+		exit 1
+	fi
+	exit 0
 	fi
 
 	say "CHECK release-published"
 	if ! resolve_version; then
 		say "FAIL release-published"
 		fail=$((fail + 1))
-		say "RESULT pass=$pass fail=$fail"
-		exit 1
+		finish
 	fi
 	set +e
 	check_release_published >"$work/published.txt"
@@ -1265,6 +1406,17 @@ main() {
 	fi
 	record "$install_status" brew-install
 
+	finish
+}
+
+finish() {
+	remove_run_artifacts
+	say "CHECK cleanup"
+	set +e
+	check_no_strays
+	cleanup_status=$?
+	set -e
+	record "$cleanup_status" cleanup
 	say "RESULT pass=$pass fail=$fail"
 	say "evidence=$evidence"
 	if [ "$fail" -ne 0 ]; then

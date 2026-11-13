@@ -5,7 +5,7 @@ description: "Prove a published Updater macOS release installs and updates on a 
 
 # Verify Updater
 
-Prove the published app, not a local build. `make app` ad-hoc signs a developer bundle and is not this proof. The harness is `scripts/verify-updater.sh`. It talks to `lu-zhengda/updater` GitHub Releases and `lu-zhengda/homebrew-tap` `Casks/updater.rb`.
+Prove the published app, not a local build. `make app` ad-hoc signs a developer bundle and is not this proof. The harness is `.cursor/skills/verify-updater/scripts/verify-updater.sh`. It talks to `lu-zhengda/updater` GitHub Releases and `lu-zhengda/homebrew-tap` `Casks/updater.rb`. Run that file from the checkout. Do not keep a copy elsewhere on the Mac.
 
 Run it on a Mac. Do not sign, notarize, tag, or publish from that Mac. Do not read signing secrets. The script unsets `GITHUB_TOKEN`, `HOMEBREW_TAP_TOKEN`, and the Apple signing and notarization variables so child processes do not inherit them.
 
@@ -34,7 +34,7 @@ The menu-bar app starts when the binary is launched with no arguments and stdin 
 sh .cursor/skills/verify-updater/scripts/verify-updater.sh --doctor
 ```
 
-Doctor is read-only. It checks macOS and the tools the harness uses (`gh`, `curl`, `codesign`, `stapler`, `spctl`, `syspolicy_check`, `lipo`, `hdiutil`, `xattr`, `ditto`, `brew`, `python3`, `PlistBuddy`, `/usr/bin/log`). It prints `brew info --cask lu-zhengda/tap/updater` and does not install, mount, or launch. Exit `1` only when a tool or macOS is missing. A cask that Homebrew cannot load is still worth driving: the brew checks record that failure.
+Doctor is read-only. It checks macOS and the tools the harness uses (`gh`, `curl`, `codesign`, `stapler`, `spctl`, `syspolicy_check`, `lipo`, `hdiutil`, `xattr`, `ditto`, `brew`, `python3`, `PlistBuddy`, `/usr/bin/log`). It prints `brew info --cask lu-zhengda/tap/updater` and does not install, mount, or launch. Exit `1` when a tool or macOS is missing, or when the cleanup check finds a stray file. A cask that Homebrew cannot load is still worth driving: the brew checks record that failure.
 
 Run doctor before a full proof, and again after a failed run whose process or mount was left behind. One full proof at a time. The self-update helper takes `~/.config/updater/update.lock`, and the log and history files are shared with the real app.
 
@@ -81,23 +81,27 @@ The proof is the published bytes and the processes and brew receipt they produce
 
 ## Cleanup
 
-The script traps exit and:
+The script remembers every temp path it creates, including the work directory and the DMG mount, and a trap removes them on exit. It also removes `updater-self-helper-*` directories and `/Applications/.updater-self-*` or `~/Applications/.updater-self-*` directories that appeared during the run. After that removal, the `cleanup` check fails the run when any of these remain:
+
+- a `.updater-self-*` directory beside `/Applications` or `~/Applications`
+- a `verify-updater*` file or directory in `/tmp` or `$TMPDIR`
+- an untracked or ignored file in the repo outside `.cursor/skills/verify-updater/scripts/cleanup-allowlist.txt`
+
+`PASS cleanup` or `FAIL cleanup` is printed before `RESULT`. A failure there makes the script exit non-zero. The trap also:
 
 - force-detaches the DMG mount it created
 - sends SIGTERM, then SIGKILL, only to Updater processes that were not running when the script started and whose command line matches the temp bundle or `updater-self-helper-`
-- deletes helper directories created during the run
-- deletes its temp work directory
 - restores `/Applications/Updater.app` and `~/Applications/Updater.app` if the menu-bar update check moved them
 - restores `/Applications/Updater.app` from a `ditto` backup if a failed self-update or brew command changed or removed it
 - restores `Casks/updater.rb` in the Homebrew tap if a downgrade swapped it
 
-It does not delete `~/Library/Logs/verify-updater/`, `~/.config/updater/logs/self-update.log`, or `~/.local/share/updater/history.json`. A real self-update appends to those two files. It does not uninstall unrelated brew packages.
+It does not delete `~/Library/Logs/verify-updater/`, `~/.config/updater/logs/self-update.log`, or `~/.local/share/updater/history.json`. A real self-update appends to those two files. It does not uninstall unrelated brew packages. Run the script from the checkout. Do not keep a copy of it elsewhere on the Mac.
 
 A successful brew upgrade may leave the target version installed from the cask. That is the intended end state. If brew cannot load the cask, the previously installed app is left as it was.
 
 ## Helpers
 
-`scripts/verify-updater.sh` is the only helper. Invoke it as shown under Launch. `--doctor` is the read-only check. Do not reimplement the checks ad hoc during a proof run.
+`.cursor/skills/verify-updater/scripts/verify-updater.sh` is the harness. `cleanup-allowlist.txt` beside it lists workspace paths the cleanup check may leave. Invoke the script as shown under Launch. `--doctor` is the read-only check. Do not reimplement the checks ad hoc during a proof run.
 
 ## Maintain
 
