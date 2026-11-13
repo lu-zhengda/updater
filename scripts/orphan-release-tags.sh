@@ -46,13 +46,24 @@ else
 		awk '{print $2}' |
 		sed -n 's#refs/tags/\(v[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)$#\1#p' |
 		sort -u)
-	# Public releases. curl, not gh: Actions refuses an unauthenticated gh,
-	# and this job does not receive GH_TOKEN.
-	releases=$(curl -fsSL \
-		-H "Accept: application/vnd.github+json" \
-		-H "User-Agent: updater-orphan-check" \
-		"https://api.github.com/repos/${repo}/releases?per_page=100" |
-		python3 -c 'import json,sys
+	# Actions blocks unauthenticated api.github.com and does not put a token
+	# in GH_TOKEN. The checkout credential is already on this repo.
+	auth_header=$(git config --get http.https://github.com/.extraheader || true)
+	if [ -z "$auth_header" ] && [ -n "${GITHUB_TOKEN:-}" ]; then
+		auth_header=$(printf 'AUTHORIZATION: bearer %s' "$GITHUB_TOKEN")
+	fi
+	if [ -n "$auth_header" ]; then
+		releases=$(curl -fsSL -H "$auth_header" \
+			-H "Accept: application/vnd.github+json" \
+			-H "User-Agent: updater-orphan-check" \
+			"https://api.github.com/repos/${repo}/releases?per_page=100")
+	else
+		releases=$(curl -fsSL \
+			-H "Accept: application/vnd.github+json" \
+			-H "User-Agent: updater-orphan-check" \
+			"https://api.github.com/repos/${repo}/releases?per_page=100")
+	fi
+	releases=$(printf '%s' "$releases" | python3 -c 'import json,sys
 data=json.load(sys.stdin)
 if isinstance(data, dict):
     raise SystemExit(data.get("message") or "releases response was not a list")
