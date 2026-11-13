@@ -239,6 +239,16 @@ func TestParseBrewInfo(t *testing.T) {
 			data:    `{"casks":[{"token":"test","version":""}]}`,
 			wantErr: true,
 		},
+		{
+			name:    "comma only",
+			data:    `{"casks":[{"version":","}]}`,
+			wantErr: true,
+		},
+		{
+			name:    "leading comma",
+			data:    `{"casks":[{"version":",218372"}]}`,
+			wantErr: true,
+		},
 	}
 
 	for _, tt := range tests {
