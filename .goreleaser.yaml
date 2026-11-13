@@ -44,6 +44,8 @@ universal_binaries:
         - sh scripts/mkapp.sh "{{ .Path }}" "{{ .Version }}" dist
         - sh scripts/notarize-app.sh dist/Updater.app
         - sh scripts/mkdmg.sh dist/Updater.app "{{ .Version }}" dist
+        # After the app and DMG exist, before archives, checksums, and publish.
+        - sh scripts/release-preflight.sh dist/Updater.app "dist/Updater-{{ .Version }}.dmg" "{{ .Version }}"
 
 archives:
   - id: updater-archive
