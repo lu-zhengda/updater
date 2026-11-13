@@ -781,3 +781,24 @@ ok "real hdiutil image preserves the app, symlink, and volume name"
 
 ok "dmg packaging"
 sh "$root/scripts/homebrew-cask-macos_test.sh"
+sh "$root/scripts/cask-shape_test.sh"
+sh "$root/scripts/cask-checksum_test.sh"
+sh "$root/scripts/release-preflight_test.sh"
+sh "$root/scripts/orphan-release-tags_test.sh"
+sh "$root/scripts/shipped-label-warn_test.sh"
+
+if [ "${GITHUB_ACTIONS:-}" = "true" ]; then
+	sh "$root/scripts/orphan-release-tags.sh"
+	if [ "${GITHUB_EVENT_NAME:-}" = "pull_request" ] && [ -n "${GITHUB_BASE_REF:-}" ]; then
+		git fetch --depth=1 origin "$GITHUB_BASE_REF"
+		git diff --name-only "origin/${GITHUB_BASE_REF}" HEAD >"$tmp/changed-files"
+		PR_LABELS=$(python3 -c 'import json, os
+path = os.environ.get("GITHUB_EVENT_PATH", "")
+labels = []
+if path:
+    event = json.load(open(path))
+    labels = [item.get("name", "") for item in event.get("pull_request", {}).get("labels", [])]
+print(",".join(labels))')
+		PR_LABELS=$PR_LABELS sh "$root/scripts/shipped-label-warn.sh" "$tmp/changed-files"
+	fi
+fi

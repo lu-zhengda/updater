@@ -47,3 +47,5 @@ sh .cursor/skills/verify-updater/scripts/verify-updater.sh 0.24.2
 ```
 
 The script checks the real GitHub Release, the quarantined DMG, Homebrew, and in-app update. It exits non-zero on any FAIL. Do not weaken a check to make a broken release pass.
+
+Past release failures and the check that now fails them are listed in [`docs/lessons.md`](docs/lessons.md).
