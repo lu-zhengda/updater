@@ -97,8 +97,18 @@ homebrew_casks:
     # A quarantined standalone Mach-O cannot carry the app's stapled ticket.
     binaries:
       - "#{appdir}/Updater.app/Contents/MacOS/updater"
+    # GoReleaser v2.20.1 writes `depends_on :macos` for every macOS-only
+    # cask and has no field for a version. A second `depends_on macos:`
+    # stanza makes current Homebrew refuse to load the cask. This method
+    # is inside the cask and turns that bare call into macOS 26 (Tahoe).
     custom_block: |
-      depends_on macos: :tahoe
+      def depends_on(arg = nil, **kwargs)
+        if arg == :macos && kwargs.empty?
+          super(macos: :tahoe)
+        else
+          super
+        end
+      end
       app "Updater.app"
     hooks:
       pre:
