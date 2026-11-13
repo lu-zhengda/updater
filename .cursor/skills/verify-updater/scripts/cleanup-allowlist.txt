@@ -1,0 +1,4 @@
+# Untracked or ignored paths that may remain after verify-updater.sh.
+# One shell case pattern per line. Blank lines and # comments are ignored.
+# .DS_Store also matches a Finder file in any directory.
+.DS_Store
