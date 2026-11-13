@@ -171,15 +171,18 @@ func transformGitHubVersion(tag, pattern, replacement string) (string, error) {
 	return transformed, nil
 }
 
-// CleanTagVersion strips common tag prefixes from GitHub release tags.
-// e.g., "v1.0.0" -> "1.0.0", "release-3.5.4" -> "3.5.4", "release/3.5.4" -> "3.5.4"
+// CleanTagVersion strips one common tag prefix from a GitHub release tag.
+// e.g., "v1.0.0" -> "1.0.0", "release-3.5.4" -> "3.5.4", "version-1.2.3" -> "1.2.3".
+// The longest prefix wins. Stripping "v" first would turn "version-1.2.3" into
+// "ersion-1.2.3" and "ver-1.2.3" into "er-1.2.3".
 func CleanTagVersion(tag string) string {
-	prefixes := []string{"v", "release-", "release/", "ver-", "ver/", "version-", "version/"}
-	result := tag
+	prefixes := []string{"version-", "version/", "release-", "release/", "ver-", "ver/", "v"}
 	for _, p := range prefixes {
-		result = strings.TrimPrefix(result, p)
+		if after, ok := strings.CutPrefix(tag, p); ok {
+			return after
+		}
 	}
-	return result
+	return tag
 }
 
 // macExtensions are file extensions commonly used for macOS installers.

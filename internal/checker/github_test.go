@@ -12,6 +12,28 @@ import (
 	"github.com/lu-zhengda/updater/internal/app"
 )
 
+func TestCleanTagVersionPrefixes(t *testing.T) {
+	for _, tc := range []struct{ tag, want string }{
+		{"v1.2.3", "1.2.3"},
+		{"release-3.5.4", "3.5.4"},
+		{"release/3.5.4", "3.5.4"},
+		{"ver-1.2.3", "1.2.3"},
+		{"ver/1.2.3", "1.2.3"},
+		{"version-1.2.3", "1.2.3"},
+		{"version/1.2.3", "1.2.3"},
+		{"1.2.3", "1.2.3"},
+		{"V1.2.3", "V1.2.3"},
+		{"", ""},
+	} {
+		if got := CleanTagVersion(tc.tag); got != tc.want {
+			t.Errorf("CleanTagVersion(%q) = %q, want %q", tc.tag, got, tc.want)
+		}
+		if again := CleanTagVersion(CleanTagVersion(tc.tag)); again != CleanTagVersion(tc.tag) {
+			t.Errorf("CleanTagVersion not idempotent on %q: %q then %q", tc.tag, CleanTagVersion(tc.tag), again)
+		}
+	}
+}
+
 func TestTransformGitHubVersion(t *testing.T) {
 	for _, tc := range []struct {
 		name, tag, pattern, replacement, want string
