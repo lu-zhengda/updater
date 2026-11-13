@@ -72,7 +72,7 @@ These two counterexamples stay in the script. They must keep failing the named p
 
 ## Coverage
 
-Sync commit: `SYNC_COMMIT_PLACEHOLDER`. The covered Go at that commit is what this model and the fuzz describe. Move this hash forward only after you confirm the model and the fuzz still describe the code, and re-run the script.
+Sync commit: `32db92c890bdd017550252225af5c7cb6e8853c4`. The covered Go at that commit is what this model and the fuzz describe. Move this hash forward only after you confirm the model and the fuzz still describe the code, and re-run the script.
 
 | Code | Check |
 | --- | --- |
