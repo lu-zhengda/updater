@@ -46,13 +46,23 @@ else
 		awk '{print $2}' |
 		sed -n 's#refs/tags/\(v[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)$#\1#p' |
 		sort -u)
-	if [ -z "${GH_TOKEN:-}" ] && [ -n "${GITHUB_TOKEN:-}" ]; then
-		GH_TOKEN=$GITHUB_TOKEN
-		export GH_TOKEN
-	fi
-	releases=$(gh api --paginate "repos/$repo/releases?per_page=100" --jq '.[].tag_name' | sed '/^$/d')
+	# Public releases. curl, not gh: Actions refuses an unauthenticated gh,
+	# and this job does not receive GH_TOKEN.
+	releases=$(curl -fsSL \
+		-H "Accept: application/vnd.github+json" \
+		-H "User-Agent: updater-orphan-check" \
+		"https://api.github.com/repos/${repo}/releases?per_page=100" |
+		python3 -c 'import json,sys
+data=json.load(sys.stdin)
+if isinstance(data, dict):
+    raise SystemExit(data.get("message") or "releases response was not a list")
+print("\n".join(item["tag_name"] for item in data))')
 	if [ -z "$releases" ]; then
 		fail "could not read GitHub Releases for $repo"
+	fi
+	release_count=$(printf '%s\n' "$releases" | sed '/^$/d' | wc -l | tr -d ' ')
+	if [ "$release_count" -ge 100 ]; then
+		fail "GitHub returned 100 releases; the check would miss older ones"
 	fi
 fi
 
