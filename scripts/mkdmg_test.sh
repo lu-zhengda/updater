@@ -780,3 +780,4 @@ assert_eq "$volume" "Updater"
 ok "real hdiutil image preserves the app, symlink, and volume name"
 
 ok "dmg packaging"
+sh "$root/scripts/homebrew-cask-macos_test.sh"

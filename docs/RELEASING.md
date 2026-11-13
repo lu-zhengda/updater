@@ -21,6 +21,8 @@ GoReleaser still builds from [`.goreleaser.yaml`](../.goreleaser.yaml): darwin a
 
 Those hooks finish before GoReleaser creates archives or checksums. The cask keeps using `HOMEBREW_TAP_TOKEN` and the `updater_<version>_darwin.tar.gz` archive. The checksum in the cask is the checksum of that archive, so it matches the stapled app inside it. `checksums.txt` lists that archive and `Updater-<version>.dmg`. The zip uploaded for the app notarization is temporary and is not a release asset. The DMG is a release asset, named the same way as the hand-cut `Updater-0.23.0.dmg`.
 
+GoReleaser v2.20.1 has no Homebrew field for a macOS version. Its cask template always adds `depends_on :macos` when the cask has macOS packages and no Linux packages. Current Homebrew refuses to load that line together with a second `depends_on macos:` stanza. The cask `custom_block` defines `depends_on` so the bare call becomes `depends_on macos: :tahoe` (macOS 26) and formula dependencies still pass through. Signing and notarization are unchanged.
+
 GoReleaser v2.20.1's documented `dmg` section is Pro-only. The open-source `goreleaser` binary this workflow runs has no DMG pipe, and that Pro section packages a binary or a Pro app bundle rather than the already stapled `dist/Updater.app`. `scripts/mkdmg.sh` is the step that publishes the image.
 
 `make app` is unchanged for local development: it ad-hoc signs unless you export `MACOS_SIGNING_IDENTITY`.
