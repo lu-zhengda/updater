@@ -675,11 +675,8 @@ func TestSelfUpgradeRefreshesStaleTap(t *testing.T) {
 			case !tc.failRefresh && !tc.failFetch && (mergeAt < 0 || infoAt < mergeAt):
 				t.Fatalf("fast-forward must finish before brew info: %v", runner.calls)
 			}
-			if tc.wantUpgrade {
-				fetch := "git -C " + runner.tapRepo + " fetch --quiet origin main"
-				if runner.tapRepo == "" {
-					fetch = "git -C /opt/homebrew/Library/Taps/lu-zhengda/homebrew-tap fetch --quiet origin main"
-				}
+			if tc.wantUpgrade && !tc.failRefresh && !tc.failFetch {
+				fetch := "git -C /opt/homebrew/Library/Taps/lu-zhengda/homebrew-tap fetch --quiet origin main"
 				if !slices.Contains(runner.calls, fetch) {
 					t.Fatalf("fetch did not follow the tracked branch: %v", runner.calls)
 				}
@@ -696,6 +693,10 @@ func TestSelfUpgradeRefreshesStaleTap(t *testing.T) {
 				t.Fatalf("message=%q err=%v upgraded=%t bundle=%+v read=%v", message, err, upgraded, info, readErr)
 			}
 			if tc.diverged {
+				fetch := "git -C " + runner.tapRepo + " fetch --quiet origin main"
+				if !slices.Contains(runner.calls, fetch) {
+					t.Fatalf("fetch did not follow the tracked branch: %v", runner.calls)
+				}
 				if got := gitOutput(t, runner.tapRepo, "rev-parse", "HEAD"); got != tapHead {
 					t.Fatalf("diverged tap HEAD changed from %s to %s", tapHead, got)
 				}
