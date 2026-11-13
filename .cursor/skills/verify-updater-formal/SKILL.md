@@ -100,4 +100,21 @@ Not in the model, and not claimed:
 - `FuzzParseBrewInfo` in `internal/checker`
 - `FuzzChecksumForAsset` in `cmd/updater`
 
-CI job `formal` runs this script. Job `Test` runs `go test -race`, which includes the fuzz seeds and the regression tests.
+Job `Test` runs `go test -race`, which includes the fuzz seeds and the regression tests. This script is the formal job. It was not added to `.github/workflows/ci.yml` because the push credential has `repo` and not `workflow`, and GitHub rejects a workflow edit from that credential. Add this job when a credential with `workflow` can push it. It is cheap: TLC finishes in seconds, and fuzz is four targets at 10 seconds.
+
+```yaml
+formal:
+  runs-on: macos-latest
+  timeout-minutes: 15
+  steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+    - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      with:
+        go-version: "1.27.x"
+    - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
+      with:
+        distribution: temurin
+        java-version: "21"
+    - name: Formal check
+      run: sh .cursor/skills/verify-updater-formal/scripts/run.sh
+```
