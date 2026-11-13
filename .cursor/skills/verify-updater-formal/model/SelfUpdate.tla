@@ -12,10 +12,16 @@
 \* 0 means the install path has no bundle. appOK means the bundle at that path
 \* passed the checksum and Developer ID checks, or it is the original app.
 \*
-\* TwoRename, SkipChecksum, SkipSignature, SkipNewer, SkipRelock, SkipLock, and
-\* SkipVersionMatch are the broken variants. They are FALSE for the code as it
-\* is. BrewFault is "none" unless a config is showing a Homebrew outcome the
-\* helper does not roll back before a kill.
+\* TwoRename, SkipChecksum, SkipSignature, SkipNewer, SkipRelock, SkipLock,
+\* SkipVersionMatch, and SkipCaskVersion are the broken variants. They are
+\* FALSE for the code as it is. SkipRecovery removes the next-run restore.
+\* BrewFault is "none" unless a config is showing a Homebrew outcome.
+\* "regress" means brew info can report a version other than the GitHub tag.
+\* The cask-version guard refuses a lower one, so brew is not asked to install
+\* it. "partial" and "unsigned" are brew's own replace: the path can be empty
+\* while brew has not returned, and a kill after brew returns can leave a
+\* bundle that this process has not checked. Those two states are accepted
+\* boundaries. LaunchRecover is the next run or launch. It does not erase them.
 
 EXTENDS Integers, FiniteSets
 
@@ -29,13 +35,16 @@ CONSTANTS
   SkipNewer,
   SkipRelock,
   SkipLock,
-  SkipVersionMatch
+  SkipVersionMatch,
+  SkipCaskVersion,
+  SkipRecovery
 
 ASSUME Mode \in {"direct", "brew"}
 ASSUME BrewFault \in {"none", "partial", "unsigned", "regress"}
 ASSUME TwoRename \in BOOLEAN /\ SkipChecksum \in BOOLEAN /\ SkipSignature \in BOOLEAN
 ASSUME SkipNewer \in BOOLEAN /\ SkipRelock \in BOOLEAN /\ SkipLock \in BOOLEAN
-ASSUME SkipVersionMatch \in BOOLEAN
+ASSUME SkipVersionMatch \in BOOLEAN /\ SkipCaskVersion \in BOOLEAN
+ASSUME SkipRecovery \in BOOLEAN
 
 VARIABLES
   appVer,    \* 0 = path empty; 1, 2, 3 = bundle version at the install path
@@ -51,7 +60,8 @@ vars == <<appVer, appOK, trusted, lock, shared, pc, rel, cand>>
 
 Phases == {
   "idle", "fetched", "downloaded", "extracted", "locked", "rechecked",
-  "verified", "stopped", "gap", "brewed", "rollback", "done", "failed", "dead"
+  "verified", "stopped", "guarded", "brewing", "gap", "brewed", "rollback",
+  "done", "failed", "dead"
 }
 
 TypeOK ==
@@ -88,9 +98,11 @@ Done(h) ==
 
 SameApp == UNCHANGED <<appVer, appOK, trusted, shared, rel, cand>>
 
-\* readUpdaterBundle (self_upgrade.go:115) then selfUpgradeRelease and the
-\* first IsNewer (applySelfUpgrade, self_upgrade.go:205-219). A missing bundle
-\* fails the read. A release that is not newer returns "already up to date".
+\* readUpdaterBundle (self_upgrade.go:118) then selfUpgradeRelease and the
+\* first IsNewer (applySelfUpgrade, self_upgrade.go:324). A missing bundle
+\* fails the read. recoverStrandedUpdater (self_upgrade.go:265) runs before
+\* that read, on this command and on launch (recoverLauncherBundle). A release
+\* that is not newer returns "already up to date".
 ReadAndFetch(h) ==
   /\ pc[h] = "idle"
   /\ \E v \in {2, 3}:
@@ -104,9 +116,9 @@ ReadAndFetch(h) ==
                    ELSE /\ pc' = [pc EXCEPT ![h] = "fetched"]
                         /\ UNCHANGED <<appVer, appOK, trusted, lock, shared, cand>>
 
-\* downloadSelfArchive (self_upgrade.go:426). Checksum reject is line 467.
-\* Network drop is a failed downloadFileAndHash (line 463). The installed app
-\* is unchanged. SkipChecksum keeps an archive that failed line 467.
+\* downloadSelfArchive (self_upgrade.go:551). Checksum reject is line 593.
+\* Network drop is a failed download. The installed app is unchanged.
+\* SkipChecksum keeps an archive that failed the checksum.
 DownloadArchive(h) ==
   /\ pc[h] = "fetched"
   /\ Mode = "direct"
@@ -132,15 +144,16 @@ DownloadArchive(h) ==
             /\ UNCHANGED <<appVer, appOK, trusted, lock, shared, rel>>
 
 \* The cask path does not download the tarball (applySelfUpgrade, the
-\* `if !brew` block at self_upgrade.go:235).
+\* `if !brew` block). Brew owns the install. This process does not copy a
+\* bundle into the Caskroom or rewrite the receipt.
 BrewSkipDownload(h) ==
   /\ pc[h] = "fetched"
   /\ Mode = "brew"
   /\ pc' = [pc EXCEPT ![h] = "extracted"]
   /\ UNCHANGED <<appVer, appOK, trusted, lock, shared, rel, cand>>
 
-\* extractUpdaterApp (self_upgrade.go:479) and the bundle-version check
-\* (self_upgrade.go:247). A plist version other than the release is refused
+\* extractUpdaterApp (self_upgrade.go:604) and the bundle-version check
+\* (self_upgrade.go:359). A plist version other than the release is refused
 \* unless SkipVersionMatch.
 ExtractAndMatch(h) ==
   /\ pc[h] = "downloaded"
@@ -150,9 +163,11 @@ ExtractAndMatch(h) ==
        ELSE /\ Fail(h)
             /\ UNCHANGED <<appVer, appOK, trusted, shared, rel, cand>>
 
-\* updateActivityLock(ctx, true) (self_upgrade.go:164, called at line 252).
-\* Shared holders and the other helper's exclusive lock block it. SkipLock
-\* is the broken variant that replaces without update.lock.
+\* updateActivityLock(ctx, true) (self_upgrade.go:167, called at line 358).
+\* The same lock is held from here until brew has returned and the post-checks
+\* (or the direct swap) finish. Shared holders and the other helper's
+\* exclusive lock block it. SkipLock is the broken variant that replaces
+\* without update.lock.
 AcquireLock(h) ==
   /\ pc[h] = "extracted"
   /\ \/ /\ ~SkipLock
@@ -165,7 +180,7 @@ AcquireLock(h) ==
         /\ pc' = [pc EXCEPT ![h] = "locked"]
         /\ UNCHANGED <<appVer, appOK, trusted, lock, shared, rel, cand>>
 
-\* The second readUpdaterBundle and IsNewer (self_upgrade.go:258-263).
+\* The second readUpdaterBundle and IsNewer (self_upgrade.go:364).
 \* SkipRelock removes only this check. SkipNewer removes both IsNewer calls.
 RereadAndRecheck(h) ==
   /\ pc[h] = "locked"
@@ -176,7 +191,7 @@ RereadAndRecheck(h) ==
               ELSE /\ pc' = [pc EXCEPT ![h] = "rechecked"]
                    /\ UNCHANGED <<appVer, appOK, trusted, lock, shared, rel, cand>>
 
-\* verifySelfUpgrade -> signing.VerifyReplacementApp (self_upgrade.go:266,
+\* verifySelfUpgrade -> signing.VerifyReplacementApp (self_upgrade.go:391,
 \* verify.go:40). Team, identifier, codesign, and Gatekeeper are one gate.
 \* SkipSignature installs anyway. A bad checksum that was kept only by
 \* SkipChecksum is rejected here unless that mutation is on.
@@ -188,22 +203,42 @@ VerifySignature(h) ==
             /\ UNCHANGED <<appVer, appOK, trusted, lock, shared, rel, cand>>
        ELSE /\ Fail(h) /\ SameApp
 
-\* stopUpdaterUI (self_upgrade.go:404, called at line 305). The bundle is
-\* still the old one.
+\* stopUpdaterUI (self_upgrade.go:529, called at line 430). The bundle is
+\* still the old one. Direct path only: brew stops the UI after the guard.
 StopUI(h) ==
   /\ pc[h] = "verified"
   /\ pc' = [pc EXCEPT ![h] = "stopped"]
   /\ UNCHANGED <<appVer, appOK, trusted, lock, shared, rel, cand>>
 
-\* Cask path: ditto backup (self_upgrade.go:272) does not change the installed
-\* bundle, and signature is not checked before brew upgrade.
-BrewPrepare(h) ==
+\* caskVersionAllowed (self_upgrade.go:211), called under the lock at line 382
+\* before the ditto and before brew upgrade. readCaskVersion is brew info
+\* (line 220). A cask version lower than the fetched release or the installed
+\* app is refused. BrewFault "regress" is the case where that version can be
+\* 1, 2, or 3, not the tag. Other faults report the fetched release.
+\* SkipCaskVersion is the guard removed.
+BrewGuard(h) ==
   /\ pc[h] = "rechecked"
+  /\ Mode = "brew"
+  /\ \E c \in 1..3:
+       /\ \/ BrewFault = "regress"
+          \/ c = rel[h]
+       /\ IF (~SkipCaskVersion /\ (c < rel[h] \/ c < appVer))
+            THEN /\ Fail(h)
+                 /\ UNCHANGED <<appVer, appOK, trusted, shared, rel, cand>>
+            ELSE /\ pc' = [pc EXCEPT ![h] = "guarded"]
+                 /\ cand' = [cand EXCEPT ![h] = [ver |-> c, sum |-> TRUE, sig |-> TRUE]]
+                 /\ UNCHANGED <<appVer, appOK, trusted, lock, shared, rel>>
+
+\* Cask path: ditto backup (self_upgrade.go:397) after the guard. It does not
+\* change the installed bundle. The lock is still held. stopUpdaterUI follows
+\* in the same phase; the bundle is still the old one.
+BrewPrepare(h) ==
+  /\ pc[h] = "guarded"
   /\ Mode = "brew"
   /\ pc' = [pc EXCEPT ![h] = "stopped"]
   /\ UNCHANGED <<appVer, appOK, trusted, lock, shared, rel, cand>>
 
-\* replaceUpdaterBundle (self_upgrade.go:353). One RENAME_SWAP. appOK is the
+\* replaceUpdaterBundle (self_upgrade.go:478). One RENAME_SWAP. appOK is the
 \* candidate's real checksum and signature, so a skipped check that still
 \* installs records a bad asset.
 AtomicSwap(h) ==
@@ -250,16 +285,18 @@ RestoreGap(h) ==
   /\ Done(h)
   /\ UNCHANGED <<shared, rel, cand>>
 
-\* brew upgrade --cask (self_upgrade.go:316). "none" is a brew that either
-\* installs the newer signed release or returns an error without changing
-\* the bundle. The other faults are results brew can leave behind before
-\* the post-upgrade IsNewer (line 320) and verifySelfUpgrade (line 324).
+\* brew upgrade --cask (self_upgrade.go:441). The version installed is the
+\* cask version the guard just accepted (cand.ver). "partial" removes the
+\* bundle and does not return (phase brewing). "unsigned" returns a bundle
+\* this process has not checked yet (phase brewed, appOK false). A kill in
+\* those two phases is the accepted boundary. BrewUpgradeFails is brew
+\* returning an error without changing the bundle.
 BrewUpgradeGood(h) ==
   /\ pc[h] = "stopped"
   /\ Mode = "brew"
-  /\ appVer' = rel[h]
+  /\ appVer' = cand[h].ver
   /\ appOK' = TRUE
-  /\ IF rel[h] > trusted THEN trusted' = rel[h] ELSE UNCHANGED trusted
+  /\ IF cand[h].ver > trusted THEN trusted' = cand[h].ver ELSE UNCHANGED trusted
   /\ pc' = [pc EXCEPT ![h] = "brewed"]
   /\ UNCHANGED <<lock, shared, rel, cand>>
 
@@ -274,44 +311,40 @@ BrewUpgradePartial(h) ==
   /\ Mode = "brew"
   /\ BrewFault = "partial"
   /\ appVer' = 0
-  /\ pc' = [pc EXCEPT ![h] = "brewed"]
+  /\ pc' = [pc EXCEPT ![h] = "brewing"]
   /\ UNCHANGED <<appOK, trusted, lock, shared, rel, cand>>
 
 BrewUpgradeUnsigned(h) ==
   /\ pc[h] = "stopped"
   /\ Mode = "brew"
   /\ BrewFault = "unsigned"
-  /\ appVer' = rel[h]
+  /\ appVer' = cand[h].ver
   /\ appOK' = FALSE
   /\ pc' = [pc EXCEPT ![h] = "brewed"]
   /\ UNCHANGED <<trusted, lock, shared, rel, cand>>
 
-BrewUpgradeRegress(h) ==
-  /\ pc[h] = "stopped"
-  /\ Mode = "brew"
-  /\ BrewFault = "regress"
-  /\ appVer' = 1
-  /\ appOK' = TRUE
-  /\ pc' = [pc EXCEPT ![h] = "brewed"]
-  /\ UNCHANGED <<trusted, lock, shared, rel, cand>>
-
-\* Post-upgrade checks passed (self_upgrade.go:320-324). The good app is
-\* already at the path.
-BrewAccept(h) ==
+\* Post-upgrade bundle-version and Developer ID checks (self_upgrade.go:436).
+\* Failure goes to rollback. The brewed state itself is the kill window.
+BrewCheck(h) ==
   /\ pc[h] = "brewed"
-  /\ appOK
-  /\ appVer \in 1..3
-  /\ Done(h)
-  /\ SameApp
+  /\ IF appOK /\ appVer \in 1..3 /\ appVer >= trusted
+       THEN /\ Done(h)
+            /\ UNCHANGED <<appVer, appOK, trusted, shared, rel, cand>>
+       ELSE /\ pc' = [pc EXCEPT ![h] = "rollback"]
+            /\ UNCHANGED <<appVer, appOK, trusted, lock, shared, rel, cand>>
 
-\* restoreUpdaterBundle (self_upgrade.go:367). One RENAME_SWAP when the
-\* failed bundle is still there. TwoRename is the old two-os.Rename rollback:
-\* move the bundle aside, then move the backup in.
+\* restoreUpdaterBundle (self_upgrade.go:492). One RENAME_SWAP when the
+\* failed bundle is still there. The backup is the last committed version.
+\* TwoRename is the old two-os.Rename rollback: move the bundle aside, then
+\* move the backup in.
 AtomicRollback(h) ==
   /\ pc[h] = "rollback"
   /\ ~TwoRename
+  /\ appVer' = trusted
+  /\ appOK' = TRUE
+  /\ UNCHANGED trusted
   /\ Done(h)
-  /\ SameApp
+  /\ UNCHANGED <<shared, rel, cand>>
 
 RollbackAway(h) ==
   /\ pc[h] = "rollback"
@@ -341,6 +374,22 @@ ReleaseShared ==
   /\ shared' = FALSE
   /\ UNCHANGED <<appVer, appOK, trusted, lock, pc, rel, cand>>
 
+\* recoverStrandedUpdater (self_upgrade.go:265) and recoverLauncherBundle
+\* (self_upgrade.go:294). The next self-upgrade run or the next launch finds
+\* the app missing or unsigned and the ditto backup present, and restores the
+\* last committed version. SkipRecovery is that restore removed. This action
+\* does not run while a helper is inside brew, and it does not delete the
+\* earlier state where the app was already missing or unchecked.
+LaunchRecover ==
+  /\ Mode = "brew"
+  /\ ~SkipRecovery
+  /\ \A h \in Helpers: pc[h] \in {"idle", "done", "failed", "dead"}
+  /\ \/ appVer = 0
+     \/ ~appOK
+  /\ appVer' = trusted
+  /\ appOK' = TRUE
+  /\ UNCHANGED <<trusted, lock, shared, pc, rel, cand>>
+
 Next ==
   \/ \E h \in Helpers: ReadAndFetch(h)
   \/ \E h \in Helpers: DownloadArchive(h)
@@ -351,6 +400,7 @@ Next ==
   \/ \E h \in Helpers: VerifySignature(h)
   \/ \E h \in Helpers: StopUI(h)
   \/ \E h \in Helpers: BrewPrepare(h)
+  \/ \E h \in Helpers: BrewGuard(h)
   \/ \E h \in Helpers: AtomicSwap(h)
   \/ \E h \in Helpers: RenameAway(h)
   \/ \E h \in Helpers: RenameIn(h)
@@ -359,13 +409,13 @@ Next ==
   \/ \E h \in Helpers: BrewUpgradeFails(h)
   \/ \E h \in Helpers: BrewUpgradePartial(h)
   \/ \E h \in Helpers: BrewUpgradeUnsigned(h)
-  \/ \E h \in Helpers: BrewUpgradeRegress(h)
-  \/ \E h \in Helpers: BrewAccept(h)
+  \/ \E h \in Helpers: BrewCheck(h)
   \/ \E h \in Helpers: AtomicRollback(h)
   \/ \E h \in Helpers: RollbackAway(h)
   \/ \E h \in Helpers: Kill(h)
   \/ GrabShared
   \/ ReleaseShared
+  \/ LaunchRecover
 
 Spec == Init /\ [][Next]_vars
 
@@ -383,5 +433,13 @@ NoBadInstall == appOK
 \* that does not take it.
 MutualExclusion ==
   SkipLock \/ Cardinality({h \in Helpers: lock = h}) <= 1
+
+\* update.lock is held for the whole replacement, including the brew
+\* invocation, the cask-version guard, and the post-checks. A kill drops it.
+LockSpansBrew ==
+  \A h \in Helpers:
+    pc[h] \in {"locked", "rechecked", "verified", "stopped", "guarded",
+               "brewing", "brewed", "rollback", "gap"}
+    => SkipLock \/ lock = h
 
 =============================================================================

@@ -68,6 +68,9 @@ func updaterBundlePath(executable string) string {
 // the whole bundle to preserve the executable's sealed Info.plist/resources.
 // The helper has its own session, context, and log.
 var startSelfUpgrade = func(ctx context.Context, bundle string) error {
+	if _, err := recoverStrandedUpdater(ctx, bundle, newRunner()); err != nil {
+		return err
+	}
 	if _, err := readUpdaterBundle(bundle); err != nil {
 		return err
 	}
@@ -201,7 +204,116 @@ var verifySelfUpgrade = func(ctx context.Context, installed, candidate string) e
 	return signing.NewVerifier().VerifyReplacementApp(ctx, installed, candidate)
 }
 
+// caskVersionAllowed is the guard in front of `brew upgrade --cask`.
+// Homebrew's cask version and the GitHub tag are not the same number.
+// Refuse a cask version lower than the target release or the installed app
+// so brew is never asked to install that downgrade.
+func caskVersionAllowed(cask, target, installed string) bool {
+	target = versionpkg.ReleaseVersion(target)
+	installed = versionpkg.ReleaseVersion(installed)
+	if versionpkg.IsNewer(cask, target) || versionpkg.IsNewer(cask, installed) {
+		return false
+	}
+	return true
+}
+
+func readCaskVersion(ctx context.Context, runner checker.CmdRunner) (string, error) {
+	output, err := runner.Run(ctx, "brew", "info", "--cask", "--json=v2", updaterCask)
+	if err != nil {
+		return "", fmt.Errorf("failed to read Homebrew cask version: %w", err)
+	}
+	cask, err := checker.CaskInfoVersion(output)
+	if err != nil {
+		return "", fmt.Errorf("failed to read Homebrew cask version: %w", err)
+	}
+	return cask, nil
+}
+
+func verifyInstalledBundle(ctx context.Context, bundle string, runner checker.CmdRunner) error {
+	if _, err := runner.Run(ctx, "/usr/bin/codesign", "--verify", "--deep", "--strict", "--verbose=2", bundle); err != nil {
+		return fmt.Errorf("%s is not Developer ID signed: %w", bundle, err)
+	}
+	return nil
+}
+
+func findUpdaterBackup(bundle string) (string, error) {
+	matches, err := filepath.Glob(filepath.Join(filepath.Dir(bundle), ".updater-self-*", "Previous.app"))
+	if err != nil {
+		return "", err
+	}
+	var best string
+	var bestMod time.Time
+	for _, match := range matches {
+		if _, err := readUpdaterBundle(match); err != nil {
+			continue
+		}
+		info, err := os.Stat(match)
+		if err != nil {
+			continue
+		}
+		if best == "" || info.ModTime().After(bestMod) {
+			best, bestMod = match, info.ModTime()
+		}
+	}
+	return best, nil
+}
+
+// recoverStrandedUpdater restores the ditto backup when the installed app is
+// missing or not Developer ID signed. A kill during `brew upgrade` does not
+// run the in-process rollback; the next self-upgrade run and the next launch
+// do. The backup is the Previous.app left in the stage directory.
+func recoverStrandedUpdater(ctx context.Context, bundle string, runner checker.CmdRunner) (bool, error) {
+	backup, err := findUpdaterBackup(bundle)
+	if err != nil || backup == "" {
+		return false, err
+	}
+	// Hold the same exclusive lock as brew. A helper still inside brew keeps
+	// the backup; this waits, then looks again.
+	lock, err := updateActivityLock(ctx, true)
+	if err != nil {
+		return false, err
+	}
+	defer lock.Close()
+	backup, err = findUpdaterBackup(bundle)
+	if err != nil || backup == "" {
+		return false, err
+	}
+	if _, statErr := os.Lstat(bundle); statErr == nil {
+		if sigErr := verifyInstalledBundle(ctx, bundle, runner); sigErr == nil {
+			return false, nil
+		}
+	} else if !os.IsNotExist(statErr) {
+		return false, statErr
+	}
+	if _, _, err = restoreUpdaterBundle(bundle, backup, filepath.Join(filepath.Dir(backup), "Failed.app")); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func recoverLauncherBundle() {
+	exe, err := os.Executable()
+	if err != nil {
+		return
+	}
+	bundle := updaterBundlePath(exe)
+	if bundle == "" || strings.Contains(bundle, "updater-self-helper-") {
+		return
+	}
+	restored, err := recoverStrandedUpdater(context.Background(), bundle, newRunner())
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "Updater restore failed:", err)
+		return
+	}
+	if restored {
+		fmt.Fprintln(os.Stderr, "Restored Updater from the self-update backup")
+	}
+}
+
 func applySelfUpgrade(ctx context.Context, bundle string, runner checker.CmdRunner) (message string, err error) {
+	if _, err = recoverStrandedUpdater(ctx, bundle, runner); err != nil {
+		return "", err
+	}
 	installed, err := readUpdaterBundle(bundle)
 	if err != nil {
 		return "", err
@@ -262,6 +374,19 @@ func applySelfUpgrade(ctx context.Context, bundle string, runner checker.CmdRunn
 	if !versionpkg.IsNewer(versionpkg.ReleaseVersion(installed.Version), latest) {
 		return "Updater is already up to date (" + installed.Version + ")", nil
 	}
+	// update.lock is held from here through brew's return, the Developer ID
+	// and bundle-version checks, and a restore. It is not dropped while brew
+	// is running. Brew installs the cask; this process does not copy a bundle
+	// into the Caskroom or rewrite the receipt.
+	if brew {
+		cask, caskErr := readCaskVersion(ctx, runner)
+		if caskErr != nil {
+			return "", caskErr
+		}
+		if !caskVersionAllowed(cask, latest, installed.Version) {
+			return "", fmt.Errorf("refusing brew upgrade: cask version %s is lower than target %s or installed %s", cask, latest, versionpkg.ReleaseVersion(installed.Version))
+		}
+	}
 	if !brew {
 		if err = verifySelfUpgrade(ctx, bundle, candidate); err != nil {
 			return "", err
@@ -317,8 +442,8 @@ func applySelfUpgrade(ctx context.Context, bundle string, runner checker.CmdRunn
 		if err == nil {
 			var updated *app.App
 			updated, err = readUpdaterBundle(bundle)
-			if err == nil && !versionpkg.IsNewer(versionpkg.ReleaseVersion(installed.Version), updated.Version) {
-				err = fmt.Errorf("Homebrew has not installed a newer Updater release yet")
+			if err == nil && (!caskVersionAllowed(updated.Version, latest, installed.Version) || !versionpkg.IsNewer(versionpkg.ReleaseVersion(installed.Version), updated.Version)) {
+				err = fmt.Errorf("Homebrew installed %s, which is lower than target %s or not newer than installed %s", updated.Version, latest, versionpkg.ReleaseVersion(installed.Version))
 			}
 			if err == nil {
 				err = verifySelfUpgrade(ctx, backup, bundle)

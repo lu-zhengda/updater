@@ -30,6 +30,10 @@ func runningFromAppBundle() bool {
 }
 
 func main() {
+	// A killed `brew upgrade` can remove Updater.app. The next launch restores
+	// the ditto backup when that backup is still beside the app.
+	recoverLauncherBundle()
+
 	// Launched as Updater.app (Finder, `open`, login item): run the menu bar
 	// app. In a terminal (stdin is a TTY) the same bundle binary keeps its
 	// CLI/TUI behavior, so "Open Terminal UI" can exec it. LaunchServices may
