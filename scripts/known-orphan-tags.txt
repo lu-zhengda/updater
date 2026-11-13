@@ -1,0 +1,6 @@
+# Tags that have no GitHub Release and must stay.
+# v0.24.1 was created by release-on-merge on 2026-11-12 (commit
+# cc769931b0963f3373fe4850df771e24afc30881) and publish run 43149391974
+# failed before a Release existed. Do not move or delete the tag.
+# A new line here hides a tag that published nothing.
+v0.24.1
