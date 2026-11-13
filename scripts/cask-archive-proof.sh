@@ -161,7 +161,6 @@ for name in completions/updater.bash completions/updater.zsh completions/updater
 done
 ok "tarball contains the three completion files"
 
-sha=$(shasum -a 256 "$tarball" | awk '{print $1}')
 abs=$(cd "$(dirname "$tarball")" && pwd)/$(basename "$tarball")
 file_url="file://${abs}"
 
@@ -169,10 +168,10 @@ cask_src=dist/homebrew/Casks/updater.rb
 if [ ! -f "$cask_src" ]; then
 	fail "generated cask is missing"
 fi
+sh "$root/scripts/cask-checksum.sh" "$cask_src" "$tarball"
 mkdir -p "$tmp/tap/Casks"
-awk -v sha="$sha" -v url="$file_url" '
+awk -v url="$file_url" '
 	$0 ~ /^cask "updater" do$/ { print "cask \"updaterproof\" do"; next }
-	$0 ~ /^[[:space:]]*sha256 "/ { sub(/sha256 "[^"]*"/, "sha256 \"" sha "\""); print; next }
 	$0 ~ /^[[:space:]]*url "/ { sub(/url "[^"]*"/, "url \"" url "\""); print; next }
 	{ print }
 ' "$cask_src" >"$tmp/tap/Casks/updaterproof.rb"
@@ -198,6 +197,15 @@ cask_version=$(awk -F'"' '$1 ~ /version / { print $2; exit }' "$tmp/tap/Casks/up
 if [ "$proof_version" != "$cask_version" ]; then
 	fail "installed app version $proof_version != cask version $cask_version"
 fi
+bin_version=$("$proof_app/Contents/MacOS/updater" --version 2>&1 || true)
+case $bin_version in
+*"$cask_version"*)
+	ok "updater --version matches the cask ($cask_version)"
+	;;
+*)
+	fail "updater --version [$bin_version] does not contain cask version $cask_version"
+	;;
+esac
 ok "app landed at $proof_version"
 
 bin_link=$prefix/bin/updater
