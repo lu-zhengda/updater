@@ -65,17 +65,20 @@ tlc mutate-skip-newer.cfg NoDowngrade
 tlc mutate-skip-relock.cfg NoDowngrade
 tlc mutate-skip-lock.cfg NoDowngrade
 tlc mutate-skip-version.cfg NoDowngrade
+tlc mutate-skip-cask-version.cfg NoDowngrade
+
+echo "== TLC accepted cask boundaries (the property still fails) =="
 tlc brew-partial.cfg AlwaysPresent
 tlc brew-unsigned.cfg NoBadInstall
-tlc brew-regress.cfg NoDowngrade
 
 echo "== TLC on the code as it is =="
 tlc direct.cfg pass
 tlc brew-ok.cfg pass
+tlc brew-regress.cfg pass
 
 echo "== Go tests for the same properties =="
 go test -count=1 -timeout 180s \
-  -run 'TestIsNewer|TestCleanTagVersionPrefixes|TestParseBrewInfo|TestChecksumForAsset|TestReplaceUpdaterBundle|TestRestoreUpdaterBundle|TestSelfUpgradeGuardrails|TestSelfUpgradeTransaction' \
+  -run 'TestIsNewer|TestCleanTagVersionPrefixes|TestParseBrewInfo|TestChecksumForAsset|TestReplaceUpdaterBundle|TestRestoreUpdaterBundle|TestSelfUpgradeGuardrails|TestSelfUpgradeTransaction|TestSelfUpgradeRefusesLowCaskVersion|TestSelfUpgradeBrewRestoresAfterBadResult|TestRecoverStrandedUpdater' \
   ./internal/version/ ./internal/checker/ ./cmd/updater/
 
 echo "== Go mutations (the test must fail, then the tree is restored) =="

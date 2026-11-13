@@ -188,6 +188,17 @@ func parseBrewInfo(data []byte) (brewCaskArtifact, error) {
 	return artifact, nil
 }
 
+// CaskInfoVersion returns the version brew info --cask --json=v2 reports.
+// That version is what `brew upgrade --cask` will install. It is not the
+// GitHub release tag.
+func CaskInfoVersion(data []byte) (string, error) {
+	artifact, err := parseBrewInfo(data)
+	if err != nil {
+		return "", err
+	}
+	return artifact.Version, nil
+}
+
 // CaskExists checks whether a Homebrew cask exists by running
 // `brew info --cask --json=v2 <name>` and checking the exit code.
 func CaskExists(ctx context.Context, runner CmdRunner, name string) bool {

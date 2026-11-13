@@ -129,6 +129,50 @@ mutations = [
             "./internal/version/",
         ],
     },
+    {
+        "name": "accept a cask version lower than the target",
+        "file": "cmd/updater/self_upgrade.go",
+        "old": """func caskVersionAllowed(cask, target, installed string) bool {
+	target = versionpkg.ReleaseVersion(target)
+	installed = versionpkg.ReleaseVersion(installed)
+	if versionpkg.IsNewer(cask, target) || versionpkg.IsNewer(cask, installed) {
+		return false
+	}
+	return true
+}""",
+        "new": """func caskVersionAllowed(cask, target, installed string) bool {
+	return true
+}""",
+        "args": [
+            "go", "test", "-count=1", "-timeout", "180s",
+            "-run", "TestSelfUpgradeRefusesLowCaskVersion",
+            "./cmd/updater/",
+        ],
+    },
+    {
+        "name": "leave a missing app unrestored",
+        "file": "cmd/updater/self_upgrade.go",
+        "old": """	backup, err := findUpdaterBackup(bundle)
+	if err != nil || backup == "" {
+		return false, err
+	}
+	// Hold the same exclusive lock as brew. A helper still inside brew keeps
+	// the backup; this waits, then looks again.
+	lock, err := updateActivityLock(ctx, true)""",
+        "new": """	return false, nil
+	backup, err := findUpdaterBackup(bundle)
+	if err != nil || backup == "" {
+		return false, err
+	}
+	// Hold the same exclusive lock as brew. A helper still inside brew keeps
+	// the backup; this waits, then looks again.
+	lock, err := updateActivityLock(ctx, true)""",
+        "args": [
+            "go", "test", "-count=1", "-timeout", "180s",
+            "-run", "TestRecoverStrandedUpdater",
+            "./cmd/updater/",
+        ],
+    },
 ]
 
 

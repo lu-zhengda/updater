@@ -1,11 +1,11 @@
 ---
 name: verify-updater-formal
-description: "Prove the Updater self-update helper leaves a signed Updater.app at the old or newer version. Use when changing self-upgrade, update.lock, downloadSelfArchive, checksumForAsset, VerifyReplacementApp, replaceUpdaterBundle, restoreUpdaterBundle, IsNewer, CleanTagVersion, or parseBrewInfo."
+description: "Prove the Updater self-update helper leaves a signed Updater.app at the old or newer version. Use when changing self-upgrade, update.lock, caskVersionAllowed, recoverStrandedUpdater, downloadSelfArchive, checksumForAsset, VerifyReplacementApp, replaceUpdaterBundle, restoreUpdaterBundle, IsNewer, CleanTagVersion, or parseBrewInfo."
 ---
 
 # Verify the Updater self-update
 
-The helper behind `updater upgrade` (when the binary is inside `Updater.app`) and the menu-bar `update --bundle-id` is `applySelfUpgrade` in `cmd/updater/self_upgrade.go`. It takes `~/.config/updater/update.lock`, downloads the release for a non-cask install, checks the checksum and the Developer ID team, and replaces the bundle. A cask install runs `brew upgrade --cask` and then checks the result.
+The helper behind `updater upgrade` (when the binary is inside `Updater.app`) and the menu-bar `update --bundle-id` is `applySelfUpgrade` in `cmd/updater/self_upgrade.go`. It takes `~/.config/updater/update.lock`, downloads the release for a non-cask install, checks the checksum and the Developer ID team, and replaces the bundle. A cask install does not copy a bundle into the Caskroom or rewrite the receipt. It holds `update.lock` across `brew upgrade --cask`, refuses a cask version lower than the target release or the installed app, and after brew returns checks the Developer ID team and the bundle version. Failure restores the ditto backup. The next run or launch restores that backup when the app is missing or unsigned.
 
 A test checks cases someone wrote. This check covers every order of those steps inside the bounds below, and generated inputs for the parsers.
 
@@ -17,6 +17,7 @@ Each property is one sentence. The harm is the sentence after it.
 - **NoDowngrade.** That app is the original version or a newer one, never an older one. Harm: the user loses a version they already had.
 - **NoBadInstall.** That app passed the checksum check and the Developer ID team check, or it is the app that was already installed. Harm: a bad download or a bad signature replaces the app.
 - **MutualExclusion.** Two helpers do not both hold the exclusive `update.lock`. Harm: two replaces run at once.
+- **LockSpansBrew.** A helper inside the replacement, including the cask-version guard and `brew upgrade`, holds that lock. Harm: brew runs without the lock, or the guard runs outside it.
 
 ## Run
 
@@ -36,12 +37,15 @@ TLC 2.19, one worker, no symmetry.
 
 | Config | Result | States | Depth |
 | --- | --- | --- | --- |
-| `model/direct.cfg` | pass: AlwaysPresent, NoDowngrade, NoBadInstall, MutualExclusion | 5713 generated, 1728 distinct | 16 |
-| `model/brew-ok.cfg` | pass, only if `brew upgrade` either leaves the bundle untouched or installs a newer signed app | 1585 generated, 572 distinct | 16 |
+| `model/direct.cfg` | pass: AlwaysPresent, NoDowngrade, NoBadInstall, MutualExclusion, LockSpansBrew | 5713 generated, 1728 distinct | 16 |
+| `model/brew-ok.cfg` | pass, when `brew upgrade` either leaves the bundle untouched or installs the signed cask version the guard accepted | 2049 generated, 814 distinct | 18 |
+| `model/brew-regress.cfg` | pass: the same properties, when `brew info` can report a version other than the GitHub tag | 3493 generated, 1458 distinct | 18 |
 
 `direct.cfg` is the tarball helper: two helpers, versions 1, 2, and 3, download outcomes good / bad checksum / bad signature / version mismatch / network drop, the shared lock, and a kill from any phase. Checksum and signature run before `replaceUpdaterBundle`. The replace is one `renamex_np(RENAME_SWAP)`. A kill in any phase leaves version 1 or a newer signed version.
 
-`brew-ok.cfg` is not a proof that Homebrew is atomic. It is the helper's own steps when brew's result is already good.
+`brew-ok.cfg` is not a proof that Homebrew is atomic. It is the helper's own steps when the cask version is the fetched release and brew's result is already good.
+
+`brew-regress.cfg` is the case the old model failed. Helper 1 can install cask version 2. Helper 2 fetched release 3. If `brew info` then reports version 1, `caskVersionAllowed` refuses and brew is not called. NoDowngrade holds. The trace that installs version 1 after version 2 is `mutate-skip-cask-version.cfg`.
 
 ## Broken variants that must fail
 
@@ -54,27 +58,25 @@ TLC 2.19, one worker, no symmetry.
 | `mutate-skip-newer.cfg`, `mutate-skip-relock.cfg` | NoDowngrade. The second helper installs release 2 after the first has installed release 3. |
 | `mutate-skip-lock.cfg` | NoDowngrade. Both helpers pass the recheck while the app is still version 1, one installs 3, the other then installs 2. |
 | `mutate-skip-version.cfg` | NoDowngrade. An archive whose plist version is 1 is installed over version 2. |
+| `mutate-skip-cask-version.cfg` and `caskVersionAllowed` returning true | NoDowngrade. After version 2 is committed, brew installs cask version 1. `TestSelfUpgradeRefusesLowCaskVersion` fails on the same removal. |
+| `scripts/mutate.py` recovery returns before it looks for `Previous.app` | `TestRecoverStrandedUpdater`. The missing app stays missing. TLC does not turn green when this restore is removed: the empty path is still a state. |
 | `scripts/mutate.py` `return lv.GreaterThan(cv) \|\| true` | `TestIsNewer/older_major` |
 
-## Findings still open
+## Accepted on the cask path
 
-These are counterexamples in the current Go. They are not fixed. Do not delete the configs to make the script pass.
+These two counterexamples stay in the script. They must keep failing the named property. Deleting the config, or changing the property so TLC passes, hides a real state. `model/README.md` records the same boundary.
 
-**Brew can leave no app.** `brew-partial.cfg`, invariant AlwaysPresent. Trace: read the installed app, fetch a newer release, skip the tarball download (`isUpdaterCask`), take `update.lock`, recheck, ditto a backup, `brew upgrade` removes the bundle and does not return. A kill of the helper in `runner.Run` (`self_upgrade.go` brew upgrade) does not run the rollback. The install path is empty. The backup is still in the stage directory.
+**Brew can leave no app.** `brew-partial.cfg`, invariant AlwaysPresent. Trace: read the installed app, fetch a newer release, skip the tarball (`isUpdaterCask`), take `update.lock`, recheck, the cask version is the release, ditto a backup, `brew upgrade` removes the bundle and does not return (`runner.Run` in `applySelfUpgrade`). A kill there does not run the in-process rollback. The install path is empty. The backup is still `.updater-self-*/Previous.app`. The next `self-upgrade` run and the next launch call `recoverStrandedUpdater` and put that backup back. The empty path is still a state, so AlwaysPresent does not hold there. That window is brew's own replace. The bytes brew installs are still covered by the cask sha256 and by Gatekeeper notarization. This model does not treat brew as atomic.
 
-**Brew can leave an unchecked app.** `brew-unsigned.cfg`, invariant NoBadInstall. The same steps, and `brew upgrade` returns with a bundle that has not passed `verifySelfUpgrade`. The Developer ID check runs only after brew returns (`self_upgrade.go` after the upgrade). A kill between those two lines leaves that bundle.
-
-**A later brew upgrade can install an older app.** `brew-regress.cfg`, invariant NoDowngrade. Helper 1 fetches release 2 and brew installs it. Helper 2 fetches release 3, so the recheck (`IsNewer`) allows it, and brew then installs version 1. The GitHub tag and the cask version are not the same number. The helper notices only after brew returns, and rolls back only if it is still alive.
-
-The fix is not a one-line change: brew replaces the bundle before this process can check it. Do not paper over it by modeling brew as atomic.
+**Brew can leave an unchecked app.** `brew-unsigned.cfg`, invariant NoBadInstall. Brew returns a bundle, and the Developer ID and bundle-version checks run only after that return. A kill between those lines leaves the bundle. If the helper stays alive, `restoreUpdaterBundle` puts the backup back and the error is returned. The same bytes were checked by Homebrew's sha256 and by Gatekeeper notarization. NoBadInstall does not hold in the kill window. Do not weaken it.
 
 ## Coverage
 
-Sync commit: `ddd85b566130b8e084045fd5b20b9e93e333de4e`. The covered Go at that commit is what this model and the fuzz describe. Move this hash forward only after you confirm the model and the fuzz still describe the code, and re-run the script.
+Sync commit: `32db92c890bdd017550252225af5c7cb6e8853c4`. The covered Go at that commit is what this model and the fuzz describe. Move this hash forward only after you confirm the model and the fuzz still describe the code, and re-run the script.
 
 | Code | Check |
 | --- | --- |
-| `applySelfUpgrade`, `downloadSelfArchive`, `extractUpdaterApp` version match, `updateActivityLock`, `verifySelfUpgrade`, `stopUpdaterUI`, `replaceUpdaterBundle`, `restoreUpdaterBundle` | `model/SelfUpdate.tla`. Each action names the function. |
+| `applySelfUpgrade`, `downloadSelfArchive`, `extractUpdaterApp` version match, `updateActivityLock`, `caskVersionAllowed`, `readCaskVersion`, `recoverStrandedUpdater`, `verifySelfUpgrade`, `stopUpdaterUI`, `replaceUpdaterBundle`, `restoreUpdaterBundle` | `model/SelfUpdate.tla`. Each action names the function. |
 | `replaceUpdaterBundle` / `restoreUpdaterBundle` now use `RENAME_SWAP` | fix `5164435ff3f215e192badb0cde5445174423b031` |
 | `CleanTagVersion` | fix `a0545e4f57fc074142dcc734e41e6cc21b9dd4f4`. Fuzz `FuzzGitHubRelease`. |
 | `parseBrewInfo` | fix `ddd85b566130b8e084045fd5b20b9e93e333de4e`. Fuzz `FuzzParseBrewInfo`. |
@@ -89,7 +91,7 @@ Not in the model, and not claimed:
 - Menu-bar restart, history, and logs.
 - `ReleaseVersion` on a stack of git-describe suffixes. Bundle versions are one `CFBundleShortVersionString`.
 - Versions other than 1, 2, and 3. Fuzz covers the string comparison; the model covers the order of the steps.
-- Homebrew's own download. The open findings above are that gap.
+- Homebrew's own download, the cask sha256 check, and Gatekeeper's notarization of the bottle. Those are why `brew-partial.cfg` and `brew-unsigned.cfg` are accepted boundaries rather than steps this helper can close. The helper still refuses a lower cask version before calling brew, and it still checks the bundle brew left behind when the helper is alive.
 
 ## Fuzz
 

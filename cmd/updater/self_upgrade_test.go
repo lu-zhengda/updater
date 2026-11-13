@@ -11,9 +11,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -54,7 +56,35 @@ type selfUpgradeTestRunner struct {
 	t                            *testing.T
 	bundle                       string
 	brew, fail, managed, stopped bool
+	caskVersion                  string
+	brewVersion                  string
 	calls                        []string
+}
+
+func TestMain(m *testing.M) {
+	if path := os.Getenv("UPDATER_LOCK_PROBE"); path != "" {
+		f, err := os.OpenFile(path, os.O_RDWR, 0)
+		if err != nil {
+			os.Exit(2)
+		}
+		err = syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+		f.Close()
+		if err != nil {
+			os.Exit(0)
+		}
+		os.Exit(1)
+	}
+	os.Exit(m.Run())
+}
+
+func probeUpdateLockHeld(t *testing.T) {
+	t.Helper()
+	path := filepath.Join(filepath.Dir(config.DefaultPath()), "update.lock")
+	cmd := exec.Command(os.Args[0], "-test.run=^$")
+	cmd.Env = append([]string{"UPDATER_LOCK_PROBE=" + path}, os.Environ()...)
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("update.lock was not held across brew: %v", err)
+	}
 }
 
 func (r *selfUpgradeTestRunner) Run(_ context.Context, name string, args ...string) ([]byte, error) {
@@ -66,10 +96,21 @@ func (r *selfUpgradeTestRunner) Run(_ context.Context, name string, args ...stri
 			return []byte(r.bundle + "\n"), nil
 		}
 		return nil, errors.New("not installed via brew")
+	case strings.HasPrefix(key, "brew info --cask --json=v2 "):
+		version := r.caskVersion
+		if version == "" {
+			version = "2.0.0"
+		}
+		return []byte(`{"casks":[{"token":"updater","version":"` + version + `"}]}`), nil
 	case name == "/usr/bin/ditto":
 		return nil, os.CopyFS(args[1], os.DirFS(args[0]))
 	case key == "brew upgrade --cask "+updaterCask:
-		writeSelfBundle(r.t, r.bundle, "2.0.0")
+		probeUpdateLockHeld(r.t)
+		version := r.brewVersion
+		if version == "" {
+			version = "2.0.0"
+		}
+		writeSelfBundle(r.t, r.bundle, version)
 		if r.fail {
 			return nil, errors.New("brew failed after replacing files")
 		}
@@ -349,6 +390,140 @@ func TestRestoreUpdaterBundleSwaps(t *testing.T) {
 	if readErr != nil || got.Version != "2.0.0" {
 		t.Fatalf("bundle moved without a backup: %+v, %v", got, readErr)
 	}
+}
+
+func TestSelfUpgradeRefusesLowCaskVersion(t *testing.T) {
+	for _, tc := range []struct {
+		name, installed, cask string
+		allow                 bool
+	}{
+		{name: "lower than installed and target", installed: "2.0.0", cask: "1.0.0"},
+		{name: "newer than installed but lower than target", installed: "2.0.0", cask: "2.5.0"},
+		{name: "matches target", installed: "2.0.0", cask: "3.0.0", allow: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("HOME", t.TempDir())
+			bundle := filepath.Join(t.TempDir(), "Updater.app")
+			writeSelfBundle(t, bundle, tc.installed)
+			oldRelease, oldVerify := selfUpgradeRelease, verifySelfUpgrade
+			t.Cleanup(func() { selfUpgradeRelease, verifySelfUpgrade = oldRelease, oldVerify })
+			selfUpgradeRelease = func(string) (*checker.GitHubRelease, error) {
+				return &checker.GitHubRelease{TagName: "v3.0.0"}, nil
+			}
+			verifySelfUpgrade = func(context.Context, string, string) error { return nil }
+			runner := &selfUpgradeTestRunner{t: t, bundle: bundle, brew: true, caskVersion: tc.cask, brewVersion: tc.cask}
+			_, err := applySelfUpgrade(context.Background(), bundle, runner)
+			upgraded := false
+			for _, call := range runner.calls {
+				if strings.HasPrefix(call, "brew upgrade ") {
+					upgraded = true
+				}
+			}
+			info, readErr := readUpdaterBundle(bundle)
+			if tc.allow {
+				if err != nil || !upgraded || readErr != nil || info.Version != tc.cask {
+					t.Fatalf("err=%v upgraded=%t bundle=%+v read=%v", err, upgraded, info, readErr)
+				}
+				return
+			}
+			if err == nil || upgraded || readErr != nil || info.Version != tc.installed {
+				t.Fatalf("err=%v upgraded=%t bundle=%+v read=%v", err, upgraded, info, readErr)
+			}
+		})
+	}
+}
+
+func TestSelfUpgradeBrewRestoresAfterBadResult(t *testing.T) {
+	for _, tc := range []struct {
+		name, written string
+		reject        bool
+	}{
+		{name: "bundle version lower than target", written: "2.0.0"},
+		{name: "signature rejected", written: "3.0.0", reject: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("HOME", t.TempDir())
+			bundle := filepath.Join(t.TempDir(), "Updater.app")
+			writeSelfBundle(t, bundle, "1.0.0")
+			oldRelease, oldVerify := selfUpgradeRelease, verifySelfUpgrade
+			t.Cleanup(func() { selfUpgradeRelease, verifySelfUpgrade = oldRelease, oldVerify })
+			selfUpgradeRelease = func(string) (*checker.GitHubRelease, error) {
+				return &checker.GitHubRelease{TagName: "v3.0.0"}, nil
+			}
+			verifySelfUpgrade = func(context.Context, string, string) error {
+				if tc.reject {
+					return errors.New("wrong signing identity")
+				}
+				return nil
+			}
+			runner := &selfUpgradeTestRunner{t: t, bundle: bundle, brew: true, caskVersion: "3.0.0", brewVersion: tc.written}
+			_, err := applySelfUpgrade(context.Background(), bundle, runner)
+			if err == nil {
+				t.Fatal("accepted brew result")
+			}
+			info, readErr := readUpdaterBundle(bundle)
+			if readErr != nil || info.Version != "1.0.0" {
+				t.Fatalf("backup was not restored: %+v, %v", info, readErr)
+			}
+			entries, histErr := history.List(history.DefaultPath())
+			if histErr != nil || len(entries) != 1 || !entries[0].RolledBack || entries[0].Success {
+				t.Fatalf("history: %+v, %v", entries, histErr)
+			}
+		})
+	}
+}
+
+func TestRecoverStrandedUpdater(t *testing.T) {
+	for _, tc := range []struct {
+		name, live        string
+		missing, unsigned bool
+		want              string
+	}{
+		{name: "missing app", missing: true, want: "1.0.0"},
+		{name: "unsigned app", live: "9.0.0", unsigned: true, want: "1.0.0"},
+		{name: "signed app", live: "2.0.0", want: "2.0.0"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("HOME", t.TempDir())
+			parent := t.TempDir()
+			bundle := filepath.Join(parent, "Updater.app")
+			if !tc.missing {
+				writeSelfBundle(t, bundle, tc.live)
+			}
+			writeSelfBundle(t, filepath.Join(parent, ".updater-self-stranded", "Previous.app"), "1.0.0")
+			runner := &recoverRunner{signed: !tc.unsigned && !tc.missing}
+			restored, err := recoverStrandedUpdater(context.Background(), bundle, runner)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if restored != (tc.want != tc.live) {
+				t.Fatalf("restored=%t, want version %s", restored, tc.want)
+			}
+			info, readErr := readUpdaterBundle(bundle)
+			if readErr != nil || info.Version != tc.want {
+				t.Fatalf("bundle: %+v, %v; want %s", info, readErr, tc.want)
+			}
+			if tc.missing && len(runner.calls) != 0 {
+				t.Fatalf("signature check on a missing app: %v", runner.calls)
+			}
+		})
+	}
+}
+
+type recoverRunner struct {
+	signed bool
+	calls  []string
+}
+
+func (r *recoverRunner) Run(_ context.Context, name string, args ...string) ([]byte, error) {
+	r.calls = append(r.calls, name+" "+strings.Join(args, " "))
+	if name == "/usr/bin/codesign" {
+		if r.signed {
+			return nil, nil
+		}
+		return []byte("code object is not signed at all"), errors.New("exit status 1")
+	}
+	return nil, fmt.Errorf("unexpected command %s", name)
 }
 
 func TestSelfUpgradeArchiveRejectsUnsafeEntries(t *testing.T) {
