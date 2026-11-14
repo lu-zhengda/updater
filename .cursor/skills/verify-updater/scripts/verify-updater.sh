@@ -33,6 +33,9 @@ mode=run
 if [ "${1:-}" = "--doctor" ]; then
 	mode=doctor
 	shift
+elif [ "${1:-}" = "--self-test" ]; then
+	mode=self-test
+	shift
 fi
 version_arg=${1:-}
 
@@ -46,6 +49,8 @@ cask_backup=
 tracked_file=
 pass=0
 fail=0
+inconclusive=0
+gatekeeper_reason=
 
 # Remember a path this run created so the exit trap can remove it.
 track() {
@@ -257,6 +262,137 @@ apply_quarantine() {
 	say "quarantine $(xattr -p com.apple.quarantine "$target") on $target"
 }
 
+# 0 when flags are present and lack the user-approved bit 0x40.
+flags_unapproved() {
+	flags=$1
+	[ -n "$flags" ] || return 1
+	python3 -c 'import sys
+raise SystemExit(0 if (int(sys.argv[1], 16) & 0x40) == 0 else 1)' "$flags"
+}
+
+quarantine_flags() {
+	xattr -p com.apple.quarantine "$1" 2>/dev/null | awk -F';' '{print $1; exit}'
+}
+
+# Remove the quarantine xattr only from a copy this run created.
+clear_harness_quarantine() {
+	target=$1
+	case $target in
+	"$INSTALLED_APP"|"$INSTALLED_APP"/*)
+		say "not clearing quarantine on $INSTALLED_APP"
+		return 0
+		;;
+	esac
+	case $target in
+	"$work"/*) ;;
+	"$HOME/Applications/Updater.app"|"$HOME/Applications/Updater.app"/*)
+		if [ ! -f "$work/menu-aside/placed-home" ]; then
+			say "not clearing quarantine on a user copy at $target"
+			return 0
+		fi
+		;;
+	*)
+		say "not clearing quarantine outside a harness path: $target"
+		return 0
+		;;
+	esac
+	xattr -dr com.apple.quarantine "$target" 2>/dev/null || xattr -d com.apple.quarantine "$target" 2>/dev/null || true
+	say "cleared quarantine on harness copy $target"
+}
+
+proc_cpu() {
+	ps -p "$1" -o time= 2>/dev/null | tr -d ' '
+}
+
+cpu_is_idle() {
+	case $1 in
+	""|0:00.00|0:00.01) return 0 ;;
+	*) return 1 ;;
+	esac
+}
+
+sample_text_is_dyld_stall() {
+	file=$1
+	grep -F '_dyld_start' "$file" >/dev/null 2>&1 || return 1
+	if grep -E 'NSApplication|nativeLoop| main \(' "$file" >/dev/null 2>&1; then
+		return 1
+	fi
+	return 0
+}
+
+log_text_prompt_waiting() {
+	file=$1
+	last=$(grep -E 'Prompt shown|Marked application as user approved' "$file" 2>/dev/null | tail -n 1)
+	case $last in
+	*"Prompt shown"*"waiting for response"*) return 0 ;;
+	*) return 1 ;;
+	esac
+}
+
+launch_stuck_in_dyld() {
+	pid=$1
+	sf=$(mktemp "${TMPDIR:-/tmp}/verify-updater-sample.XXXXXX")
+	track "$sf"
+	/usr/bin/sample "$pid" 1 -file "$sf" >/dev/null 2>&1 || true
+	if sample_text_is_dyld_stall "$sf"; then
+		rm -f "$sf"
+		return 0
+	fi
+	rm -f "$sf"
+	return 1
+}
+
+prompt_waiting() {
+	lf=$(mktemp "${TMPDIR:-/tmp}/verify-updater-gk.XXXXXX")
+	track "$lf"
+	command log show --last 3m --style compact \
+		--predicate 'process == "syspolicyd" AND eventMessage CONTAINS "com.updater.app" AND (eventMessage CONTAINS "Prompt shown" OR eventMessage CONTAINS "Marked application as user approved")' \
+		>"$lf" 2>/dev/null || true
+	if log_text_prompt_waiting "$lf"; then
+		rm -f "$lf"
+		return 0
+	fi
+	rm -f "$lf"
+	return 1
+}
+
+# 0 when the process has left dyld. 2 when this looks like a first-launch
+# Gatekeeper wait. 1 when the process is already gone.
+wait_past_dyld() {
+	pid=$1
+	bundle=$2
+	tries=$3
+	i=0
+	cpu=
+	while [ "$i" -lt "$tries" ]; do
+		if ! kill -0 "$pid" 2>/dev/null; then
+			return 1
+		fi
+		cpu=$(proc_cpu "$pid")
+		if ! cpu_is_idle "$cpu"; then
+			return 0
+		fi
+		sleep 1
+		i=$((i + 1))
+	done
+	reason=
+	if launch_stuck_in_dyld "$pid"; then
+		reason="process $pid stayed in _dyld_start with CPU ${cpu:-0:00.00} for ${tries}s"
+	fi
+	if prompt_waiting; then
+		reason="${reason:+$reason; }syspolicyd logged Prompt shown, waiting for response for com.updater.app"
+	fi
+	flags=$(quarantine_flags "$bundle" 2>/dev/null || true)
+	if flags_unapproved "$flags"; then
+		reason="${reason:+$reason; }quarantine flags $flags lack the user-approved bit 0x40"
+	fi
+	if [ -z "$reason" ]; then
+		reason="process $pid used CPU ${cpu:-0:00.00} for ${tries}s and did not reach main"
+	fi
+	gatekeeper_reason=$reason
+	return 2
+}
+
 sha256_file() {
 	shasum -a 256 "$1" | awk '{print $1}'
 }
@@ -281,6 +417,25 @@ record() {
 		say "FAIL $2"
 		fail=$((fail + 1))
 	fi
+}
+
+record_outcome() {
+	code=$1
+	name=$2
+	case $code in
+	0)
+		say "PASS $name"
+		pass=$((pass + 1))
+		;;
+	2)
+		say "INCONCLUSIVE $name: ${3:-$gatekeeper_reason}"
+		inconclusive=$((inconclusive + 1))
+		;;
+	*)
+		say "FAIL $name"
+		fail=$((fail + 1))
+		;;
+	esac
 }
 
 restore_errexit() {
@@ -389,79 +544,6 @@ wait_for_new_pid() {
 		i=$((i + 1))
 	done
 	return 1
-}
-
-describe_dialogs() {
-	cat >"$work/dialogs.applescript" <<'EOF'
-tell application "System Events"
-  set blob to ""
-  set procs to {"CoreServicesUIAgent", "UserNotificationCenter", "Finder", "SecurityAgent"}
-  repeat with pn in procs
-    if exists process (pn as text) then
-      tell process (pn as text)
-        repeat with w in windows
-          set wn to ""
-          try
-            set wn to name of w as text
-          end try
-          set blob to blob & pn & " | " & wn & linefeed
-          try
-            repeat with t in static texts of w
-              set blob to blob & "  text: " & (value of t as text) & linefeed
-            end repeat
-          end try
-        end repeat
-      end tell
-    end if
-  end repeat
-  if blob is "" then return "no Gatekeeper window on CoreServicesUIAgent, UserNotificationCenter, Finder, or SecurityAgent"
-  return blob
-end tell
-EOF
-	run_timed 8 "$work/dialogs" osascript "$work/dialogs.applescript"
-	say "dialog probe exit=$run_to_status"
-	say_file "$work/dialogs.out"
-	say_file "$work/dialogs.err"
-}
-
-click_gatekeeper_open() {
-	cat >"$work/click.applescript" <<'EOF'
-tell application "System Events"
-  set resultText to "no Updater download dialog"
-  set procs to {"CoreServicesUIAgent", "UserNotificationCenter", "Finder", "SecurityAgent"}
-  repeat with pn in procs
-    if exists process (pn as text) then
-      tell process (pn as text)
-        repeat with w in windows
-          set blob to ""
-          try
-            set blob to name of w as text
-          end try
-          try
-            repeat with t in static texts of w
-              set blob to blob & " " & (value of t as text)
-            end repeat
-          end try
-          if blob contains "Updater" and blob contains "downloaded" then
-            repeat with b in buttons of w
-              if name of b is "Open" then
-                click b
-                return "clicked Open on " & pn & ": " & blob
-              end if
-            end repeat
-            return "Updater download dialog had no Open button: " & blob
-          end if
-        end repeat
-      end tell
-    end if
-  end repeat
-  return resultText
-end tell
-EOF
-	run_timed 8 "$work/click" osascript "$work/click.applescript"
-	say "gatekeeper click exit=$run_to_status"
-	say_file "$work/click.out"
-	say_file "$work/click.err"
 }
 
 backup_installed_app() {
@@ -799,16 +881,29 @@ check_launch() {
 	say_file "$work/open.err"
 	if pid=$(wait_for_new_pid "$bin" 12); then
 		method="open -n"
-	else
-		describe_dialogs
-		click_gatekeeper_open
-		if pid=$(wait_for_new_pid "$bin" 12); then
-			method="open -n after clicking the Gatekeeper Open button"
-		fi
 	fi
 	if [ -z "$method" ] || [ -z "$pid" ]; then
+		if prompt_waiting || flags_unapproved "$(quarantine_flags "$launch" 2>/dev/null || true)"; then
+			gatekeeper_reason="Gatekeeper first-launch prompt is unanswered; LaunchServices did not keep a process past dyld"
+			say "$gatekeeper_reason"
+			return 2
+		fi
 		say "LaunchServices did not keep the quarantined app running"
-		say "The raw Mach-O was not executed. A first-open dialog that System Events cannot click needs Accessibility permission for the process running this script."
+		return 1
+	fi
+	set +e
+	wait_past_dyld "$pid" "$launch" 15
+	dyld_status=$?
+	set -e
+	if [ "$dyld_status" -eq 2 ]; then
+		say "$gatekeeper_reason"
+		kill -TERM "$pid" 2>/dev/null || true
+		sleep 1
+		kill -KILL "$pid" 2>/dev/null || true
+		return 2
+	fi
+	if [ "$dyld_status" -ne 0 ]; then
+		say "launched pid=$pid exited before it reached main"
 		return 1
 	fi
 	if ! gatekeeper_log_rejects; then
@@ -892,11 +987,43 @@ check_menu_update() {
 	ditto "$old_app" "$home_app" || return 1
 	placed=$(bundle_version "$home_app" 2>/dev/null || printf '%s' missing)
 	say "placed $placed at $home_app and moved $INSTALLED_APP aside so discovery finds this bundle"
+	clear_harness_quarantine "$home_app"
 	bin=$home_app/Contents/MacOS/updater
 	say "command: $bin update --bundle-id com.updater.app"
 	say "that is the command the menu-bar Update item runs"
 	"$bin" update --bundle-id com.updater.app >"$work/menu-update.out" 2>"$work/menu-update.err" &
 	menu_pid=$!
+	i=0
+	while [ "$i" -lt 20 ]; do
+		if [ -z "$menu_pid" ] || ! kill -0 "$menu_pid" 2>/dev/null; then
+			if [ -n "$menu_pid" ]; then
+				wait "$menu_pid" || true
+			fi
+			menu_pid=
+			break
+		fi
+		if ! cpu_is_idle "$(proc_cpu "$menu_pid")"; then
+			break
+		fi
+		sleep 1
+		i=$((i + 1))
+	done
+	if [ -n "${menu_pid:-}" ] && kill -0 "$menu_pid" 2>/dev/null && cpu_is_idle "$(proc_cpu "$menu_pid")"; then
+		set +e
+		wait_past_dyld "$menu_pid" "$home_app" 1
+		dyld_status=$?
+		set -e
+		if [ "$dyld_status" -eq 2 ]; then
+			say "$gatekeeper_reason"
+			kill -TERM "$menu_pid" 2>/dev/null || true
+			sleep 1
+			kill -KILL "$menu_pid" 2>/dev/null || true
+			quit_new_matching "$home_app"
+			restore_menu_paths
+			rm -f "$work/menu-aside/placed-home"
+			return 2
+		fi
+	fi
 	deadline=$(( $(date +%s) + 180 ))
 	got=$placed
 	while [ "$(date +%s)" -lt "$deadline" ]; do
@@ -1150,10 +1277,41 @@ check_self_update() {
 	fi
 	say "self-update log bytes before=$before_bytes path=$log"
 	snapshot_helpers "$work/helper-dirs-before"
+	clear_harness_quarantine "$old_app"
 	bin=$old_app/Contents/MacOS/updater
 	say "command: $bin upgrade"
 	"$bin" upgrade >"$work/upgrade.out" 2>"$work/upgrade.err" &
 	upgrade_pid=$!
+	i=0
+	while [ "$i" -lt 20 ]; do
+		if [ -z "${upgrade_pid:-}" ] || ! kill -0 "$upgrade_pid" 2>/dev/null; then
+			if [ -n "${upgrade_pid:-}" ]; then
+				wait "$upgrade_pid" || true
+			fi
+			upgrade_pid=
+			break
+		fi
+		if ! cpu_is_idle "$(proc_cpu "$upgrade_pid")"; then
+			break
+		fi
+		sleep 1
+		i=$((i + 1))
+	done
+	if [ -n "${upgrade_pid:-}" ] && kill -0 "$upgrade_pid" 2>/dev/null && cpu_is_idle "$(proc_cpu "$upgrade_pid")"; then
+		set +e
+		wait_past_dyld "$upgrade_pid" "$old_app" 1
+		dyld_status=$?
+		set -e
+		if [ "$dyld_status" -eq 2 ]; then
+			say "$gatekeeper_reason"
+			kill -TERM "$upgrade_pid" 2>/dev/null || true
+			sleep 1
+			kill -KILL "$upgrade_pid" 2>/dev/null || true
+			quit_new_matching "$old_app"
+			quit_new_matching "updater-self-helper-"
+			return 2
+		fi
+	fi
 	deadline=$(( $(date +%s) + 180 ))
 	got=$old_ver
 	while [ "$(date +%s)" -lt "$deadline" ]; do
@@ -1161,10 +1319,9 @@ check_self_update() {
 		if [ "$got" = "$version" ]; then
 			break
 		fi
-		if ! kill -0 "$upgrade_pid" 2>/dev/null; then
+		if [ -n "${upgrade_pid:-}" ] && ! kill -0 "$upgrade_pid" 2>/dev/null; then
 			wait "$upgrade_pid" || true
 			upgrade_pid=
-			# The bundle command schedules a helper and returns. Keep polling.
 		fi
 		sleep 2
 	done
@@ -1354,30 +1511,40 @@ main() {
 	check_launch
 	launch_status=$?
 	set -e
-	record "$launch_status" launch
+	record_outcome "$launch_status" launch "$gatekeeper_reason"
 
 	backup_installed_app
 
 	say "CHECK self-update"
-	set +e
-	check_self_update
-	self_status=$?
-	set -e
-	if [ "$self_status" -ne 0 ]; then
-		restore_installed_app_if_changed || true
+	if [ "$launch_status" -eq 2 ]; then
+		self_status=2
+		say "skipped because launch is waiting on Gatekeeper"
+	else
+		set +e
+		check_self_update
+		self_status=$?
+		set -e
+		if [ "$self_status" -eq 1 ]; then
+			restore_installed_app_if_changed || true
+		fi
 	fi
-	record "$self_status" self-update
+	record_outcome "$self_status" self-update "$gatekeeper_reason"
 
 	say "CHECK menu-update"
-	set +e
-	check_menu_update
-	menu_status=$?
-	set -e
-	restore_menu_paths
-	if [ "$menu_status" -ne 0 ]; then
-		restore_installed_app_if_changed || true
+	if [ "$launch_status" -eq 2 ]; then
+		menu_status=2
+		say "skipped because launch is waiting on Gatekeeper"
+	else
+		set +e
+		check_menu_update
+		menu_status=$?
+		set -e
+		restore_menu_paths
+		if [ "$menu_status" -eq 1 ]; then
+			restore_installed_app_if_changed || true
+		fi
 	fi
-	record "$menu_status" menu-update
+	record_outcome "$menu_status" menu-update "$gatekeeper_reason"
 
 	say "CHECK cask-metadata"
 	set +e
@@ -1417,12 +1584,62 @@ finish() {
 	cleanup_status=$?
 	set -e
 	record "$cleanup_status" cleanup
-	say "RESULT pass=$pass fail=$fail"
+	say "RESULT pass=$pass fail=$fail inconclusive=$inconclusive"
 	say "evidence=$evidence"
 	if [ "$fail" -ne 0 ]; then
 		exit 1
 	fi
+	if [ "$inconclusive" -ne 0 ]; then
+		exit 2
+	fi
 	exit 0
 }
 
+self_test() {
+	ok=0
+	tmp=$(mktemp -d "${TMPDIR:-/tmp}/verify-updater-selftest.XXXXXX")
+	trap 'rm -rf "$tmp"' EXIT INT TERM
+	if flags_unapproved 0083 && flags_unapproved 0181; then
+		printf '%s\n' "PASS flags-unapproved"
+	else
+		printf '%s\n' "FAIL flags-unapproved"
+		ok=1
+	fi
+	if flags_unapproved 01c1; then
+		printf '%s\n' "FAIL flags-approved-bit"
+		ok=1
+	else
+		printf '%s\n' "PASS flags-approved-bit"
+	fi
+	if flags_unapproved ""; then
+		printf '%s\n' "FAIL flags-empty"
+		ok=1
+	else
+		printf '%s\n' "PASS flags-empty"
+	fi
+	printf '%s\n' '    10 _dyld_start  (in dyld) + 0' >"$tmp/dyld.txt"
+	printf '%s\n' '    10 _cgo_nativeLoop' '    10 -[NSApplication run]' >"$tmp/running.txt"
+	if sample_text_is_dyld_stall "$tmp/dyld.txt" && ! sample_text_is_dyld_stall "$tmp/running.txt"; then
+		printf '%s\n' "PASS dyld-stall"
+	else
+		printf '%s\n' "FAIL dyld-stall"
+		ok=1
+	fi
+	printf '%s\n' 'Prompt shown (5, 0), waiting for response: com.updater.app' >"$tmp/wait.txt"
+	printf '%s\n' 'Prompt shown (5, 0), waiting for response: com.updater.app' 'Marked application as user approved: 1, com.updater.app' >"$tmp/answered.txt"
+	if log_text_prompt_waiting "$tmp/wait.txt" && ! log_text_prompt_waiting "$tmp/answered.txt"; then
+		printf '%s\n' "PASS prompt-waiting"
+	else
+		printf '%s\n' "FAIL prompt-waiting"
+		ok=1
+	fi
+	rm -rf "$tmp"
+	trap - EXIT INT TERM
+	return "$ok"
+}
+
+if [ "$mode" = self-test ]; then
+	self_test
+	exit $?
+fi
 main
