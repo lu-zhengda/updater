@@ -22,7 +22,7 @@ sh .cursor/skills/verify-updater/scripts/verify-updater.sh 0.24.2
 
 The version argument is `0.24.2` or `v0.24.2`. Omitted, the script uses the latest GitHub Release that is not a draft and not a prerelease.
 
-The script is ready when it prints `RESULT pass=N fail=M` and exits. Exit `0` means every check passed. Any FAIL is exit `1`.
+The script is ready when it prints `RESULT pass=N fail=M inconclusive=K` and exits. Exit `0` means every check passed. Any FAIL is exit `1`. `INCONCLUSIVE` is exit `2`: a Gatekeeper first-launch prompt is still waiting, so the launch and the in-app update checks did not prove the release. The script does not click that dialog.
 
 `updater upgrade` from an app bundle schedules a helper and returns immediately with `self-update started; Updater will restart when ready`. The helper downloads `updater_<version>_darwin.tar.gz` for a copy that is not the Homebrew cask, checks the checksum and the Developer ID team, and replaces that bundle. A cask install runs `brew upgrade --cask lu-zhengda/tap/updater` instead. The menu bar **Update** action runs `<bundle>/Contents/MacOS/updater update --bundle-id <id>` (`cmd/updater/menubar_app.go`). The harness drives that command for `com.updater.app` on an older published bundle placed in `~/Applications`, after moving `/Applications/Updater.app` aside so discovery selects the older one. Clicking the status-item menu needs Accessibility permission for UI scripting, which this check does not request. `updater upgrade` remains the separate self-update proof.
 
@@ -57,7 +57,9 @@ brew install --cask lu-zhengda/tap/updater
 
 `HOMEBREW_NO_AUTO_UPDATE=1` is set so Homebrew does not fetch other taps. The script does not upgrade other casks or formulae.
 
-Downloads use `curl -fsSL` from `https://github.com/lu-zhengda/updater/releases/download/v<version>/`. Quarantine is applied after download, before Gatekeeper checks:
+The launch check still marks its own copy with the browser-download quarantine flag and opens it. If that process is still in `_dyld_start` with about 0 CPU after 15 seconds, or syspolicyd still says `Prompt shown ... waiting for response`, the check is `INCONCLUSIVE`. It then skips `self-update` and `menu-update` instead of waiting out the prompt. A copy the harness extracted for those two checks has quarantine removed first, and only when the path is under the harness work directory or is the `~/Applications/Updater.app` this run just placed. `/Applications/Updater.app` is left alone.
+
+Downloads use `curl -fsSL` from `https://github.com/lu-zhengda/updater/releases/download/v<version>/`. Quarantine is applied after download, before the launch Gatekeeper check:
 
 ```sh
 xattr -w com.apple.quarantine "0083;<unix-time-hex>;Safari;<uuid>" <file>
@@ -69,7 +71,7 @@ Do not delete a FAIL by skipping a command or editing the cask under test. If Ho
 
 ## Evidence
 
-Every check prints `PASS <name>` or `FAIL <name>` after the command output that justifies it. The same text is appended to:
+Every check prints `PASS <name>`, `FAIL <name>`, or `INCONCLUSIVE <name>: <reason>` after the command output that justifies it. The same text is appended to:
 
 ```text
 ~/Library/Logs/verify-updater/<UTC-timestamp>.log
