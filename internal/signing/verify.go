@@ -73,7 +73,10 @@ func (v *Verifier) VerifyReplacementApp(ctx context.Context, installedApp, candi
 	if arch == "amd64" {
 		arch = "x86_64"
 	}
-	if output, err := v.run(ctx, "/usr/bin/lipo", "-verify_arch", arch, binary); err != nil {
+	// The executable is the input file and must precede -verify_arch. lipo
+	// reads every later non-option argument as an architecture name, so a
+	// path after the flag is rejected as an unknown architecture.
+	if output, err := v.run(ctx, "/usr/bin/lipo", binary, "-verify_arch", arch); err != nil {
 		return commandError("candidate app does not support native architecture "+arch, output, err)
 	}
 
