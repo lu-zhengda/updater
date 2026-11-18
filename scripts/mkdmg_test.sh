@@ -784,6 +784,7 @@ sh "$root/scripts/homebrew-cask-macos_test.sh"
 sh "$root/scripts/cask-shape_test.sh"
 sh "$root/scripts/cask-checksum_test.sh"
 sh "$root/scripts/release-preflight_test.sh"
+sh "$root/scripts/verify-published-release_test.sh"
 sh "$root/scripts/orphan-release-tags_test.sh"
 sh "$root/scripts/shipped-label-warn_test.sh"
 
