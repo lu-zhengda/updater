@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"path"
 	"slices"
 	"strconv"
 	"strings"
@@ -23,10 +24,55 @@ type brewInfoResponse struct {
 }
 
 type brewInfoCask struct {
-	Token   string `json:"token"`
-	Version string `json:"version"`
-	URL     string `json:"url"`
-	Sha256  string `json:"sha256"`
+	Token     string                       `json:"token"`
+	FullToken string                       `json:"full_token"`
+	Installed string                       `json:"installed"`
+	Version   string                       `json:"version"`
+	URL       string                       `json:"url"`
+	Sha256    string                       `json:"sha256"`
+	Artifacts []map[string]json.RawMessage `json:"artifacts"`
+}
+
+func (c brewInfoCask) cliOnly() bool {
+	binary := false
+	for _, artifact := range c.Artifacts {
+		if artifact["app"] != nil || artifact["suite"] != nil {
+			return false
+		}
+		if raw := artifact["artifact"]; raw != nil {
+			var args []json.RawMessage
+			var source, target string
+			if json.Unmarshal(raw, &args) == nil && len(args) > 0 {
+				_ = json.Unmarshal(args[0], &source)
+			}
+			_ = json.Unmarshal(artifact["target"], &target)
+			if strings.EqualFold(path.Ext(source), ".app") || strings.EqualFold(path.Ext(target), ".app") {
+				return false
+			}
+		}
+		binary = binary || artifact["binary"] != nil
+	}
+	return binary
+}
+
+// ListInstalledCLICasks maps qualified tokens to installed versions for casks
+// that declare an executable and no app or suite artifact.
+func ListInstalledCLICasks(ctx context.Context, runner CmdRunner) (map[string]string, error) {
+	output, err := runner.Run(ctx, "brew", "info", "--installed", "--cask", "--json=v2")
+	if err != nil {
+		return nil, fmt.Errorf("failed to inspect installed brew casks: %w", err)
+	}
+	var info brewInfoResponse
+	if err := json.Unmarshal(output, &info); err != nil {
+		return nil, fmt.Errorf("failed to parse installed brew casks: %w", err)
+	}
+	casks := make(map[string]string)
+	for _, c := range info.Casks {
+		if c.FullToken != "" && c.Installed != "" && c.cliOnly() {
+			casks[c.FullToken] = c.Installed
+		}
+	}
+	return casks, nil
 }
 
 // brewCaskArtifact is the update-relevant data parsed from brew info output.
@@ -199,9 +245,12 @@ func CaskInfoVersion(data []byte) (string, error) {
 	return artifact.Version, nil
 }
 
-// CaskExists checks whether a Homebrew cask exists by running
-// `brew info --cask --json=v2 <name>` and checking the exit code.
-func CaskExists(ctx context.Context, runner CmdRunner, name string) bool {
-	_, err := runner.Run(ctx, "brew", "info", "--cask", "--json=v2", name)
-	return err == nil
+// AppCaskExists checks whether Homebrew has a cask suitable for app enrichment.
+func AppCaskExists(ctx context.Context, runner CmdRunner, name string) bool {
+	output, err := runner.Run(ctx, "brew", "info", "--cask", "--json=v2", name)
+	if err != nil {
+		return false
+	}
+	var info brewInfoResponse
+	return json.Unmarshal(output, &info) == nil && len(info.Casks) > 0 && !info.Casks[0].cliOnly()
 }

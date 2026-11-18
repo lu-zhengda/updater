@@ -162,6 +162,21 @@ func TestBrewChecker_CheckNoUpdate(t *testing.T) {
 	}
 }
 
+func TestBrewChecker_UsesHomebrewOutdatedStatusForCLICasks(t *testing.T) {
+	for _, tc := range []struct{ from, to string }{
+		{"latest", "latest"},
+		{"1.2.3+rev1", "1.2.3+rev2"},
+	} {
+		output := fmt.Sprintf(`{"casks":[{"name":"tool","current_version":%q}]}`, tc.to)
+		c := NewBrewChecker(&MockCmdRunner{Output: []byte(output)})
+		a := &app.App{BundleID: app.BrewCaskIDPrefix + "tool", CaskName: "tool", Version: tc.from, InstalledViaBrew: true}
+		result, err := c.Check(context.Background(), a)
+		if err != nil || !result.HasUpdate {
+			t.Errorf("check for %s -> %s = %+v, %v", tc.from, tc.to, result, err)
+		}
+	}
+}
+
 func TestBrewChecker_Name(t *testing.T) {
 	c := NewBrewChecker(nil)
 	if got := c.Name(); got != "brew" {

@@ -60,7 +60,7 @@ func TestYOLOModeChecks(t *testing.T) {
 				"brew outdated --formula --json": {Output: []byte(`[{"name":"node","installed_versions":"1.0.0","current_version":"2.0.0"}]`)},
 			}}}
 			if tc.fail {
-				runner.Responses["brew upgrade node"] = checker.MockResponse{Err: errors.New("install failed")}
+				runner.Responses["brew upgrade --formula node"] = checker.MockResponse{Err: errors.New("install failed")}
 			}
 			newRunner = func() checker.CmdRunner { return runner }
 
@@ -97,7 +97,7 @@ func TestYOLOModeChecks(t *testing.T) {
 					}
 				}
 			}
-			if got := slices.Contains(runner.calls, "brew upgrade node"); got != tc.wantUpdate {
+			if got := slices.Contains(runner.calls, "brew upgrade --formula node"); got != tc.wantUpdate {
 				t.Fatalf("update attempted = %t, want %t; commands: %v", got, tc.wantUpdate, runner.calls)
 			}
 			entries, err := history.List(history.DefaultPath())

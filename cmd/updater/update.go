@@ -328,7 +328,7 @@ func executeUpdate(ctx context.Context, r *checker.UpdateResult, runner checker.
 		if r.App.FormulaName == "" {
 			return fmt.Errorf("no formula name for %s", r.App.Name), false
 		}
-		output, err := runner.Run(ctx, "brew", "upgrade", r.App.FormulaName)
+		output, err := runner.Run(ctx, "brew", "upgrade", "--formula", r.App.FormulaName)
 		if err != nil {
 			return fmt.Errorf("failed to upgrade formula %s: %w", r.App.FormulaName, err), false
 		}
@@ -573,6 +573,9 @@ func brewUpgrade(ctx context.Context, a *app.App, runner checker.CmdRunner, rein
 // quitAppIfRunning checks if an app is running and gracefully quits it.
 // Returns true if the app was running and was quit.
 func quitAppIfRunning(ctx context.Context, a *app.App, runner checker.CmdRunner) bool {
+	if a.Path == "" {
+		return false
+	}
 	// Check if the app process is running by matching its bundle path.
 	if _, err := runner.Run(ctx, "pgrep", "-f", a.Path); err != nil {
 		return false // not running
@@ -632,7 +635,7 @@ func describeAction(r *checker.UpdateResult) string {
 		}
 		return "open App Store"
 	case "formula":
-		return fmt.Sprintf("brew upgrade %s", r.App.FormulaName)
+		return fmt.Sprintf("brew upgrade --formula %s", r.App.FormulaName)
 	case "npm":
 		return fmt.Sprintf("npm install -g %s@latest", r.App.NpmPackage)
 	case "pnpm":

@@ -125,6 +125,7 @@ func appLookupIdentifiers(a *app.App) []string {
 		add(strings.TrimSuffix(filepath.Base(a.Path), ".app"))
 	}
 	add(a.CaskName)
+	add(a.FormulaName)
 	add(app.ToCaskName(a.Name))
 
 	for _, cand := range app.CaskCandidates(a) {
