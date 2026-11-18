@@ -5,11 +5,22 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/lu-zhengda/updater/internal/architecture"
 )
+
+// lipoVerifyArchArgs is the argv lipo must receive. The executable is the
+// input file; every non-option after -verify_arch is an architecture name.
+func lipoVerifyArchArgs(binary string) []string {
+	arch := architecture.Native()
+	if arch == "amd64" {
+		arch = "x86_64"
+	}
+	return []string{binary, "-verify_arch", arch}
+}
 
 func TestParseCodeIdentity(t *testing.T) {
 	output := `Executable=/Applications/Test.app/Contents/MacOS/Test
@@ -50,8 +61,8 @@ func TestVerifyReplacementAppWithoutBundleExecutable(t *testing.T) {
 					return nil, fmt.Errorf("no value at key path CFBundleExecutable")
 				case "/usr/bin/lipo":
 					architectureChecked = true
-					if args[len(args)-1] != resolved {
-						t.Fatalf("architecture check used %q, want signed executable %q", args[len(args)-1], resolved)
+					if !slices.Equal(args, lipoVerifyArchArgs(resolved)) {
+						t.Fatalf("lipo argv = %#v, want %#v", args, lipoVerifyArchArgs(resolved))
 					}
 					if failAt == "architecture" {
 						return nil, fmt.Errorf("missing native slice")
@@ -188,12 +199,9 @@ func TestVerifyReplacementAppRejectsWrongArchitecture(t *testing.T) {
 			return []byte("Candidate"), nil
 		case "/usr/bin/lipo":
 			checked = true
-			wantArch := architecture.Native()
-			if wantArch == "amd64" {
-				wantArch = "x86_64"
-			}
-			if len(args) != 3 || args[0] != "-verify_arch" || args[1] != wantArch || args[2] != filepath.Join(candidate, "Contents", "MacOS", "Candidate") {
-				t.Fatalf("unexpected binary check: %v", args)
+			binary := filepath.Join(candidate, "Contents", "MacOS", "Candidate")
+			if !slices.Equal(args, lipoVerifyArchArgs(binary)) {
+				t.Fatalf("lipo argv = %#v, want %#v", args, lipoVerifyArchArgs(binary))
 			}
 			return nil, fmt.Errorf("missing native architecture")
 		default:
@@ -204,5 +212,44 @@ func TestVerifyReplacementAppRejectsWrongArchitecture(t *testing.T) {
 	err := verifier.VerifyReplacementApp(context.Background(), "/Applications/Installed.app", candidate)
 	if !checked || err == nil || !strings.Contains(err.Error(), "does not support native architecture") {
 		t.Fatalf("wrong architecture must be rejected: %v", err)
+	}
+}
+
+func TestVerifyReplacementAppLipoVerifyArchArgumentOrder(t *testing.T) {
+	candidate := filepath.Join(t.TempDir(), "Candidate.app")
+	if err := os.Mkdir(candidate, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	binary := filepath.Join(candidate, "Contents", "MacOS", "Candidate")
+	var got []string
+	verifier := &Verifier{run: func(_ context.Context, name string, args ...string) ([]byte, error) {
+		switch name {
+		case "/usr/bin/codesign":
+			if len(args) > 0 && args[0] == "--verify" {
+				return nil, nil
+			}
+			return []byte("Identifier=com.example.app\nTeamIdentifier=AB12CD34EF\n"), nil
+		case "/usr/bin/plutil":
+			return []byte("Candidate"), nil
+		case "/usr/bin/lipo":
+			got = append([]string(nil), args...)
+			return nil, nil
+		case "/usr/sbin/spctl":
+			return nil, nil
+		default:
+			return nil, fmt.Errorf("unexpected command: %s %v", name, args)
+		}
+	}}
+
+	if err := verifier.VerifyReplacementApp(context.Background(), "/Applications/Installed.app", candidate); err != nil {
+		t.Fatalf("VerifyReplacementApp: %v", err)
+	}
+	arch := architecture.Native()
+	if arch == "amd64" {
+		arch = "x86_64"
+	}
+	want := []string{binary, "-verify_arch", arch}
+	if !slices.Equal(got, want) {
+		t.Fatalf("lipo argv = %#v, want %#v", got, want)
 	}
 }

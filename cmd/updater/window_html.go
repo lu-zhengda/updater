@@ -100,11 +100,12 @@ function render() {
     const m = rowMsg[e.bundle_id];
     let stateHtml;
     if (busy[e.bundle_id]) stateHtml = '<span class="msg">Updating…</span>';
-    else if (m) stateHtml = '<span class="msg ' + (m.ok ? "" : "err") + '">' + esc(m.message) + '</span>';
+    else if (m && (m.ok || e.source !== "mas")) stateHtml = '<span class="msg ' + (m.ok ? "" : "err") + '">' + esc(m.message) + '</span>';
     else if (e.status === "update_available")
       stateHtml = '<button onclick="doUpdate(\'' + esc(e.bundle_id) + '\')" ' + (checking ? "disabled" : "") + '>' + (e.native_upgrade ? 'Install ARM version' : 'Update') + '</button>' +
         '<button class="mini" onclick="doPin(\'' + esc(e.bundle_id) + '\')" title="Skip this update">Pin</button>' +
-        '<button class="mini" onclick="doIgnore(\'' + esc(e.bundle_id) + '\')" title="Stop checking this app">Ignore</button>';
+        '<button class="mini" onclick="doIgnore(\'' + esc(e.bundle_id) + '\')" title="Stop checking this app">Ignore</button>' +
+        (m ? '<span class="msg err">' + esc(m.message) + '</span>' : '');
     else if (e.status === "pinned")
       stateHtml = '<span class="dot pin">●</span><span class="msg">pinned</span>' +
         '<button class="mini" onclick="doUnpin(\'' + esc(e.bundle_id) + '\')">Unpin</button>';
@@ -163,7 +164,10 @@ function onUpdateDone(r) {
   rowMsg[r.bundleId] = r;
   if (r.ok && !r.scheduled) {
     const e = entries.find(x => x.bundle_id === r.bundleId);
-    if (e) e.status = "ok";
+    if (e) {
+      e.status = "ok";
+      if (r.installedVersion) e.current_version = r.installedVersion;
+    }
   }
   render();
 }
