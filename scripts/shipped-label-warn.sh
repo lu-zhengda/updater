@@ -21,7 +21,7 @@ if [ -n "$files" ] && [ -f "$files" ]; then
 		case $path in
 		*_test.go | *.md | .github/workflows/ci.yml | .cursor/* | AGENTS.md | scripts/*_test.sh | scripts/cask-shape.sh | scripts/cask-checksum.sh | scripts/orphan-release-tags.sh | scripts/shipped-label-warn.sh | scripts/known-orphan-tags.txt)
 			;;
-		*.go | go.mod | go.sum | .goreleaser.yaml | Makefile | packaging/* | scripts/mkapp.sh | scripts/mkdmg.sh | scripts/notarize-app.sh | scripts/completions.sh | scripts/release-preflight.sh | .github/workflows/release-publish.yml | .github/workflows/release-on-merge.yml | .github/workflows/release.yml)
+		*.go | go.mod | go.sum | .goreleaser.yaml | Makefile | packaging/* | scripts/mkapp.sh | scripts/mkdmg.sh | scripts/notarize-app.sh | scripts/completions.sh | scripts/release-preflight.sh | scripts/verify-published-release.sh | .github/workflows/release-publish.yml | .github/workflows/release-on-merge.yml | .github/workflows/release.yml)
 			shipped=1
 			printf '%s\n' "$path" >>"$shipped_list"
 			;;

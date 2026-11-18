@@ -9,6 +9,8 @@ Two workflows call that job:
 
 `GITHUB_TOKEN` cannot start the tag workflow by pushing a tag. The merge workflow therefore calls the publish job with `workflow_call` instead of waiting for that push. Signing, notarization, and the Homebrew cask update stay in the publish job on both paths. Secret names are unchanged.
 
+After that publish job succeeds, `verify-published-release` reads `Casks/updater.rb` from `lu-zhengda/homebrew-tap` and downloads the cask tarball and `Updater-<version>.dmg` with anonymous curl. The run fails unless the cask `version` equals the tag without `v`, the cask `url` is `updater_<version>_darwin.tar.gz` for that version, and both downloads return HTTP 200 with a body larger than 1 MiB. It tries at most seven times and waits 10 seconds between tries, 60 seconds in total, for the tap commit and the release-asset redirect. It does not use the signing secrets or `HOMEBREW_TAP_TOKEN`. On both `Release` and `Release on merge` the check name is `release / verify-published-release`.
+
 A branch push, a closed pull request that was not merged, and a push straight to `main` with no merged pull request do not publish. The decision uses the pull request's labels, which a bare push does not have.
 
 Merge publishes and manual tag publishes share one concurrency group. A second publish waits. It does not cancel a run that is already signing, and it does not replace a tag.

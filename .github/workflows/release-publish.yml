@@ -226,3 +226,23 @@ jobs:
             echo "signing material still present after cleanup"
             exit 1
           fi
+
+  # Stable id for a Datadog CI monitor. On the Release and Release on merge
+  # workflows the check is "release / verify-published-release".
+  verify-published-release:
+    name: verify-published-release
+    needs: release
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/tags/${{ inputs.tag }}
+          persist-credentials: false
+
+      - name: Verify the published cask and release assets
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: sh scripts/verify-published-release.sh "$RELEASE_TAG"
