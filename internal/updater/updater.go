@@ -374,12 +374,20 @@ func EnrichApps(ctx context.Context, apps []*app.App, cfg *config.Config, runner
 
 	// Phase 3: Match bundles owned by Homebrew before probing for cask metadata.
 	casks, err := checker.InstalledCaskApps(ctx, runner)
-	if err != nil {
-		// Non-fatal: brew may not be installed.
+	if err != nil && !errors.Is(err, checker.ErrCaskroomIncomplete) {
+		// Non-fatal: brew may not be installed. A failed lookup leaves ownership
+		// unknown, so later phases must not guess a cask from the app's name.
 		if !errors.Is(err, exec.ErrNotFound) {
 			fmt.Fprintf(os.Stderr, "warning: could not inspect Homebrew app ownership: %v\n", err)
 		}
 		return apps, nil
+	}
+	if errors.Is(err, checker.ErrCaskroomIncomplete) {
+		// Keep the apps that were resolved. An unread entry is not a name match.
+		fmt.Fprintf(os.Stderr, "warning: could not inspect Homebrew app ownership: %v\n", err)
+	}
+	if casks == nil {
+		casks = map[string]string{}
 	}
 
 	// appCandidates holds the ordered cask-token candidate lists for apps that

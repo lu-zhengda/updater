@@ -305,6 +305,31 @@ func TestHomebrewKeepsChannelForExactBundle(t *testing.T) {
 	}
 }
 
+func TestHomebrewOwnedBundleIgnoresNewerPackagedFeed(t *testing.T) {
+	caskroom, bundle := mockCaskApp(t, "example", "Example.app")
+	sparkle := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, `<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle"><channel><item>
+<enclosure url="https://example.com/Example.dmg" sparkle:shortVersionString="9.0.0" sparkle:version="900" />
+</item></channel></rss>`)
+	}))
+	defer sparkle.Close()
+	installed := &app.App{Name: "Example", Path: bundle, Source: app.SourceSparkle, FeedURL: sparkle.URL, Version: "1.0.0"}
+	runner := &checker.MultiMockCmdRunner{Responses: map[string]checker.MockResponse{
+		"brew --caskroom":                      {Output: []byte(caskroom)},
+		"brew outdated --cask --greedy --json": {Output: []byte(`{"casks":[]}`)},
+		"brew info --cask --json=v2 example":   {Output: []byte(`{"casks":[{"version":"9.9.0","url":"https://example.com/cask.zip"}]}`)},
+	}}
+	ctx := context.Background()
+	if _, err := EnrichApps(ctx, []*app.App{installed}, &config.Config{}, runner); err != nil {
+		t.Fatal(err)
+	}
+	checks := []checker.Checker{checker.NewSparkleChecker(sparkle.Client()), checker.NewBrewChecker(runner), checker.NewBrewInfoChecker(runner)}
+	managed := CheckWithFallthrough(ctx, installed, checks)
+	if managed.Error != nil || managed.Source != "brew" || managed.HasUpdate || managed.LatestVersion != "1.0.0" {
+		t.Fatalf("current Homebrew install followed another feed: %+v", managed)
+	}
+}
+
 func TestIntegration_ExplicitGitHubOverride_SuppressesFallbackOnError(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		http.NotFound(w, nil)

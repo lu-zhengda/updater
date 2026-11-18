@@ -513,6 +513,52 @@ func TestSelfUpgradeStopsWhenCaskroomIsUnavailable(t *testing.T) {
 	}
 }
 
+func TestIsUpdaterCaskMatchesNestedBundle(t *testing.T) {
+	bundle := filepath.Join(t.TempDir(), "Updater.app")
+	writeSelfBundle(t, bundle, "1.0.0")
+	root := t.TempDir()
+	link := filepath.Join(root, "updater", "1.2.3", "Payload", "Updater.app")
+	if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(bundle, link); err != nil {
+		t.Fatal(err)
+	}
+	runner := &checker.MockCmdRunner{Output: []byte(root)}
+	if got, err := isUpdaterCask(context.Background(), bundle, runner); err != nil || !got {
+		t.Fatalf("nested cask ownership = %t, %v", got, err)
+	}
+	other := filepath.Join(t.TempDir(), "Updater.app")
+	writeSelfBundle(t, other, "1.0.0")
+	if got, err := isUpdaterCask(context.Background(), other, runner); err != nil || got {
+		t.Fatalf("standalone ownership = %t, %v", got, err)
+	}
+}
+
+func TestSelfUpgradeStopsWhenCaskroomIsIncomplete(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	bundle := filepath.Join(t.TempDir(), "Updater.app")
+	writeSelfBundle(t, bundle, "1.0.0")
+	root := t.TempDir()
+	unreadable := filepath.Join(root, "secret")
+	if err := os.Mkdir(unreadable, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(unreadable, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(unreadable, 0o755) })
+	previous := selfUpgradeRelease
+	t.Cleanup(func() { selfUpgradeRelease = previous })
+	selfUpgradeRelease = func(string) (*checker.GitHubRelease, error) {
+		return &checker.GitHubRelease{TagName: "v1.1.0"}, nil
+	}
+	runner := &checker.MockCmdRunner{Output: []byte(root)}
+	if _, err := applySelfUpgrade(context.Background(), bundle, runner); !errors.Is(err, checker.ErrCaskroomIncomplete) {
+		t.Fatalf("expected an incomplete Caskroom to stop the helper before download, got %v", err)
+	}
+}
+
 func TestSelfUpgradeRefusesLowCaskVersion(t *testing.T) {
 	for _, tc := range []struct {
 		name, installed, cask string

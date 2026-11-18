@@ -12,24 +12,41 @@ import (
 	"github.com/lu-zhengda/updater/internal/config"
 )
 
-func TestVendorCheckerPrecedesVersionOnlySources(t *testing.T) {
-	for _, id := range []string{"com.microsoft.VSCode", "com.microsoft.VSCodeInsiders", "com.anthropic.claudefordesktop"} {
-		t.Run(id, func(t *testing.T) {
-			a := &app.App{BundleID: id, Source: app.SourceElectron, CaskName: "test", InstalledViaBrew: true, GitHubRepo: "microsoft/vscode"}
-			a.ElectronUpdateURL = "https://example.com/updates"
-			a.ElectronUpdateFormat = "vscode"
-			if id == "com.anthropic.claudefordesktop" {
-				a.ElectronUpdateFormat = "squirrel"
-			}
-			for _, c := range BuildCheckers(&checker.MockCmdRunner{}, "") {
-				if c.CanCheck(a) {
-					if c.Name() != "vendor" {
-						t.Fatalf("first source = %s; want native vendor feed before cask/GitHub metadata", c.Name())
-					}
-					return
+func TestInstalledChannelChoosesVendorOrHomebrew(t *testing.T) {
+	for _, tc := range []struct {
+		id, channel string
+	}{
+		{id: "com.microsoft.VSCode", channel: "stable"},
+		{id: "com.microsoft.VSCodeInsiders", channel: "insider"},
+		{id: "com.anthropic.claudefordesktop"},
+	} {
+		t.Run(tc.id, func(t *testing.T) {
+			desktop := func(brew bool) *app.App {
+				a := &app.App{BundleID: tc.id, Source: app.SourceElectron, InstalledViaBrew: brew, GitHubRepo: "microsoft/vscode"}
+				a.ElectronUpdateURL = "https://example.com/updates"
+				a.ElectronUpdateFormat = "vscode"
+				a.ElectronUpdateChannel = tc.channel
+				if tc.id == "com.anthropic.claudefordesktop" {
+					a.ElectronUpdateFormat = "squirrel"
+					a.ElectronUpdateChannel = ""
 				}
+				return a
 			}
-			t.Fatal("no checker for vendor app")
+			names := func(a *app.App) []string {
+				var got []string
+				for _, c := range checkersForApp(a, BuildCheckers(&checker.MockCmdRunner{}, "")) {
+					got = append(got, c.Name())
+				}
+				return got
+			}
+			brewOwned := names(desktop(true))
+			if len(brewOwned) != 2 || brewOwned[0] != "brew" || brewOwned[1] != "brew-info" {
+				t.Fatalf("Homebrew-owned checkers = %v, want brew then brew-info", brewOwned)
+			}
+			standalone := names(desktop(false))
+			if len(standalone) != 1 || standalone[0] != "vendor" {
+				t.Fatalf("standalone checkers = %v, want the packaged vendor feed", standalone)
+			}
 		})
 	}
 }

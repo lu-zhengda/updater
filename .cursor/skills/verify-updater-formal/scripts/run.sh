@@ -78,7 +78,7 @@ tlc brew-regress.cfg pass
 
 echo "== Go tests for the same properties =="
 go test -count=1 -timeout 180s \
-  -run 'TestIsNewer|TestCleanTagVersionPrefixes|TestParseBrewInfo|TestChecksumForAsset|TestReplaceUpdaterBundle|TestRestoreUpdaterBundle|TestSelfUpgradeGuardrails|TestSelfUpgradeTransaction|TestSelfUpgradeStopsWhenCaskroomIsUnavailable|TestSelfUpgradeRefusesLowCaskVersion|TestSelfUpgradeBrewRestoresAfterBadResult|TestRecoverStrandedUpdater' \
+  -run 'TestIsNewer|TestCleanTagVersionPrefixes|TestParseBrewInfo|TestChecksumForAsset|TestReplaceUpdaterBundle|TestRestoreUpdaterBundle|TestSelfUpgradeGuardrails|TestSelfUpgradeTransaction|TestSelfUpgradeStopsWhenCaskroomIsUnavailable|TestIsUpdaterCaskMatchesNestedBundle|TestSelfUpgradeStopsWhenCaskroomIsIncomplete|TestSelfUpgradeRefusesLowCaskVersion|TestSelfUpgradeBrewRestoresAfterBadResult|TestRecoverStrandedUpdater' \
   ./internal/version/ ./internal/checker/ ./cmd/updater/
 
 echo "== Go mutations (the test must fail, then the tree is restored) =="
