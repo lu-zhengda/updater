@@ -64,7 +64,7 @@ func TestDiscoverAll_OptionalPackageManagers(t *testing.T) {
 			}
 			var want []string
 			if tt.wantWarn {
-				want = []string{"brew formulae", "npm packages", "pnpm packages", "pipx applications", "uv tools", "cargo crates"}
+				want = []string{"brew formulae", "brew CLI casks", "npm packages", "pnpm packages", "pipx applications", "uv tools", "cargo crates"}
 			}
 			if !reflect.DeepEqual(warnings, want) {
 				t.Errorf("warnings = %v, want %v", warnings, want)
@@ -180,6 +180,64 @@ func TestDiscoverBrewFormulae_VersionCorrectness(t *testing.T) {
 	}
 	if apps[1].Version != "3.12.8" {
 		t.Errorf("python version = %q, want %q", apps[1].Version, "3.12.8")
+	}
+}
+
+func TestTappedFormulaUsesQualifiedNameAndKeepsPackageID(t *testing.T) {
+	ctx := context.Background()
+	runner := &checker.MultiMockCmdRunner{Responses: map[string]checker.MockResponse{
+		"brew list --formula --versions":  {Output: []byte("camsnap 0.6.2\n")},
+		"brew list --formula --full-name": {Output: []byte("steipete/tap/camsnap\n")},
+		"brew outdated --formula --json":  {Output: []byte(`{"formulae":[{"name":"other/tap/camsnap","current_version":"9.0.0"},{"name":"steipete/tap/camsnap","current_version":"0.6.3"}]}`)},
+	}}
+	apps, err := DiscoverBrewFormulae(ctx, runner)
+	if err != nil || len(apps) != 1 {
+		t.Fatalf("formula discovery = %v, %v", apps, err)
+	}
+	a := apps[0]
+	if a.BundleID != "homebrew.formula.camsnap" || a.Name != "camsnap" || a.FormulaName != "steipete/tap/camsnap" {
+		t.Fatalf("unexpected package identity: %+v", a)
+	}
+	result, err := checker.NewBrewFormulaChecker(runner).Check(ctx, a)
+	if err != nil || !result.HasUpdate || result.LatestVersion != "0.6.3" {
+		t.Fatalf("formula check = %+v, %v", result, err)
+	}
+}
+
+func TestCLICasksHaveTheirOwnEntries(t *testing.T) {
+	ctx := context.Background()
+	runner := &checker.MultiMockCmdRunner{Responses: map[string]checker.MockResponse{
+		"brew info --installed --cask --json=v2": {Output: []byte(`{"casks":[
+			{"token":"codex","full_token":"owner/tap/codex","installed":"0.169.0","version":"0.170.0","artifacts":[{"binary":["bin/codex"]}]},
+			{"token":"codexbar","full_token":"codexbar","installed":"1.0","artifacts":[{"binary":["bin/codexbar"]},{"app":["CodexBar.app"]}]},
+			{"token":"isabelle","full_token":"isabelle","installed":"2025-2","artifacts":[{"artifact":["Isabelle2025-2.app",{"target":"/Applications/Isabelle2025-2.app"}],"target":"/Applications/Isabelle2025-2.app"},{"binary":["/Applications/Isabelle2025-2.app/bin/isabelle"]}]},
+			{"token":"font-sample","full_token":"font-sample","installed":"1.0","artifacts":[{"font":["sample.ttf"]}]}
+		]}`)},
+		"brew list --cask":                     {Output: []byte("codex\ncodexbar\nfont-sample\n")},
+		"brew outdated --cask --greedy --json": {Output: []byte(`{"casks":[{"name":"codex","current_version":"0.170.0"}]}`)},
+	}}
+	cli, err := discoverBrewCLICasks(ctx, runner)
+	if err != nil || len(cli) != 1 {
+		t.Fatalf("CLI cask discovery = %v, %v", cli, err)
+	}
+	a := cli[0]
+	if a.BundleID != "homebrew.cask.owner/tap/codex" || !IsPackageID(a.BundleID) || a.Path != "" || a.Version != "0.169.0" {
+		t.Fatalf("unexpected CLI cask identity: %+v", a)
+	}
+	desktop := &app.App{Name: "ChatGPT", BundleID: "com.openai.codex", Path: "/Applications/ChatGPT.app", Source: app.SourceSparkle}
+	hybrid := &app.App{Name: "CodexBar", BundleID: "test.codexbar", Path: "/Applications/CodexBar.app", Source: app.SourceUnknown}
+	if _, err := EnrichApps(ctx, append(cli, desktop, hybrid), &config.Config{}, runner); err != nil {
+		t.Fatal(err)
+	}
+	if desktop.CaskName != "" || desktop.InstalledViaBrew || desktop.Source != app.SourceSparkle {
+		t.Fatalf("desktop app was associated with the CLI cask: %+v", desktop)
+	}
+	if hybrid.CaskName != "codexbar" || !hybrid.InstalledViaBrew {
+		t.Fatalf("desktop cask association was lost: %+v", hybrid)
+	}
+	result, err := checker.NewBrewChecker(runner).Check(ctx, a)
+	if err != nil || !result.HasUpdate || result.LatestVersion != "0.170.0" {
+		t.Fatalf("CLI cask check = %+v, %v", result, err)
 	}
 }
 

@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -81,7 +82,7 @@ const (
 
 // IsPackageID reports whether an ID belongs to a package manager's inventory.
 func IsPackageID(id string) bool {
-	for _, prefix := range []string{formulaIDPrefix, uvIDPrefix, npmIDPrefix, pnpmIDPrefix, pipxIDPrefix, cargoIDPrefix} {
+	for _, prefix := range []string{formulaIDPrefix, app.BrewCaskIDPrefix, uvIDPrefix, npmIDPrefix, pnpmIDPrefix, pipxIDPrefix, cargoIDPrefix} {
 		if strings.HasPrefix(id, prefix) {
 			return true
 		}
@@ -103,13 +104,38 @@ func DiscoverBrewFormulae(ctx context.Context, runner checker.CmdRunner) ([]*app
 	sort.Strings(names)
 
 	apps := make([]*app.App, 0, len(formulae))
-	for _, name := range names {
+	for _, fullName := range names {
+		name := path.Base(fullName)
 		apps = append(apps, &app.App{
 			Name:             name,
 			BundleID:         formulaIDPrefix + name,
-			Version:          formulae[name],
+			Version:          formulae[fullName],
 			Source:           app.SourceBrewFormula,
-			FormulaName:      name,
+			FormulaName:      fullName,
+			InstalledViaBrew: true,
+		})
+	}
+	return apps, nil
+}
+
+func discoverBrewCLICasks(ctx context.Context, runner checker.CmdRunner) ([]*app.App, error) {
+	casks, err := checker.ListInstalledCLICasks(ctx, runner)
+	if err != nil {
+		return nil, err
+	}
+	tokens := make([]string, 0, len(casks))
+	for token := range casks {
+		tokens = append(tokens, token)
+	}
+	sort.Strings(tokens)
+	apps := make([]*app.App, 0, len(tokens))
+	for _, token := range tokens {
+		apps = append(apps, &app.App{
+			Name:             path.Base(token),
+			BundleID:         app.BrewCaskIDPrefix + token,
+			Version:          casks[token],
+			Source:           app.SourceBrew,
+			CaskName:         token,
 			InstalledViaBrew: true,
 		})
 	}
@@ -255,8 +281,8 @@ func DiscoverCargoCrates(ctx context.Context, runner checker.CmdRunner) ([]*app.
 }
 
 // DiscoverAll runs the full discovery pipeline shared by every entry point
-// (CLI commands, TUI, menu bar app): disk apps plus brew formulae, npm and pnpm
-// globals, pipx applications, uv tools, and cargo crates, followed by
+// (CLI commands, TUI, menu bar app): disk apps plus brew formulae and CLI casks,
+// npm and pnpm globals, pipx applications, uv tools, and cargo crates, followed by
 // enrichment. Missing optional executables are skipped silently. Other failures
 // are non-fatal and reported through warn (which may be nil). The returned apps
 // are enriched but not filtered; apply FilterIgnored as needed.
@@ -284,6 +310,7 @@ func DiscoverInstalled(ctx context.Context, runner checker.CmdRunner, warn func(
 		fn   func(context.Context, checker.CmdRunner) ([]*app.App, error)
 	}{
 		{"brew formulae", DiscoverBrewFormulae},
+		{"brew CLI casks", discoverBrewCLICasks},
 		{"npm packages", DiscoverNpmPackages},
 		{"pnpm packages", DiscoverPnpmPackages},
 		{"pipx applications", DiscoverPipxPackages},
@@ -311,6 +338,13 @@ func DiscoverInstalled(ctx context.Context, runner checker.CmdRunner, warn func(
 func EnrichApps(ctx context.Context, apps []*app.App, cfg *config.Config, runner checker.CmdRunner) ([]*app.App, error) {
 	// Phase 0: Apply explicit source overrides before legacy mappings or brew heuristics.
 	applyExplicitSourceOverrides(apps, cfg)
+	cliTokens := make(map[string]bool)
+	for _, a := range apps {
+		if a.IsBrewCLICask() {
+			cliTokens[a.CaskName] = true
+			cliTokens[path.Base(a.CaskName)] = true
+		}
+	}
 
 	// Phase 1: Apply GitHub repo mappings from config.
 	for _, a := range apps {
@@ -327,6 +361,9 @@ func EnrichApps(ctx context.Context, apps []*app.App, cfg *config.Config, runner
 
 	// Phase 2: Apply cask mappings from config (bundleID → cask token).
 	for _, a := range apps {
+		if a.IsBrewCLICask() {
+			continue
+		}
 		if hasExplicitSourceOverride(a) {
 			continue
 		}
@@ -350,6 +387,14 @@ func EnrichApps(ctx context.Context, apps []*app.App, cfg *config.Config, runner
 	appCandidates := map[*app.App][]string{}
 
 	for _, a := range apps {
+		if a.IsBrewCLICask() {
+			continue
+		}
+		if cliTokens[a.CaskName] {
+			a.CaskName = ""
+			a.InstalledViaBrew = false
+			updateExplicitBrewOverrideSource(a)
+		}
 		if a.CaskName != "" && casks[a.CaskName] {
 			a.InstalledViaBrew = true
 			if hasExplicitBrewOverride(a) {
@@ -380,7 +425,7 @@ func EnrichApps(ctx context.Context, apps []*app.App, cfg *config.Config, runner
 			// (e.g. VSCode: "Code" vs "visual-studio-code"; GitHub Desktop:
 			// "GitHub Desktop" vs "github") without requiring a hardcoded map.
 			for _, cand := range candidates {
-				if casks[cand] {
+				if casks[cand] && !cliTokens[cand] {
 					a.CaskName = cand
 					break
 				}
@@ -430,7 +475,7 @@ func EnrichApps(ctx context.Context, apps []*app.App, cfg *config.Config, runner
 				defer func() { <-sem }()
 				found := ""
 				for _, cand := range item.candidates {
-					if checker.CaskExists(ctx, runner, cand) {
+					if !cliTokens[cand] && checker.AppCaskExists(ctx, runner, cand) {
 						found = cand
 						break
 					}

@@ -77,8 +77,8 @@ updater
 | Source | How updates are checked | Update behavior |
 | --- | --- | --- |
 | Sparkle | HTTPS appcast from Info.plist or embedded Electron package metadata (including Codex) | Installs notarized updates matching the installed app's bundle and Developer Team identity |
-| Homebrew cask | `brew outdated --cask --greedy --json` | `brew upgrade --cask <token>` |
-| Homebrew formula | `brew outdated --formula --json` | `brew upgrade <formula>` |
+| Homebrew cask (apps and casks that declare a CLI binary) | `brew outdated --cask --greedy --json` | `brew upgrade --cask <token>` |
+| Homebrew formula | `brew outdated --formula --json` | `brew upgrade --formula <formula>` |
 | Mac App Store | `mas outdated` | `mas upgrade <id>` or opens App Store updates |
 | GitHub Releases | GitHub Releases API | Verifies release digest and Apple identity before direct install |
 | Electron generic | HTTPS macOS update feed (including Notion’s ARM channel) | Verifies SHA-512 and Apple identity before direct install |

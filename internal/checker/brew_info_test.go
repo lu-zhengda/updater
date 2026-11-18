@@ -265,18 +265,25 @@ func TestParseBrewInfo(t *testing.T) {
 	}
 }
 
-func TestCaskExists(t *testing.T) {
+func TestAppCaskExists(t *testing.T) {
 	t.Run("cask exists", func(t *testing.T) {
 		runner := &MockCmdRunner{Output: []byte(`{"casks":[{"token":"firefox"}]}`)}
-		if !CaskExists(context.Background(), runner, "firefox") {
-			t.Error("expected CaskExists to return true")
+		if !AppCaskExists(context.Background(), runner, "firefox") {
+			t.Error("expected AppCaskExists to return true")
 		}
 	})
 
 	t.Run("cask does not exist", func(t *testing.T) {
 		runner := &MockCmdRunner{Err: fmt.Errorf("exit status 1")}
-		if CaskExists(context.Background(), runner, "nonexistent") {
-			t.Error("expected CaskExists to return false")
+		if AppCaskExists(context.Background(), runner, "nonexistent") {
+			t.Error("expected AppCaskExists to return false")
+		}
+	})
+
+	t.Run("CLI cask returned for an alias", func(t *testing.T) {
+		runner := &MockCmdRunner{Output: []byte(`{"casks":[{"token":"tool","artifacts":[{"binary":["bin/tool"]}]}]}`)}
+		if AppCaskExists(context.Background(), runner, "old-tool") {
+			t.Error("expected AppCaskExists to reject a CLI cask")
 		}
 	})
 }

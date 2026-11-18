@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"path"
 	"strings"
 
 	"github.com/lu-zhengda/updater/internal/app"
@@ -63,15 +64,18 @@ func (b *BrewChecker) Check(ctx context.Context, a *app.App) (*UpdateResult, err
 		return nil, fmt.Errorf("failed to parse brew outdated output: %w", err)
 	}
 
+	cliCask := a.IsBrewCLICask()
 	for _, item := range items {
-		if item.Name == a.CaskName {
+		if item.Name == a.CaskName || (cliCask && item.Name == path.Base(a.CaskName)) {
 			latestVersion := item.CurrentVersion
+			// Homebrew detects changes to CLI casks that version alone cannot (e.g. :latest).
+			hasUpdate := version.IsNewer(a.Version, latestVersion) || (cliCask && latestVersion != "")
 			return &UpdateResult{
 				App:            a,
 				Source:         "brew",
 				CurrentVersion: a.Version,
 				LatestVersion:  latestVersion,
-				HasUpdate:      version.IsNewer(a.Version, latestVersion),
+				HasUpdate:      hasUpdate,
 				IsMajorUpdate:  version.IsMajorUpgrade(a.Version, latestVersion),
 			}, nil
 		}

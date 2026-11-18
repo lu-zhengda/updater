@@ -6,6 +6,7 @@ import (
 )
 
 const UpdaterBundleID = "com.updater.app"
+const BrewCaskIDPrefix = "homebrew.cask."
 
 // Source identifies where an app was installed from.
 type Source string
@@ -63,6 +64,10 @@ type App struct {
 	ElectronUpdateFormat   string // empty: latest-mac.yml; vscode: update API; squirrel: RELEASES.json
 	ElectronUpdateChannel  string // product.json quality for VS Code-compatible update APIs
 	enrichmentBaseline     *enrichmentBaseline
+}
+
+func (a *App) IsBrewCLICask() bool {
+	return strings.HasPrefix(a.BundleID, BrewCaskIDPrefix)
 }
 
 // ToCaskName converts an app display name to a likely Homebrew cask name.

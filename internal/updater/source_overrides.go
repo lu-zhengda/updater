@@ -56,7 +56,8 @@ func eligibleForExplicitSourceOverride(a *app.App) bool {
 		return false
 	}
 
-	return a.Source != app.SourceBrewFormula && a.Source != app.SourceSystem
+	return a.Source != app.SourceBrewFormula && a.Source != app.SourceSystem &&
+		!a.IsBrewCLICask()
 }
 
 func hasExplicitSourceOverride(a *app.App) bool {

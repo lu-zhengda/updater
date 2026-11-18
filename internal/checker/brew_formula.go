@@ -3,6 +3,7 @@ package checker
 import (
 	"context"
 	"fmt"
+	"path"
 	"strings"
 	"sync"
 
@@ -89,8 +90,7 @@ func (b *BrewFormulaChecker) Check(ctx context.Context, a *app.App) (*UpdateResu
 	}, nil
 }
 
-// ListInstalledFormulae runs `brew list --formula --versions` and returns
-// a map of formula name to installed version.
+// ListInstalledFormulae maps qualified formula names to installed versions.
 func ListInstalledFormulae(ctx context.Context, runner CmdRunner) (map[string]string, error) {
 	output, err := runner.Run(ctx, "brew", "list", "--formula", "--versions")
 	if err != nil {
@@ -98,15 +98,25 @@ func ListInstalledFormulae(ctx context.Context, runner CmdRunner) (map[string]st
 	}
 
 	formulae := make(map[string]string)
-	for _, line := range strings.Split(strings.TrimSpace(string(output)), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		// Format: "name version [version...]" — take the last version (most recent).
+	for _, line := range strings.Split(string(output), "\n") {
+		// Format: "name version [version...]". Keep the last listed version.
 		parts := strings.Fields(line)
 		if len(parts) >= 2 {
 			formulae[parts[0]] = parts[len(parts)-1]
+		}
+	}
+
+	// Homebrew reports tap names from the installed kegs, but disallows
+	// --full-name and --versions in the same invocation.
+	names, err := runner.Run(ctx, "brew", "list", "--formula", "--full-name")
+	if err != nil {
+		return nil, fmt.Errorf("failed to run brew list --formula --full-name: %w", err)
+	}
+	for _, fullName := range strings.Fields(string(names)) {
+		name := path.Base(fullName)
+		if installed, ok := formulae[name]; ok && name != fullName {
+			delete(formulae, name)
+			formulae[fullName] = installed
 		}
 	}
 	return formulae, nil

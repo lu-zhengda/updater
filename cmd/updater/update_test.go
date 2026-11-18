@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -23,6 +24,24 @@ import (
 type captureUpdateRunner struct {
 	name string
 	args []string
+}
+
+func TestExecuteUpdate_CLICaskOnlyRunsBrew(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	const upgrade = "brew upgrade --cask owner/tap/codex"
+	runner := &yoloRunner{MultiMockCmdRunner: checker.MultiMockCmdRunner{Responses: map[string]checker.MockResponse{
+		upgrade: {Output: []byte("updated")},
+	}}}
+	result := &checker.UpdateResult{
+		App:    &app.App{Name: "codex", CaskName: "owner/tap/codex", InstalledViaBrew: true},
+		Source: "brew",
+	}
+	if err, rolledBack := executeUpdate(context.Background(), result, runner, nil, nil); err != nil || rolledBack {
+		t.Fatalf("executeUpdate = %v, rolled back %v", err, rolledBack)
+	}
+	if !slices.Equal(runner.calls, []string{upgrade}) {
+		t.Fatalf("commands = %v, want only %q", runner.calls, upgrade)
+	}
 }
 
 func TestBackupManagerForConfigIsOptIn(t *testing.T) {
@@ -351,7 +370,7 @@ func TestDescribeAction(t *testing.T) {
 				App:    &app.App{FormulaName: "node"},
 				Source: "formula",
 			},
-			want: "brew upgrade node",
+			want: "brew upgrade --formula node",
 		},
 		{
 			name: "pnpm",
