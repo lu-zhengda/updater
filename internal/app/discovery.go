@@ -115,6 +115,21 @@ func parseApp(appPath string) (*App, error) {
 	return a, nil
 }
 
+// InstalledVersion reads the current version of the same app at its discovered path.
+func (a *App) InstalledVersion() (string, error) {
+	if a.Path == "" || a.BundleID == "" {
+		return "", fmt.Errorf("installed bundle identity is missing")
+	}
+	info, err := readInfoPlist(filepath.Join(a.Path, "Contents", "Info.plist"))
+	if err != nil {
+		return "", err
+	}
+	if info.BundleID != a.BundleID || info.ShortVersionString == "" {
+		return "", fmt.Errorf("could not confirm the installed bundle and version for %s", a.Name)
+	}
+	return info.ShortVersionString, nil
+}
+
 // readInfoPlist decodes an Info.plist file.
 func readInfoPlist(path string) (*infoPlist, error) {
 	f, err := os.Open(path)

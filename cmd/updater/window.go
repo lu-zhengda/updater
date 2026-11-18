@@ -122,13 +122,14 @@ func runWindow() error {
 		}()
 	})
 
-	// goUpdate updates one app (by bundle ID) from the live results.
-	_ = w.Bind("goUpdate", func(bundleID string) {
-		go func() {
-			ok, msg := updateFromWindow(state, bundleID)
-			push("onUpdateDone", map[string]any{"bundleId": bundleID, "ok": ok, "message": msg, "scheduled": msg == checker.ErrUpdateScheduled.Error()})
-		}()
-	})
+	updateAndReport := func(bundleID string) {
+		ok, msg, installed := updateFromWindow(state, bundleID)
+		push("onUpdateDone", map[string]any{
+			"bundleId": bundleID, "ok": ok, "message": msg, "installedVersion": installed,
+			"scheduled": msg == checker.ErrUpdateScheduled.Error(),
+		})
+	}
+	_ = w.Bind("goUpdate", func(bundleID string) { go updateAndReport(bundleID) })
 	_ = w.Bind("goUpdateAll", func(ids []string) {
 		go func() {
 			activity, err := updateActivityLock(context.Background(), false)
@@ -138,8 +139,7 @@ func runWindow() error {
 			}
 			defer activity.Close()
 			for _, id := range ids {
-				ok, msg := updateFromWindow(state, id)
-				push("onUpdateDone", map[string]any{"bundleId": id, "ok": ok, "message": msg, "scheduled": msg == checker.ErrUpdateScheduled.Error()})
+				updateAndReport(id)
 			}
 		}()
 	})
@@ -155,18 +155,18 @@ func runWindow() error {
 }
 
 // updateFromWindow performs one update using the live result set. Returns
-// success and a short message.
-func updateFromWindow(state *windowState, bundleID string) (bool, string) {
+// success, a short message, and the observed version for a successful App Store update.
+func updateFromWindow(state *windowState, bundleID string) (bool, string, string) {
 	state.mu.Lock()
 	result := state.results[bundleID]
 	state.mu.Unlock()
 	if result == nil {
-		return false, "refresh before updating"
+		return false, "refresh before updating", ""
 	}
 
 	cfg, err := config.Load(config.DefaultPath())
 	if err != nil {
-		return false, err.Error()
+		return false, err.Error(), ""
 	}
 	runner := newRunner()
 	bm := backupManagerForConfig(cfg, runner)
@@ -178,13 +178,21 @@ func updateFromWindow(state *windowState, bundleID string) (bool, string) {
 
 	updateErr, rolledBack := executeUpdate(ctx, result, runner, bm, inst)
 	if errors.Is(updateErr, checker.ErrUpdateScheduled) {
-		return true, checker.ErrUpdateScheduled.Error()
+		return true, checker.ErrUpdateScheduled.Error(), ""
+	}
+	toVersion := result.LatestVersion
+	var installed string
+	if updateErr == nil && result.Source == "mas" {
+		installed, _ = result.App.InstalledVersion()
+		if installed != "" {
+			toVersion = installed
+		}
 	}
 	_ = history.Append(history.DefaultPath(), history.Entry{
 		AppName:     result.App.Name,
 		BundleID:    result.App.BundleID,
 		FromVersion: result.CurrentVersion,
-		ToVersion:   result.LatestVersion,
+		ToVersion:   toVersion,
 		Source:      result.Source,
 		Timestamp:   time.Now(),
 		Success:     updateErr == nil || errors.Is(updateErr, checker.ErrOpenedExternally),
@@ -192,12 +200,12 @@ func updateFromWindow(state *windowState, bundleID string) (bool, string) {
 	})
 
 	if errors.Is(updateErr, checker.ErrOpenedExternally) {
-		return true, "opened externally"
+		return true, "opened externally", ""
 	}
 	if updateErr != nil {
-		return false, updateErr.Error()
+		return false, updateErr.Error(), ""
 	}
-	return true, "updated to " + result.LatestVersion
+	return true, "updated to " + toVersion, installed
 }
 
 func windowMutateConfig(fn func(*config.Config)) {
