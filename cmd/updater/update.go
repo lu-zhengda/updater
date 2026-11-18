@@ -311,6 +311,13 @@ func executeUpdate(ctx context.Context, r *checker.UpdateResult, runner checker.
 		return checker.ErrOpenedExternally, false
 
 	case "mas":
+		if inst != nil && inst.AllowAuthorizationPrompt {
+			installed, err := inst.UpdateAppStoreApp(ctx, r.App, r.LatestVersion)
+			if err == nil {
+				fmt.Printf("  Updated %s to %s\n", r.App.Name, installed)
+			}
+			return err, false
+		}
 		if r.App.MASID != "" {
 			output, err := runner.Run(ctx, "mas", "upgrade", r.App.MASID)
 			if err != nil {
