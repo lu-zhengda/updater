@@ -6,9 +6,12 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"sync/atomic"
 	"testing"
 
@@ -89,7 +92,7 @@ func TestIntegration_GitHubVersionOverride(t *testing.T) {
 	}
 }
 
-func TestFallthrough_SparkleStale_ToBrewInfo(t *testing.T) {
+func TestStandaloneSparkleStaleKeepsChannel(t *testing.T) {
 	// Sparkle feed returns a version older than installed (stale).
 	staleXML := `<?xml version="1.0" encoding="utf-8"?>
 <rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
@@ -125,21 +128,12 @@ func TestFallthrough_SparkleStale_ToBrewInfo(t *testing.T) {
 	}
 
 	result := CheckWithFallthrough(context.Background(), a, checkers)
-	if result.Error != nil {
-		t.Fatalf("unexpected error: %v", result.Error)
-	}
-	if result.Source != "brew-info" {
-		t.Errorf("Source = %q, want %q (should fallthrough from stale sparkle)", result.Source, "brew-info")
-	}
-	if result.LatestVersion != "4.0.0" {
-		t.Errorf("LatestVersion = %q, want %q", result.LatestVersion, "4.0.0")
-	}
-	if !result.HasUpdate {
-		t.Error("expected HasUpdate=true")
+	if result.Error == nil || result.Source != "sparkle" || result.HasUpdate {
+		t.Fatalf("expected stale Sparkle error, got %+v", result)
 	}
 }
 
-func TestFallthrough_GitHub404_ToBrewInfo(t *testing.T) {
+func TestFallthrough_UnclassifiedAppWithGitHubMapping_ToBrewInfo(t *testing.T) {
 	// GitHub returns 404.
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		http.NotFound(w, nil)
@@ -152,11 +146,17 @@ func TestFallthrough_GitHub404_ToBrewInfo(t *testing.T) {
 	}
 
 	a := &app.App{
-		Name:       "MissingApp",
-		Version:    "1.0.0",
-		Source:     app.SourceGitHub,
-		GitHubRepo: "example/missing-app",
-		CaskName:   "missing-app",
+		Name:     "MissingApp",
+		BundleID: "com.example.missing-app",
+		Version:  "1.0.0",
+		Source:   app.SourceUnknown,
+	}
+	cfg := &config.Config{
+		GitHubMappings: map[string]string{a.BundleID: "example/missing-app"},
+		CaskMappings:   map[string]string{a.BundleID: "missing-app"},
+	}
+	if _, err := EnrichApps(context.Background(), []*app.App{a}, cfg, mockRunnerWithNoBrew()); err != nil {
+		t.Fatal(err)
 	}
 
 	checkers := []checker.Checker{
@@ -173,6 +173,135 @@ func TestFallthrough_GitHub404_ToBrewInfo(t *testing.T) {
 	}
 	if result.LatestVersion != "2.0.0" {
 		t.Errorf("LatestVersion = %q, want %q", result.LatestVersion, "2.0.0")
+	}
+}
+
+func TestAppStoreReceiptKeepsChannel(t *testing.T) {
+	ctx := context.Background()
+	caskroom, bundle := mockCaskApp(t, "example", "Example.app")
+	contents := filepath.Join(bundle, "Contents")
+	receiptDir := filepath.Join(contents, "_MASReceipt")
+	if err := os.MkdirAll(receiptDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(receiptDir, "receipt"), []byte("fixture"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var requests atomic.Int32
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		json.NewEncoder(w).Encode(checker.GitHubRelease{TagName: "v1.2.0", Assets: []checker.GitHubAsset{
+			{Name: "example-mac.zip", DownloadURL: "https://example.com/example-mac.zip"},
+		}})
+	}))
+	defer server.Close()
+	info := fmt.Sprintf(`<?xml version="1.0"?><plist version="1.0"><dict>
+<key>CFBundleIdentifier</key><string>com.example.app</string>
+<key>CFBundleShortVersionString</key><string>1.0.0</string>
+<key>SUFeedURL</key><string>%s/appcast.xml</string>
+</dict></plist>`, server.URL)
+	if err := os.WriteFile(filepath.Join(contents, "Info.plist"), []byte(info), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	storeErr := errors.New("mas unavailable")
+	for _, tc := range []struct {
+		name         string
+		mas          checker.MockResponse
+		override     bool
+		wantSource   string
+		wantVersion  string
+		wantUpdate   bool
+		wantRequests int32
+	}{
+		{name: "current", wantSource: "mas", wantVersion: "1.0.0"},
+		{name: "update", mas: checker.MockResponse{Output: []byte("123 Example (1.0.0 -> 1.1.0)\n")}, wantSource: "mas", wantVersion: "1.1.0", wantUpdate: true},
+		{name: "unavailable", mas: checker.MockResponse{Err: storeErr}, wantSource: "mas"},
+		{name: "explicit switch", mas: checker.MockResponse{Err: storeErr}, override: true, wantSource: "github", wantVersion: "1.2.0", wantUpdate: true, wantRequests: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			requests.Store(0)
+			apps, err := app.Discover(filepath.Dir(bundle))
+			if err != nil || len(apps) != 1 || apps[0].Source != app.SourceMAS {
+				t.Fatalf("expected an App Store install, got %+v, %v", apps, err)
+			}
+			runner := &checker.MultiMockCmdRunner{Responses: map[string]checker.MockResponse{
+				"brew --caskroom":                      {Output: []byte(caskroom)},
+				"brew outdated --cask --greedy --json": {Output: []byte(`[{"name":"example","current_version":"1.3.0"}]`)},
+				"mas outdated":                         tc.mas,
+			}}
+			cfg := &config.Config{
+				GitHubMappings: map[string]string{"com.example.app": "example/app"},
+				CaskMappings:   map[string]string{"com.example.app": "example"},
+			}
+			if tc.override {
+				cfg.SourceOverrides = map[string]*config.SourceOverrideConfig{
+					"com.example.app": {Kind: config.SourceOverrideKindGitHub, Repo: "example/app"},
+				}
+			}
+			if _, err := EnrichApps(ctx, apps, cfg, runner); err != nil {
+				t.Fatal(err)
+			}
+			checks := BuildCheckers(runner, "")
+			for i, c := range checks {
+				switch c.Name() {
+				case "sparkle":
+					checks[i] = checker.NewSparkleChecker(server.Client())
+				case "github":
+					checks[i] = checker.NewGitHubChecker(server.Client(), server.URL, "")
+				}
+			}
+			results := CheckAll(ctx, apps, checks, 1)
+			if len(results) != 1 {
+				t.Fatalf("expected one result, got %d", len(results))
+			}
+			r := results[0]
+			wantErr := tc.mas.Err
+			if tc.override {
+				wantErr = nil
+			}
+			if r.Source != tc.wantSource || r.LatestVersion != tc.wantVersion || r.HasUpdate != tc.wantUpdate ||
+				!errors.Is(r.Error, wantErr) || r.SourceOverrideActive != tc.override || requests.Load() != tc.wantRequests {
+				t.Fatalf("unexpected update route %+v, requests to alternate sources %d", r, requests.Load())
+			}
+		})
+	}
+}
+
+func TestHomebrewKeepsChannelForExactBundle(t *testing.T) {
+	caskroom, bundle := mockCaskApp(t, "example", "Example.app")
+	standalone := filepath.Join(t.TempDir(), "Example.app")
+	if err := os.Mkdir(standalone, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sparkle := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, `<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle"><channel><item>
+<enclosure url="https://example.com/Example.dmg" sparkle:shortVersionString="1.1.0" sparkle:version="110" />
+</item></channel></rss>`)
+	}))
+	defer sparkle.Close()
+	apps := []*app.App{
+		{Name: "Example", Path: bundle, Source: app.SourceSparkle, FeedURL: sparkle.URL, Version: "1.0.0"},
+		{Name: "Example", Path: standalone, Source: app.SourceSparkle, FeedURL: sparkle.URL, Version: "1.0.0"},
+	}
+	runner := &checker.MultiMockCmdRunner{Responses: map[string]checker.MockResponse{
+		"brew --caskroom":                      {Output: []byte(caskroom)},
+		"brew outdated --cask --greedy --json": {Err: errors.New("brew outdated unavailable")},
+		"brew info --cask --json=v2 example":   {Output: []byte(`{"casks":[{"version":"1.2.0","url":"https://example.com/cask.zip"}]}`)},
+	}}
+	ctx := context.Background()
+	if _, err := EnrichApps(ctx, apps, &config.Config{}, runner); err != nil {
+		t.Fatal(err)
+	}
+	checks := []checker.Checker{checker.NewSparkleChecker(sparkle.Client()), checker.NewBrewChecker(runner), checker.NewBrewInfoChecker(runner)}
+	managed := CheckWithFallthrough(ctx, apps[0], checks)
+	if managed.Error != nil || managed.Source != "brew-info" || !managed.HasUpdate || !managed.App.InstalledViaBrew {
+		t.Fatalf("cask should fall back within Homebrew, got %+v", managed)
+	}
+	direct := CheckWithFallthrough(ctx, apps[1], checks)
+	if direct.Error != nil || direct.Source != "sparkle" || !direct.HasUpdate || direct.App.InstalledViaBrew {
+		t.Fatalf("standalone copy should stay on its feed, got %+v", direct)
 	}
 }
 

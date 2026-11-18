@@ -97,8 +97,15 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 
 	// Filter to apps with updates.
 	var updatable []*checker.UpdateResult
+	var checkFailed bool
 	for _, r := range results {
-		if r.HasUpdate && r.Error == nil {
+		if r.Error != nil {
+			checkFailed = true
+			if targetApp != nil {
+				return fmt.Errorf("could not check %s for updates: %w", r.App.Name, r.Error)
+			}
+			fmt.Fprintf(cmd.ErrOrStderr(), "warning: could not check %s for updates: %v\n", r.App.Name, r.Error)
+		} else if r.HasUpdate {
 			updatable = append(updatable, r)
 		}
 	}
@@ -131,6 +138,8 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 			}
 		} else if targetApp != nil {
 			fmt.Fprintf(cmd.OutOrStdout(), "%s is up to date.\n", targetApp.Name)
+		} else if checkFailed {
+			fmt.Fprintln(cmd.OutOrStdout(), "No updates available from apps checked successfully.")
 		} else {
 			fmt.Fprintln(cmd.OutOrStdout(), "All apps are up to date.")
 		}

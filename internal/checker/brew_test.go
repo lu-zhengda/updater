@@ -220,31 +220,10 @@ func TestBrewChecker_ParseOutdatedInvalidJSON(t *testing.T) {
 	}
 }
 
-func TestListInstalledCasks_RunnerError(t *testing.T) {
+func TestInstalledCaskAppsRunnerError(t *testing.T) {
 	runner := &MockCmdRunner{Err: fmt.Errorf("brew not installed")}
-	_, err := ListInstalledCasks(context.Background(), runner)
+	_, err := InstalledCaskApps(context.Background(), runner)
 	if err == nil {
 		t.Fatal("expected error when runner fails, got nil")
-	}
-}
-
-func TestListInstalledCasks(t *testing.T) {
-	runner := &MockCmdRunner{
-		Output: []byte("firefox\ngoogle-chrome\nvisual-studio-code\n"),
-	}
-
-	casks, err := ListInstalledCasks(context.Background(), runner)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if len(casks) != 3 {
-		t.Fatalf("expected 3 casks, got %d", len(casks))
-	}
-
-	for _, name := range []string{"firefox", "google-chrome", "visual-studio-code"} {
-		if !casks[name] {
-			t.Errorf("expected cask %s to be present", name)
-		}
 	}
 }

@@ -348,7 +348,7 @@ func EnrichApps(ctx context.Context, apps []*app.App, cfg *config.Config, runner
 
 	// Phase 1: Apply GitHub repo mappings from config.
 	for _, a := range apps {
-		if hasExplicitSourceOverride(a) {
+		if hasExplicitSourceOverride(a) || (a.Source == app.SourceGitHub && a.GitHubRepo != "") {
 			continue
 		}
 		if repo := cfg.GitHubRepo(a.BundleID); repo != "" {
@@ -372,12 +372,12 @@ func EnrichApps(ctx context.Context, apps []*app.App, cfg *config.Config, runner
 		}
 	}
 
-	// Phase 3: Cross-reference with installed brew casks.
-	casks, err := checker.ListInstalledCasks(ctx, runner)
+	// Phase 3: Match bundles owned by Homebrew before probing for cask metadata.
+	casks, err := checker.InstalledCaskApps(ctx, runner)
 	if err != nil {
 		// Non-fatal: brew may not be installed.
 		if !errors.Is(err, exec.ErrNotFound) {
-			fmt.Fprintf(os.Stderr, "warning: could not list brew casks: %v\n", err)
+			fmt.Fprintf(os.Stderr, "warning: could not inspect Homebrew app ownership: %v\n", err)
 		}
 		return apps, nil
 	}
@@ -395,12 +395,23 @@ func EnrichApps(ctx context.Context, apps []*app.App, cfg *config.Config, runner
 			a.InstalledViaBrew = false
 			updateExplicitBrewOverrideSource(a)
 		}
-		if a.CaskName != "" && casks[a.CaskName] {
-			a.InstalledViaBrew = true
-			if hasExplicitBrewOverride(a) {
-				a.Source = app.SourceBrew
-			} else if a.Source == app.SourceUnknown {
-				a.Source = app.SourceBrew
+		if a.Path != "" && len(casks) > 0 {
+			resolved, err := filepath.EvalSymlinks(a.Path)
+			if token, owned := casks[resolved]; err == nil && owned && !cliTokens[token] {
+				switch {
+				case !hasExplicitSourceOverride(a):
+					if path.Base(a.CaskName) != token {
+						a.CaskName = token
+					}
+					a.InstalledViaBrew = true
+					if a.Source == app.SourceUnknown {
+						a.Source = app.SourceBrew
+					}
+					continue
+				case hasExplicitBrewOverride(a) && token != "" && token == path.Base(a.CaskName):
+					a.InstalledViaBrew = true
+					updateExplicitBrewOverrideSource(a)
+				}
 			}
 		}
 
@@ -420,26 +431,8 @@ func EnrichApps(ctx context.Context, apps []*app.App, cfg *config.Config, runner
 			(a.Source == app.SourceElectron && (a.ElectronUpdateFormat != "" || (a.ElectronUpdateURL == "" && a.GitHubRepo == "")))
 		if a.CaskName == "" && needsCaskFallback {
 			candidates := app.CaskCandidates(a)
-			// Try each candidate against the installed cask list.  The multi-signal
-			// strategy handles apps whose display name diverges from their cask token
-			// (e.g. VSCode: "Code" vs "visual-studio-code"; GitHub Desktop:
-			// "GitHub Desktop" vs "github") without requiring a hardcoded map.
-			for _, cand := range candidates {
-				if casks[cand] && !cliTokens[cand] {
-					a.CaskName = cand
-					break
-				}
-			}
-			// Queue remaining candidates for Phase 4 probing if still unresolved.
-			if a.CaskName == "" && len(candidates) > 0 {
+			if len(candidates) > 0 {
 				appCandidates[a] = candidates
-			}
-		}
-
-		if a.CaskName != "" && casks[a.CaskName] {
-			a.InstalledViaBrew = true
-			if a.Source == app.SourceUnknown {
-				a.Source = app.SourceBrew
 			}
 		}
 	}
@@ -530,26 +523,55 @@ func BuildCheckers(runner checker.CmdRunner, githubToken string) []checker.Check
 	}
 }
 
+func requiredChecker(a *app.App) string {
+	if a == nil {
+		return ""
+	}
+	if a.SourceOverrideActive {
+		return a.SourceOverrideKind
+	}
+	switch a.Source {
+	case app.SourceMAS, app.SourceSystem, app.SourceBrewFormula, app.SourceNpm, app.SourcePnpm,
+		app.SourcePipx, app.SourceUv, app.SourceCargo:
+		return string(a.Source)
+	case app.SourceSetapp, app.SourceToolbox, app.SourceAdobe:
+		return "managed"
+	}
+	// The self-upgrade helper chooses how to install Updater after it checks the release.
+	if a.BundleID == app.UpdaterBundleID {
+		return string(app.SourceGitHub)
+	}
+	if a.InstalledViaBrew {
+		return string(app.SourceBrew)
+	}
+	switch a.Source {
+	case app.SourceSparkle:
+		return string(app.SourceSparkle)
+	case app.SourceGitHub:
+		if a.DiscoveredSource() == app.SourceGitHub {
+			return string(app.SourceGitHub)
+		}
+	case app.SourceElectron:
+		if a.ElectronUpdateURL != "" {
+			if a.ElectronUpdateFormat != "" {
+				return "vendor"
+			}
+			return string(app.SourceElectron)
+		}
+	}
+	return ""
+}
+
 func checkersForApp(a *app.App, all []checker.Checker) []checker.Checker {
-	if a == nil || !a.SourceOverrideActive {
+	required := requiredChecker(a)
+	if required == "" {
 		return all
 	}
 
 	var filtered []checker.Checker
 	for _, c := range all {
-		switch a.SourceOverrideKind {
-		case string(config.SourceOverrideKindGitHub):
-			if c.Name() == string(config.SourceOverrideKindGitHub) {
-				filtered = append(filtered, c)
-			}
-		case string(config.SourceOverrideKindSparkle):
-			if c.Name() == string(config.SourceOverrideKindSparkle) {
-				filtered = append(filtered, c)
-			}
-		case string(config.SourceOverrideKindBrew):
-			if c.Name() == "brew" || c.Name() == string(app.SourceBrewInfo) {
-				filtered = append(filtered, c)
-			}
+		if name := c.Name(); name == required || (required == string(app.SourceBrew) && name == string(app.SourceBrewInfo)) {
+			filtered = append(filtered, c)
 		}
 	}
 
@@ -589,9 +611,12 @@ func withOverrideProvenance(result *checker.UpdateResult, a *app.App) *checker.U
 }
 
 func noCheckerResult(a *app.App) *checker.UpdateResult {
-	source := "unknown"
-	if a != nil && a.SourceOverrideActive {
+	source := requiredChecker(a)
+	if a.SourceOverrideActive || source == "managed" {
 		source = effectiveResultSource(a, "")
+	}
+	if source == "" {
+		source = "unknown"
 	}
 
 	return withOverrideProvenance(&checker.UpdateResult{
@@ -636,7 +661,7 @@ func CheckAllProgress(ctx context.Context, apps []*app.App, checkers []checker.C
 			}
 		}
 		if !hasChecker {
-			if a != nil && a.SourceOverrideActive {
+			if requiredChecker(a) != "" {
 				r := noCheckerResult(a)
 				mu.Lock()
 				results = append(results, r)
@@ -704,8 +729,8 @@ func CheckWithFallthrough(ctx context.Context, a *app.App, checkers []checker.Ch
 		}
 		// Repositories such as microsoft/vscode publish release versions but
 		// no macOS artifacts. Let an installable source answer before keeping
-		// that version-only result. Explicit overrides remain authoritative.
-		if result.Source == "github" && result.DownloadURL == "" && !a.SourceOverrideActive && a.BundleID != app.UpdaterBundleID {
+		// that version-only result when the install channel is unknown.
+		if result.Source == "github" && result.DownloadURL == "" && requiredChecker(a) == "" {
 			if fallback == nil {
 				fallback = result
 			}
@@ -751,14 +776,10 @@ func CheckWithFallthrough(ctx context.Context, a *app.App, checkers []checker.Ch
 	if staleCount > 0 {
 		msg = fmt.Sprintf("all %d source(s) returned stale data for %s", staleCount, a.Name)
 	}
-	source := "unknown"
-	if a != nil && a.SourceOverrideActive {
-		source = effectiveResultSource(a, lastSource)
+	result := noCheckerResult(a)
+	if staleCount > 0 && requiredChecker(a) != "" {
+		result.Source = effectiveResultSource(a, lastSource)
 	}
-	return withOverrideProvenance(&checker.UpdateResult{
-		App:            a,
-		Source:         source,
-		CurrentVersion: a.Version,
-		Error:          fmt.Errorf("%s", msg),
-	}, a)
+	result.Error = fmt.Errorf("%s", msg)
+	return result
 }

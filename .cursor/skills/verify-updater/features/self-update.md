@@ -33,6 +33,7 @@ Preconditions:
 
 - `updater upgrade` returns before the helper finishes. Exiting `0` with the scheduled message is not the proof. The plist version is the proof.
 - A Homebrew cask path runs `brew upgrade --cask lu-zhengda/tap/updater` inside the helper. The temp bundle is not the cask, so this journey uses the tarball replacement path. The Homebrew feature covers the cask path.
+- The helper matches the bundle to its resolved Caskroom path. An ownership lookup error stops the helper before artifact download. `TestSelfUpgradeStopsWhenCaskroomIsUnavailable` checks this with an unavailable Caskroom.
 - The helper refuses the replacement unless the old app has a Developer ID team and the downloaded app matches that team, bundle id, and Gatekeeper's execute assessment. An ad-hoc older bundle failing here is a FAIL, not a prompt to disable the check.
 - The helper appends `~/.config/updater/logs/self-update.log` and `~/.local/share/updater/history.json`. Cleanup does not delete them.
 - The menu-bar click, the updates window, and YOLO Mode are not headless. The status item lives in `SystemUIServer` / the menu bar extra, and clicking it needs an Accessibility (TCC) grant for the process that runs UI scripting. This script does not prompt for that grant. The automated path is the same argv the menu item uses: `update --bundle-id com.updater.app` from the older bundle. Do not report the click itself as `PASS`.

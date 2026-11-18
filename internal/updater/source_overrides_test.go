@@ -110,7 +110,7 @@ func TestEnrichApps_ExplicitBrewOverride_PinsBrewSourceWhenInstalledViaBrew(t *t
 		},
 	}
 
-	got, err := EnrichApps(context.Background(), apps, cfg, mockRunnerWithInstalledCasks("visual-studio-code"))
+	got, err := EnrichApps(context.Background(), apps, cfg, mockRunnerWithNoBrew())
 	if err != nil {
 		t.Fatalf("EnrichApps failed: %v", err)
 	}
@@ -334,7 +334,7 @@ func TestEnrichApps_LegacyMappings_DoNotSetOverrideProvenance(t *testing.T) {
 		},
 	}
 
-	got, err := EnrichApps(context.Background(), apps, cfg, mockRunnerWithInstalledCasks("other-cask"))
+	got, err := EnrichApps(context.Background(), apps, cfg, mockRunnerWithNoBrew())
 	if err != nil {
 		t.Fatalf("EnrichApps failed: %v", err)
 	}
@@ -375,7 +375,7 @@ func TestEnrichApps_ExplicitOverrideWinsOverLegacyMappings(t *testing.T) {
 		},
 	}
 
-	got, err := EnrichApps(context.Background(), apps, cfg, mockRunnerWithInstalledCasks("legacy-cask"))
+	got, err := EnrichApps(context.Background(), apps, cfg, mockRunnerWithNoBrew())
 	if err != nil {
 		t.Fatalf("EnrichApps failed: %v", err)
 	}
@@ -632,29 +632,9 @@ func TestCheckAll_ExplicitOverrideWithoutCompatibleChecker_ReturnsErrorResult(t 
 }
 
 func mockRunnerWithNoBrew() checker.CmdRunner {
-	return mockRunnerWithInstalledCasks()
+	return &checker.MultiMockCmdRunner{}
 }
 
 func mockRunnerWithNoInstalledCasks() checker.CmdRunner {
-	return mockRunnerWithInstalledCasks()
-}
-
-func mockRunnerWithInstalledCasks(casks ...string) checker.CmdRunner {
-	output := []byte("")
-	if len(casks) > 0 {
-		line := ""
-		for i, cask := range casks {
-			if i > 0 {
-				line += "\n"
-			}
-			line += cask
-		}
-		output = []byte(line + "\n")
-	}
-
-	return &checker.MultiMockCmdRunner{
-		Responses: map[string]checker.MockResponse{
-			"brew list --cask": {Output: output},
-		},
-	}
+	return &checker.MultiMockCmdRunner{}
 }

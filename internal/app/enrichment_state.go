@@ -8,6 +8,14 @@ type enrichmentBaseline struct {
 	InstalledViaBrew bool
 }
 
+// DiscoveredSource returns the source before configuration and cask enrichment.
+func (a *App) DiscoveredSource() Source {
+	if a.enrichmentBaseline != nil {
+		return a.enrichmentBaseline.Source
+	}
+	return a.Source
+}
+
 // ResetEnrichmentState restores fields that EnrichApps mutates back to their
 // pre-enrichment values, then clears explicit override provenance.
 func (a *App) ResetEnrichmentState() {

@@ -3,8 +3,12 @@ package checker
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
+	"os"
 	"path"
+	"path/filepath"
 	"strings"
 
 	"github.com/lu-zhengda/updater/internal/app"
@@ -64,12 +68,11 @@ func (b *BrewChecker) Check(ctx context.Context, a *app.App) (*UpdateResult, err
 		return nil, fmt.Errorf("failed to parse brew outdated output: %w", err)
 	}
 
-	cliCask := a.IsBrewCLICask()
 	for _, item := range items {
-		if item.Name == a.CaskName || (cliCask && item.Name == path.Base(a.CaskName)) {
+		if item.Name == a.CaskName || item.Name == path.Base(a.CaskName) || path.Base(item.Name) == a.CaskName {
 			latestVersion := item.CurrentVersion
 			// Homebrew detects changes to CLI casks that version alone cannot (e.g. :latest).
-			hasUpdate := version.IsNewer(a.Version, latestVersion) || (cliCask && latestVersion != "")
+			hasUpdate := version.IsNewer(a.Version, latestVersion) || (a.IsBrewCLICask() && latestVersion != "")
 			return &UpdateResult{
 				App:            a,
 				Source:         "brew",
@@ -112,19 +115,49 @@ func parseBrewOutdated(data []byte) ([]brewOutdatedItem, error) {
 	return all, nil
 }
 
-// ListInstalledCasks runs `brew list --cask` and returns a set of installed cask names.
-func ListInstalledCasks(ctx context.Context, runner CmdRunner) (map[string]bool, error) {
-	output, err := runner.Run(ctx, "brew", "list", "--cask")
+// InstalledCaskApps maps the resolved paths of installed cask app artifacts to their tokens.
+func InstalledCaskApps(ctx context.Context, runner CmdRunner) (map[string]string, error) {
+	output, err := runner.Run(ctx, "brew", "--caskroom")
 	if err != nil {
-		return nil, fmt.Errorf("failed to run brew list --cask: %w", err)
+		return nil, fmt.Errorf("failed to locate Homebrew Caskroom: %w", err)
 	}
-
-	casks := make(map[string]bool)
-	for _, line := range strings.Split(strings.TrimSpace(string(output)), "\n") {
-		line = strings.TrimSpace(line)
-		if line != "" {
-			casks[line] = true
+	root := strings.TrimSpace(string(output))
+	if root == "" {
+		return nil, nil
+	}
+	if !filepath.IsAbs(root) {
+		return nil, fmt.Errorf("invalid Homebrew Caskroom path %q", root)
+	}
+	casks := make(map[string]string)
+	// Homebrew stages each app at <token>/<version>/<app>.app, linking moved apps.
+	err = fs.WalkDir(os.DirFS(root), ".", func(rel string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			if rel == "." && errors.Is(err, fs.ErrNotExist) {
+				return fs.SkipAll
+			}
+			return err
 		}
+		depth := strings.Count(rel, "/")
+		if depth == 2 && filepath.Ext(entry.Name()) == ".app" {
+			resolved, err := filepath.EvalSymlinks(filepath.Join(root, rel))
+			if err != nil && !errors.Is(err, fs.ErrNotExist) {
+				return err
+			}
+			if err == nil {
+				token := path.Dir(path.Dir(rel))
+				if previous, ok := casks[resolved]; ok && previous != token {
+					token = ""
+				}
+				casks[resolved] = token
+			}
+		}
+		if entry.IsDir() && (depth >= 2 || (rel != "." && strings.HasPrefix(entry.Name(), "."))) {
+			return fs.SkipDir
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to inspect Homebrew Caskroom: %w", err)
 	}
 	return casks, nil
 }

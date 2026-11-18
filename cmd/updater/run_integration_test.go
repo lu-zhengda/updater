@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -191,5 +192,38 @@ func TestRunUpdateBundleIDSelector(t *testing.T) {
 	flagBundleID = "com.does.not.exist"
 	if err := runUpdate(updateCmd, nil); err == nil {
 		t.Error("expected error for unknown bundle ID, got nil")
+	}
+}
+
+func TestRunUpdateReportsUnavailableAppStore(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	withStubbedPipeline(t, []*app.App{
+		{Name: "Store App", BundleID: "com.test.store", Version: "1.0.0", Source: app.SourceMAS, CaskName: "store-app"},
+	})
+	storeErr := errors.New("App Store unavailable")
+	newRunner = func() checker.CmdRunner {
+		return &checker.MultiMockCmdRunner{Responses: map[string]checker.MockResponse{
+			"mas outdated":                         {Err: storeErr},
+			"brew info --cask --json=v2 store-app": {Output: []byte(`{"casks":[{"version":"1.1.0","url":"https://example.com/app.zip"}]}`)},
+		}}
+	}
+	originalBundleID, originalAll, originalDryRun := flagBundleID, flagAll, flagDryRun
+	t.Cleanup(func() { flagBundleID, flagAll, flagDryRun = originalBundleID, originalAll, originalDryRun })
+	var out, stderr bytes.Buffer
+	updateCmd.SetOut(&out)
+	updateCmd.SetErr(&stderr)
+	updateCmd.SetContext(context.Background())
+	t.Cleanup(func() { updateCmd.SetOut(nil); updateCmd.SetErr(nil) })
+	flagBundleID, flagAll, flagDryRun = "com.test.store", false, true
+	if err := runUpdate(updateCmd, nil); !errors.Is(err, storeErr) {
+		t.Fatalf("expected the App Store error, got %v and output %q", err, out.String())
+	}
+	flagBundleID, flagAll = "", true
+	out.Reset()
+	if err := runUpdate(updateCmd, nil); err != nil {
+		t.Fatal(err)
+	}
+	if out.String() != "No updates available from apps checked successfully.\n" || !bytes.Contains(stderr.Bytes(), []byte(storeErr.Error())) {
+		t.Fatalf("batch reported %q and warnings %q", out.String(), stderr.String())
 	}
 }
