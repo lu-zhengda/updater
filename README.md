@@ -91,6 +91,13 @@ updater
 | cargo crates | `cargo install --list` + crates.io API | `cargo install <crate>` |
 | macOS system | `softwareupdate -l` | Opens Software Update settings |
 
+Updater stays with a detected install channel by default. App Store apps use
+the App Store, Homebrew-owned bundles use Homebrew, and standalone apps with a
+packaged update feed keep using that feed. If the channel fails, Updater
+reports the check failure. Apps whose channel is unknown can still use
+configured mappings or available installer metadata. A desktop app's
+`source_overrides` entry explicitly selects a different update source.
+
 Direct downloads prefer the Mac’s native architecture, then universal builds. Explicitly incompatible builds are excluded. Before replacing an app from a DMG or ZIP, the updater also checks that its executable supports the native architecture, even when filenames omit it.
 
 When you manually update an app using a verified macOS installer package
@@ -112,9 +119,8 @@ Embedded `sparkleFeedUrl` fields (including app-prefixed names such as
 `codexSparkleFeedUrl`) retain the packaged release channel; conflicting feed URLs
 are not guessed. VS Code-compatible `product.json` update services retain their
 `stable` or `insider` channel. Claude's release-index address is supplied by a
-bundle-ID adapter; the release-index parser is shared. These feeds are checked
-before Homebrew and legacy GitHub mappings, so a version-only release cannot hide
-the vendor's installer. Explicit `source_overrides` still take precedence.
+bundle-ID adapter. Standalone installs with these feeds use the vendor's
+installer. Explicit `source_overrides` still take precedence.
 
 Failed direct installs open the app or download page for manual updating and
 show the original failure alongside the handoff. The handoff is not recorded as

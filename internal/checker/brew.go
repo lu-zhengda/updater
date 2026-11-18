@@ -3,8 +3,12 @@ package checker
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
+	"os"
 	"path"
+	"path/filepath"
 	"strings"
 
 	"github.com/lu-zhengda/updater/internal/app"
@@ -64,12 +68,11 @@ func (b *BrewChecker) Check(ctx context.Context, a *app.App) (*UpdateResult, err
 		return nil, fmt.Errorf("failed to parse brew outdated output: %w", err)
 	}
 
-	cliCask := a.IsBrewCLICask()
 	for _, item := range items {
-		if item.Name == a.CaskName || (cliCask && item.Name == path.Base(a.CaskName)) {
+		if item.Name == a.CaskName || item.Name == path.Base(a.CaskName) || path.Base(item.Name) == a.CaskName {
 			latestVersion := item.CurrentVersion
 			// Homebrew detects changes to CLI casks that version alone cannot (e.g. :latest).
-			hasUpdate := version.IsNewer(a.Version, latestVersion) || (cliCask && latestVersion != "")
+			hasUpdate := version.IsNewer(a.Version, latestVersion) || (a.IsBrewCLICask() && latestVersion != "")
 			return &UpdateResult{
 				App:            a,
 				Source:         "brew",
@@ -112,19 +115,80 @@ func parseBrewOutdated(data []byte) ([]brewOutdatedItem, error) {
 	return all, nil
 }
 
-// ListInstalledCasks runs `brew list --cask` and returns a set of installed cask names.
-func ListInstalledCasks(ctx context.Context, runner CmdRunner) (map[string]bool, error) {
-	output, err := runner.Run(ctx, "brew", "list", "--cask")
-	if err != nil {
-		return nil, fmt.Errorf("failed to run brew list --cask: %w", err)
-	}
+// ErrCaskroomIncomplete means at least one Caskroom entry could not be read.
+// The map still contains every app artifact that could be resolved.
+var ErrCaskroomIncomplete = errors.New("homebrew caskroom could not be read completely")
 
-	casks := make(map[string]bool)
-	for _, line := range strings.Split(strings.TrimSpace(string(output)), "\n") {
-		line = strings.TrimSpace(line)
-		if line != "" {
-			casks[line] = true
+// InstalledCaskApps maps the resolved paths of installed cask app artifacts to their tokens.
+// Homebrew moves an app to its install location and leaves a symlink at the staged
+// source, which is <token>/<version>/<app>.app or a nested source such as
+// <token>/<version>/Payload/<app>.app. A readable app is recorded even when another
+// entry cannot be read; that partial result returns ErrCaskroomIncomplete.
+func InstalledCaskApps(ctx context.Context, runner CmdRunner) (map[string]string, error) {
+	output, err := runner.Run(ctx, "brew", "--caskroom")
+	if err != nil {
+		return nil, fmt.Errorf("failed to locate Homebrew Caskroom: %w", err)
+	}
+	root := strings.TrimSpace(string(output))
+	if root == "" {
+		return nil, nil
+	}
+	if !filepath.IsAbs(root) {
+		return nil, fmt.Errorf("invalid Homebrew Caskroom path %q", root)
+	}
+	casks := make(map[string]string)
+	var incomplete bool
+	err = fs.WalkDir(os.DirFS(root), ".", func(rel string, entry fs.DirEntry, err error) error {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
 		}
+		if err != nil {
+			if rel == "." && errors.Is(err, fs.ErrNotExist) {
+				return fs.SkipAll
+			}
+			if rel == "." {
+				return err
+			}
+			incomplete = true
+			return nil
+		}
+		name := entry.Name()
+		if rel != "." && strings.HasPrefix(name, ".") {
+			if entry.IsDir() {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		depth := strings.Count(rel, "/")
+		if depth >= 2 && filepath.Ext(name) == ".app" {
+			resolved, evalErr := filepath.EvalSymlinks(filepath.Join(root, rel))
+			if evalErr != nil && !errors.Is(evalErr, fs.ErrNotExist) {
+				incomplete = true
+			}
+			if evalErr == nil {
+				token, _, _ := strings.Cut(rel, "/")
+				if previous, ok := casks[resolved]; ok && previous != token {
+					token = ""
+				}
+				casks[resolved] = token
+			}
+			// Helper apps live inside the bundle. They are not separate installs.
+			if entry.IsDir() {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		// A version directory can contain a couple of container folders before the app.
+		if entry.IsDir() && depth >= 5 {
+			return fs.SkipDir
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to inspect Homebrew Caskroom: %w", err)
+	}
+	if incomplete {
+		return casks, fmt.Errorf("failed to inspect Homebrew Caskroom: %w", ErrCaskroomIncomplete)
 	}
 	return casks, nil
 }

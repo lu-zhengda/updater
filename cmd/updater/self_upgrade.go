@@ -146,26 +146,31 @@ func readUpdaterBundle(bundle string) (*app.App, error) {
 
 // Homebrew's Caskroom app is a symlink to the actual appdir (which need not be
 // /Applications). Resolving it avoids mistaking another Updater copy for it.
-func isUpdaterCask(ctx context.Context, bundle string, runner checker.CmdRunner) bool {
-	output, err := runner.Run(ctx, "brew", "list", "--cask", updaterCask)
-	if err != nil {
-		return false
-	}
-	target, err := filepath.EvalSymlinks(bundle)
-	if err != nil {
-		return false
-	}
-	for _, line := range strings.Split(string(output), "\n") {
-		path := strings.TrimSpace(line)
-		if !strings.HasSuffix(path, "/Updater.app") {
-			continue
+func isUpdaterCask(ctx context.Context, bundle string, runner checker.CmdRunner) (bool, error) {
+	casks, err := checker.InstalledCaskApps(ctx, runner)
+	incomplete := errors.Is(err, checker.ErrCaskroomIncomplete)
+	if err != nil && !incomplete {
+		if errors.Is(err, exec.ErrNotFound) {
+			return false, nil
 		}
-		resolved, err := filepath.EvalSymlinks(path)
-		if err == nil && resolved == target {
-			return true
-		}
+		return false, err
 	}
-	return false
+	target, evalErr := filepath.EvalSymlinks(bundle)
+	if evalErr != nil {
+		return false, evalErr
+	}
+	token, owned := casks[target]
+	if owned && token != filepath.Base(updaterCask) {
+		return false, fmt.Errorf("the bundle is associated with an unrecognized Homebrew cask")
+	}
+	if owned {
+		return true, nil
+	}
+	// An unread Caskroom entry may be this install. Do not replace it from a tarball.
+	if incomplete {
+		return false, err
+	}
+	return false, nil
 }
 
 // Shared for an update/batch; exclusive while replacing Updater and restarting
@@ -488,6 +493,10 @@ func applySelfUpgrade(ctx context.Context, bundle string, runner checker.CmdRunn
 	if !versionpkg.IsNewer(versionpkg.ReleaseVersion(installed.Version), latest) {
 		return "Updater is already up to date (" + installed.Version + ")", nil
 	}
+	brew, err := isUpdaterCask(ctx, bundle, runner)
+	if err != nil {
+		return "", fmt.Errorf("cannot determine Updater's Homebrew ownership: %w", err)
+	}
 
 	stage, err := os.MkdirTemp(filepath.Dir(bundle), ".updater-self-*")
 	if err != nil {
@@ -506,7 +515,6 @@ func applySelfUpgrade(ctx context.Context, bundle string, runner checker.CmdRunn
 		}
 		_ = hold.Close()
 	}()
-	brew := isUpdaterCask(ctx, bundle, runner)
 	candidate := filepath.Join(stage, "Updater.app")
 	if !brew {
 		archive, downloadErr := downloadSelfArchive(release, cfg.ResolveGitHubToken(), stage)

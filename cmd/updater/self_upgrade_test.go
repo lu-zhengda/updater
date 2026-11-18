@@ -57,6 +57,7 @@ type selfUpgradeTestRunner struct {
 	t                            *testing.T
 	bundle                       string
 	brew, fail, managed, stopped bool
+	failOwnership                bool
 	failRefresh                  bool
 	failFetch                    bool
 	diverged                     bool
@@ -119,11 +120,14 @@ func (r *selfUpgradeTestRunner) Run(ctx context.Context, name string, args ...st
 		r.t.Fatalf("tap refresh reset the checkout: %s", key)
 	}
 	switch {
-	case key == "brew list --cask "+updaterCask:
-		if r.brew {
-			return []byte(r.bundle + "\n"), nil
+	case key == "brew --caskroom":
+		if r.failOwnership {
+			return nil, os.ErrPermission
 		}
-		return nil, errors.New("not installed via brew")
+		if r.brew {
+			return []byte(selfCaskroom(r.t, r.bundle)), nil
+		}
+		return nil, exec.ErrNotFound
 	case key == "brew --repository "+updaterTap:
 		if r.failRefresh {
 			return nil, errors.New("tap repository unavailable")
@@ -346,6 +350,19 @@ func TestSelfUpgradeTransaction(t *testing.T) {
 	}
 }
 
+func selfCaskroom(t *testing.T, bundle string) string {
+	t.Helper()
+	root := t.TempDir()
+	link := filepath.Join(root, "updater", "1.0.0", "Updater.app")
+	if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(bundle, link); err != nil {
+		t.Fatal(err)
+	}
+	return root
+}
+
 func TestSelfUpgradeGuardrails(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	for _, version := range []string{"v1.2.3-dirty", "v1.2.3-5-gabc123", "v1.2.3-5-gabc123-dirty"} {
@@ -377,13 +394,13 @@ func TestSelfUpgradeGuardrails(t *testing.T) {
 	if _, statErr := os.Stat(backup); !os.IsNotExist(statErr) {
 		t.Fatalf("backup appeared without a swap: %v", statErr)
 	}
-	alias := filepath.Join(t.TempDir(), "Updater.app")
-	if err := os.Symlink(old, alias); err != nil {
-		t.Fatal(err)
-	}
-	runner := &checker.MockCmdRunner{Output: []byte(alias + "\n")}
-	if !isUpdaterCask(context.Background(), old, runner) || isUpdaterCask(context.Background(), filepath.Join(stage, "Other.app"), runner) {
-		t.Fatal("incorrect cask ownership")
+	runner := &checker.MockCmdRunner{Output: []byte(selfCaskroom(t, old))}
+	other := filepath.Join(t.TempDir(), "Updater.app")
+	writeSelfBundle(t, other, "1.0.0")
+	for bundle, want := range map[string]bool{old: true, other: false} {
+		if got, err := isUpdaterCask(context.Background(), bundle, runner); err != nil || got != want {
+			t.Fatalf("cask ownership for %s = %t, %v, want %t", bundle, got, err, want)
+		}
 	}
 	executable := "/Applications/Updater.app/Contents/MacOS/updater"
 	processes := "101 " + executable + " menubar run\n102 " + executable + " window\n103 " + executable + " update --all\n104 /tmp/updater self-upgrade /Applications/Updater.app\n105 " + executable + "\n"
@@ -478,6 +495,67 @@ func TestRestoreUpdaterBundleSwaps(t *testing.T) {
 	got, readErr = readUpdaterBundle(bundle)
 	if readErr != nil || got.Version != "2.0.0" {
 		t.Fatalf("bundle moved without a backup: %+v, %v", got, readErr)
+	}
+}
+
+func TestSelfUpgradeStopsWhenCaskroomIsUnavailable(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	bundle := filepath.Join(t.TempDir(), "Updater.app")
+	writeSelfBundle(t, bundle, "1.0.0")
+	previous := selfUpgradeRelease
+	t.Cleanup(func() { selfUpgradeRelease = previous })
+	selfUpgradeRelease = func(string) (*checker.GitHubRelease, error) {
+		return &checker.GitHubRelease{TagName: "v1.1.0"}, nil
+	}
+	runner := &selfUpgradeTestRunner{t: t, bundle: bundle, failOwnership: true}
+	if _, err := applySelfUpgrade(context.Background(), bundle, runner); !errors.Is(err, os.ErrPermission) {
+		t.Fatalf("expected the Caskroom error before any GitHub download, got %v", err)
+	}
+}
+
+func TestIsUpdaterCaskMatchesNestedBundle(t *testing.T) {
+	bundle := filepath.Join(t.TempDir(), "Updater.app")
+	writeSelfBundle(t, bundle, "1.0.0")
+	root := t.TempDir()
+	link := filepath.Join(root, "updater", "1.2.3", "Payload", "Updater.app")
+	if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(bundle, link); err != nil {
+		t.Fatal(err)
+	}
+	runner := &checker.MockCmdRunner{Output: []byte(root)}
+	if got, err := isUpdaterCask(context.Background(), bundle, runner); err != nil || !got {
+		t.Fatalf("nested cask ownership = %t, %v", got, err)
+	}
+	other := filepath.Join(t.TempDir(), "Updater.app")
+	writeSelfBundle(t, other, "1.0.0")
+	if got, err := isUpdaterCask(context.Background(), other, runner); err != nil || got {
+		t.Fatalf("standalone ownership = %t, %v", got, err)
+	}
+}
+
+func TestSelfUpgradeStopsWhenCaskroomIsIncomplete(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	bundle := filepath.Join(t.TempDir(), "Updater.app")
+	writeSelfBundle(t, bundle, "1.0.0")
+	root := t.TempDir()
+	unreadable := filepath.Join(root, "secret")
+	if err := os.Mkdir(unreadable, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(unreadable, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(unreadable, 0o755) })
+	previous := selfUpgradeRelease
+	t.Cleanup(func() { selfUpgradeRelease = previous })
+	selfUpgradeRelease = func(string) (*checker.GitHubRelease, error) {
+		return &checker.GitHubRelease{TagName: "v1.1.0"}, nil
+	}
+	runner := &checker.MockCmdRunner{Output: []byte(root)}
+	if _, err := applySelfUpgrade(context.Background(), bundle, runner); !errors.Is(err, checker.ErrCaskroomIncomplete) {
+		t.Fatalf("expected an incomplete Caskroom to stop the helper before download, got %v", err)
 	}
 }
 

@@ -2,7 +2,10 @@ package checker
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/lu-zhengda/updater/internal/app"
@@ -220,31 +223,116 @@ func TestBrewChecker_ParseOutdatedInvalidJSON(t *testing.T) {
 	}
 }
 
-func TestListInstalledCasks_RunnerError(t *testing.T) {
+func TestInstalledCaskAppsRunnerError(t *testing.T) {
 	runner := &MockCmdRunner{Err: fmt.Errorf("brew not installed")}
-	_, err := ListInstalledCasks(context.Background(), runner)
+	_, err := InstalledCaskApps(context.Background(), runner)
 	if err == nil {
 		t.Fatal("expected error when runner fails, got nil")
 	}
 }
 
-func TestListInstalledCasks(t *testing.T) {
-	runner := &MockCmdRunner{
-		Output: []byte("firefox\ngoogle-chrome\nvisual-studio-code\n"),
-	}
-
-	casks, err := ListInstalledCasks(context.Background(), runner)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if len(casks) != 3 {
-		t.Fatalf("expected 3 casks, got %d", len(casks))
-	}
-
-	for _, name := range []string{"firefox", "google-chrome", "visual-studio-code"} {
-		if !casks[name] {
-			t.Errorf("expected cask %s to be present", name)
+func TestInstalledCaskAppsResolvesNestedAndSkipsBundleContents(t *testing.T) {
+	root := t.TempDir()
+	installed := filepath.Join(t.TempDir(), "Example.app")
+	standalone := filepath.Join(t.TempDir(), "Other Example.app")
+	outsideHelper := filepath.Join(t.TempDir(), "Helper.app")
+	for _, dir := range []string{installed, standalone, outsideHelper} {
+		if err := os.Mkdir(dir, 0o755); err != nil {
+			t.Fatal(err)
 		}
+	}
+	nested := filepath.Join(root, "example", "1.0.0", "Payload", "Example.app")
+	if err := os.MkdirAll(filepath.Dir(nested), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(installed, nested); err != nil {
+		t.Fatal(err)
+	}
+	// The staged bundle is the artifact. A helper inside it is not another install.
+	stagedBundle := filepath.Join(root, "helper", "1.0.0", "Helper.app")
+	inner := filepath.Join(stagedBundle, "Contents", "Frameworks", "Nested.app")
+	if err := os.MkdirAll(filepath.Dir(inner), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outsideHelper, inner); err != nil {
+		t.Fatal(err)
+	}
+	missing := filepath.Join(root, "gone", "1.0.0", "Gone.app")
+	if err := os.MkdirAll(filepath.Dir(missing), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(t.TempDir(), "missing.app"), missing); err != nil {
+		t.Fatal(err)
+	}
+
+	casks, err := InstalledCaskApps(context.Background(), &MockCmdRunner{Output: []byte(root)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := filepath.EvalSymlinks(installed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if casks[resolved] != "example" {
+		t.Fatalf("nested app token = %q, map %#v", casks[resolved], casks)
+	}
+	staged, err := filepath.EvalSymlinks(stagedBundle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if casks[staged] != "helper" {
+		t.Fatalf("staged bundle token = %q, map %#v", casks[staged], casks)
+	}
+	outside, err := filepath.EvalSymlinks(outsideHelper)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := casks[outside]; ok {
+		t.Fatalf("helper inside a bundle was treated as an installed app: %#v", casks)
+	}
+	standaloneResolved, err := filepath.EvalSymlinks(standalone)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, claimed := casks[standaloneResolved]; claimed {
+		t.Fatalf("standalone copy was claimed by the cask: %#v", casks)
+	}
+	if len(casks) != 2 {
+		t.Fatalf("expected the nested app and the staged bundle, got %#v", casks)
+	}
+}
+
+func TestInstalledCaskAppsKeepsReadableAppsWhenOneEntryIsUnreadable(t *testing.T) {
+	root := t.TempDir()
+	installed := filepath.Join(t.TempDir(), "Example.app")
+	if err := os.Mkdir(installed, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(root, "example", "1.0.0", "Example.app")
+	if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(installed, link); err != nil {
+		t.Fatal(err)
+	}
+	unreadable := filepath.Join(root, "secret")
+	if err := os.Mkdir(unreadable, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(unreadable, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(unreadable, 0o755) })
+
+	casks, err := InstalledCaskApps(context.Background(), &MockCmdRunner{Output: []byte(root)})
+	if !errors.Is(err, ErrCaskroomIncomplete) {
+		t.Fatalf("expected an incomplete Caskroom, got %v", err)
+	}
+	resolved, err := filepath.EvalSymlinks(installed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if casks[resolved] != "example" {
+		t.Fatalf("readable app was dropped: %#v", casks)
 	}
 }

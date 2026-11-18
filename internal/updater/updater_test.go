@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"reflect"
 	"runtime"
 	"strings"
@@ -27,6 +28,22 @@ func (m *mockChecker) Name() string             { return m.name }
 func (m *mockChecker) CanCheck(a *app.App) bool { return m.canCheck(a) }
 func (m *mockChecker) Check(_ context.Context, a *app.App) (*checker.UpdateResult, error) {
 	return m.result, m.err
+}
+
+func mockCaskApp(t *testing.T, token, bundle string) (root, installed string) {
+	t.Helper()
+	root = t.TempDir()
+	installed = filepath.Join(t.TempDir(), bundle)
+	link := filepath.Join(root, token, "1.0.0", bundle)
+	for _, dir := range []string{installed, filepath.Dir(link)} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink(installed, link); err != nil {
+		t.Fatal(err)
+	}
+	return root, installed
 }
 
 // --- DiscoverBrewFormulae ---
@@ -74,7 +91,7 @@ func TestDiscoverAll_OptionalPackageManagers(t *testing.T) {
 				t.Fatal(err)
 			}
 			if tt.wantWarn {
-				if !strings.Contains(string(output), "warning: could not list brew casks:") {
+				if !strings.Contains(string(output), "warning: could not inspect Homebrew app ownership:") {
 					t.Errorf("missing cask warning: %s", output)
 				}
 			} else if len(output) != 0 {
@@ -198,14 +215,21 @@ func TestTappedFormulaUsesQualifiedNameAndKeepsPackageID(t *testing.T) {
 	if a.BundleID != "homebrew.formula.camsnap" || a.Name != "camsnap" || a.FormulaName != "steipete/tap/camsnap" {
 		t.Fatalf("unexpected package identity: %+v", a)
 	}
-	result, err := checker.NewBrewFormulaChecker(runner).Check(ctx, a)
-	if err != nil || !result.HasUpdate || result.LatestVersion != "0.6.3" {
-		t.Fatalf("formula check = %+v, %v", result, err)
+	cfg := &config.Config{GitHubMappings: map[string]string{a.BundleID: "example/camsnap"}}
+	if _, err = EnrichApps(ctx, apps, cfg, runner); err != nil {
+		t.Fatal(err)
+	}
+	alternate := &mockChecker{name: "github", canCheck: func(a *app.App) bool { return a.GitHubRepo != "" },
+		result: &checker.UpdateResult{Source: "github", LatestVersion: "0.7.0", HasUpdate: true, DownloadURL: "https://example.com/camsnap.zip"}}
+	result := CheckWithFallthrough(ctx, a, []checker.Checker{alternate, checker.NewBrewFormulaChecker(runner)})
+	if result.Error != nil || result.Source != "formula" || !result.HasUpdate || result.LatestVersion != "0.6.3" {
+		t.Fatalf("formula check = %+v", result)
 	}
 }
 
 func TestCLICasksHaveTheirOwnEntries(t *testing.T) {
 	ctx := context.Background()
+	caskroom, codexbar := mockCaskApp(t, "codexbar", "CodexBar.app")
 	runner := &checker.MultiMockCmdRunner{Responses: map[string]checker.MockResponse{
 		"brew info --installed --cask --json=v2": {Output: []byte(`{"casks":[
 			{"token":"codex","full_token":"owner/tap/codex","installed":"0.169.0","version":"0.170.0","artifacts":[{"binary":["bin/codex"]}]},
@@ -213,7 +237,7 @@ func TestCLICasksHaveTheirOwnEntries(t *testing.T) {
 			{"token":"isabelle","full_token":"isabelle","installed":"2025-2","artifacts":[{"artifact":["Isabelle2025-2.app",{"target":"/Applications/Isabelle2025-2.app"}],"target":"/Applications/Isabelle2025-2.app"},{"binary":["/Applications/Isabelle2025-2.app/bin/isabelle"]}]},
 			{"token":"font-sample","full_token":"font-sample","installed":"1.0","artifacts":[{"font":["sample.ttf"]}]}
 		]}`)},
-		"brew list --cask":                     {Output: []byte("codex\ncodexbar\nfont-sample\n")},
+		"brew --caskroom":                      {Output: []byte(caskroom)},
 		"brew outdated --cask --greedy --json": {Output: []byte(`{"casks":[{"name":"codex","current_version":"0.170.0"}]}`)},
 	}}
 	cli, err := discoverBrewCLICasks(ctx, runner)
@@ -225,7 +249,7 @@ func TestCLICasksHaveTheirOwnEntries(t *testing.T) {
 		t.Fatalf("unexpected CLI cask identity: %+v", a)
 	}
 	desktop := &app.App{Name: "ChatGPT", BundleID: "com.openai.codex", Path: "/Applications/ChatGPT.app", Source: app.SourceSparkle}
-	hybrid := &app.App{Name: "CodexBar", BundleID: "test.codexbar", Path: "/Applications/CodexBar.app", Source: app.SourceUnknown}
+	hybrid := &app.App{Name: "CodexBar", BundleID: "test.codexbar", Path: codexbar, Source: app.SourceUnknown}
 	if _, err := EnrichApps(ctx, append(cli, desktop, hybrid), &config.Config{}, runner); err != nil {
 		t.Fatal(err)
 	}
@@ -337,7 +361,7 @@ func TestEnrichApps_Phase1_GitHubMapping(t *testing.T) {
 	}
 	runner := &checker.MultiMockCmdRunner{
 		Responses: map[string]checker.MockResponse{
-			"brew list --cask": {Output: []byte("")},
+			"brew --caskroom": {Output: []byte("")},
 		},
 	}
 
@@ -371,7 +395,7 @@ func TestEnrichApps_Phase1_GitHubMapping_NonUnknownSource(t *testing.T) {
 	}
 	runner := &checker.MultiMockCmdRunner{
 		Responses: map[string]checker.MockResponse{
-			"brew list --cask": {Output: []byte("")},
+			"brew --caskroom": {Output: []byte("")},
 		},
 	}
 
@@ -395,12 +419,13 @@ func TestEnrichApps_Phase2_CaskMapping(t *testing.T) {
 			"com.test.app2": "test-cask",
 		},
 	}
+	caskroom, bundle := mockCaskApp(t, "test-cask", "TestApp2.app")
 	apps := []*app.App{
-		{Name: "TestApp2", BundleID: "com.test.app2", Source: app.SourceUnknown},
+		{Name: "TestApp2", BundleID: "com.test.app2", Path: bundle, Source: app.SourceUnknown},
 	}
 	runner := &checker.MultiMockCmdRunner{
 		Responses: map[string]checker.MockResponse{
-			"brew list --cask": {Output: []byte("test-cask\n")},
+			"brew --caskroom": {Output: []byte(caskroom)},
 		},
 	}
 
@@ -412,7 +437,6 @@ func TestEnrichApps_Phase2_CaskMapping(t *testing.T) {
 	if result[0].CaskName != "test-cask" {
 		t.Errorf("CaskName = %q, want %q", result[0].CaskName, "test-cask")
 	}
-	// Since cask is in installed list, InstalledViaBrew should be true.
 	if !result[0].InstalledViaBrew {
 		t.Error("InstalledViaBrew = false, want true")
 	}
@@ -421,14 +445,15 @@ func TestEnrichApps_Phase2_CaskMapping(t *testing.T) {
 	}
 }
 
-func TestEnrichApps_Phase3_HeuristicCask(t *testing.T) {
+func TestEnrichApps_Phase3_InstalledCask(t *testing.T) {
 	cfg := &config.Config{}
+	caskroom, bundle := mockCaskApp(t, "firefox", "Firefox.app")
 	apps := []*app.App{
-		{Name: "Firefox", BundleID: "org.mozilla.firefox", Source: app.SourceUnknown},
+		{Name: "Firefox", BundleID: "org.mozilla.firefox", Path: bundle, Source: app.SourceUnknown},
 	}
 	runner := &checker.MultiMockCmdRunner{
 		Responses: map[string]checker.MockResponse{
-			"brew list --cask": {Output: []byte("firefox\ngoogle-chrome\n")},
+			"brew --caskroom": {Output: []byte(caskroom)},
 		},
 	}
 
@@ -437,7 +462,6 @@ func TestEnrichApps_Phase3_HeuristicCask(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// ToCaskName("Firefox") = "firefox", which is in the installed cask list.
 	if result[0].CaskName != "firefox" {
 		t.Errorf("CaskName = %q, want %q", result[0].CaskName, "firefox")
 	}
@@ -449,14 +473,15 @@ func TestEnrichApps_Phase3_HeuristicCask(t *testing.T) {
 	}
 }
 
-func TestEnrichApps_Phase3_ElectronFallback(t *testing.T) {
+func TestEnrichApps_Phase3_InstalledElectronCask(t *testing.T) {
 	cfg := &config.Config{}
+	caskroom, bundle := mockCaskApp(t, "my-electron-app", "My Electron App.app")
 	apps := []*app.App{
-		{Name: "My Electron App", BundleID: "com.electron.app", Source: app.SourceElectron},
+		{Name: "My Electron App", BundleID: "com.electron.app", Path: bundle, Source: app.SourceElectron},
 	}
 	runner := &checker.MultiMockCmdRunner{
 		Responses: map[string]checker.MockResponse{
-			"brew list --cask": {Output: []byte("my-electron-app\n")},
+			"brew --caskroom": {Output: []byte(caskroom)},
 		},
 	}
 
@@ -465,7 +490,6 @@ func TestEnrichApps_Phase3_ElectronFallback(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// Electron app with no update URL or GitHub repo should get heuristic cask name.
 	if result[0].CaskName != "my-electron-app" {
 		t.Errorf("CaskName = %q, want %q", result[0].CaskName, "my-electron-app")
 	}
@@ -478,19 +502,21 @@ func TestEnrichApps_Phase3_ElectronFallback(t *testing.T) {
 	}
 }
 
-func TestEnrichApps_Phase3_ElectronWithUpdateURL_NoFallback(t *testing.T) {
+func TestEnrichApps_Phase3_ElectronWithUpdateURL_DetectsInstalledCask(t *testing.T) {
 	cfg := &config.Config{}
+	caskroom, bundle := mockCaskApp(t, "electron-with-url", "Electron With URL.app")
 	apps := []*app.App{
 		{
 			Name:              "Electron With URL",
 			BundleID:          "com.electron.withurl",
 			Source:            app.SourceElectron,
+			Path:              bundle,
 			ElectronUpdateURL: "https://update.example.com",
 		},
 	}
 	runner := &checker.MultiMockCmdRunner{
 		Responses: map[string]checker.MockResponse{
-			"brew list --cask": {Output: []byte("electron-with-url\n")},
+			"brew --caskroom": {Output: []byte(caskroom)},
 		},
 	}
 
@@ -499,9 +525,8 @@ func TestEnrichApps_Phase3_ElectronWithUpdateURL_NoFallback(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// Electron app with update URL should NOT get cask fallback.
-	if result[0].CaskName != "" {
-		t.Errorf("CaskName = %q, want empty (electron with URL should not get fallback)", result[0].CaskName)
+	if result[0].CaskName != "electron-with-url" || !result[0].InstalledViaBrew {
+		t.Errorf("expected installed cask for Electron app with update URL, got %+v", result[0])
 	}
 }
 
@@ -520,7 +545,7 @@ func TestEnrichApps_Phase4_CaskProbe_NotFound(t *testing.T) {
 	}
 	runner := &checker.MultiMockCmdRunner{
 		Responses: map[string]checker.MockResponse{
-			"brew list --cask":                       {Output: []byte("")},
+			"brew --caskroom":                        {Output: []byte("")},
 			"brew info --cask --json=v2 unknown-app": {Err: fmt.Errorf("exit 1")},
 			"brew info --cask --json=v2 app":         {Err: fmt.Errorf("exit 1")},
 			"brew info --cask --json=v2 unknown":     {Err: fmt.Errorf("exit 1")},
@@ -545,7 +570,7 @@ func TestEnrichApps_Phase4_CaskProbe_Found(t *testing.T) {
 	}
 	runner := &checker.MultiMockCmdRunner{
 		Responses: map[string]checker.MockResponse{
-			"brew list --cask": {Output: []byte("")}, // not installed
+			"brew --caskroom": {Output: []byte("")}, // not installed
 			"brew info --cask --json=v2 discoverable-app": {Output: []byte(`{"casks":[{"token":"discoverable-app"}]}`)},
 		},
 	}
@@ -572,7 +597,7 @@ func TestEnrichApps_Phase4_ConfigCaskMapping_SkipsProbe(t *testing.T) {
 	}
 	runner := &checker.MultiMockCmdRunner{
 		Responses: map[string]checker.MockResponse{
-			"brew list --cask": {Output: []byte("")},
+			"brew --caskroom": {Output: []byte("")},
 			// No brew info response — probe should be skipped.
 		},
 	}
@@ -588,14 +613,14 @@ func TestEnrichApps_Phase4_ConfigCaskMapping_SkipsProbe(t *testing.T) {
 	}
 }
 
-func TestEnrichApps_BrewListError(t *testing.T) {
+func TestEnrichApps_CaskroomError(t *testing.T) {
 	cfg := &config.Config{}
 	apps := []*app.App{
 		{Name: "TestApp", BundleID: "com.test.app", Source: app.SourceUnknown},
 	}
 	runner := &checker.MultiMockCmdRunner{
 		Responses: map[string]checker.MockResponse{
-			"brew list --cask": {Err: fmt.Errorf("brew not installed")},
+			"brew --caskroom": {Err: fmt.Errorf("brew not installed")},
 		},
 	}
 
@@ -631,7 +656,7 @@ func TestEnrichApps_Phase4_ElectronProbe(t *testing.T) {
 	}
 	runner := &checker.MultiMockCmdRunner{
 		Responses: map[string]checker.MockResponse{
-			"brew list --cask": {Output: []byte("")},
+			"brew --caskroom": {Output: []byte("")},
 			"brew info --cask --json=v2 electron-no-meta": {Err: fmt.Errorf("not found")},
 			"brew info --cask --json=v2 nometa":           {Err: fmt.Errorf("not found")},
 			"brew info --cask --json=v2 electron":         {Err: fmt.Errorf("not found")},
@@ -662,7 +687,7 @@ func TestEnrichApps_Phase4_SparkleProbe(t *testing.T) {
 	}
 	runner := &checker.MultiMockCmdRunner{
 		Responses: map[string]checker.MockResponse{
-			"brew list --cask": {Output: []byte("")}, // not installed via brew
+			"brew --caskroom": {Output: []byte("")}, // not installed via brew
 			"brew info --cask --json=v2 pdf-expert": {
 				Output: []byte(`{"casks":[{"token":"pdf-expert","version":"3.12.0"}]}`),
 			},
@@ -708,7 +733,7 @@ func TestEnrichApps_VSCode_GetsCaskViaBasename(t *testing.T) {
 	//             "vscode" (last segment), "microsoft" (second-to-last).
 	runner := &checker.MultiMockCmdRunner{
 		Responses: map[string]checker.MockResponse{
-			"brew list --cask": {Output: []byte("")}, // not installed via brew
+			"brew --caskroom": {Output: []byte("")}, // not installed via brew
 			// "visual-studio-code" probe succeeds → should be selected.
 			"brew info --cask --json=v2 visual-studio-code": {
 				Output: []byte(`{"casks":[{"token":"visual-studio-code","version":"1.87.0"}]}`),
@@ -749,7 +774,7 @@ func TestEnrichApps_GitHubDesktop_GetsCaskViaBundleIDSegment(t *testing.T) {
 	//             "githubclient" (last segment), "github" (second-to-last).
 	runner := &checker.MultiMockCmdRunner{
 		Responses: map[string]checker.MockResponse{
-			"brew list --cask": {Output: []byte("")},
+			"brew --caskroom": {Output: []byte("")},
 			// "github-desktop" and "githubclient" don't exist as casks.
 			"brew info --cask --json=v2 github-desktop": {Err: fmt.Errorf("exit 1")},
 			"brew info --cask --json=v2 githubclient":   {Err: fmt.Errorf("exit 1")},
@@ -794,7 +819,7 @@ func TestEnrichApps_GenericElectron_GetsCaskViaDisplayName(t *testing.T) {
 	//             "acme" (second-to-last, dedup with display).
 	runner := &checker.MultiMockCmdRunner{
 		Responses: map[string]checker.MockResponse{
-			"brew list --cask": {Output: []byte("")},
+			"brew --caskroom": {Output: []byte("")},
 			// basename "acme-helper" does not exist as a cask.
 			"brew info --cask --json=v2 acme-helper": {Err: fmt.Errorf("exit 1")},
 			// display-name candidate "acme" is the correct cask.

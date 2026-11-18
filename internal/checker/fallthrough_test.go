@@ -11,7 +11,7 @@ import (
 	"github.com/lu-zhengda/updater/internal/updater"
 )
 
-func TestFallthrough_SparkleStale_ToBrewInfo(t *testing.T) {
+func TestFallthrough_UnclassifiedAppWithStaleFeed_ToBrewInfo(t *testing.T) {
 	// Sparkle: returns stale version (1.0 < installed 2.0)
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/xml")
@@ -31,7 +31,7 @@ func TestFallthrough_SparkleStale_ToBrewInfo(t *testing.T) {
 		Version:  "2.0.0",
 		FeedURL:  ts.URL,
 		CaskName: "fallthrough-app",
-		Source:   app.SourceSparkle,
+		Source:   app.SourceUnknown,
 	}
 
 	// Mock BrewInfoChecker: `brew info --cask --json=v2 fallthrough-app` returns newer version
