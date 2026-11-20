@@ -16,6 +16,7 @@ import (
 
 	"github.com/lu-zhengda/updater/internal/checker"
 	"github.com/lu-zhengda/updater/internal/signing"
+	"github.com/lu-zhengda/updater/internal/useragent"
 	versionpkg "github.com/lu-zhengda/updater/internal/version"
 	"github.com/spf13/cobra"
 )
@@ -164,6 +165,7 @@ func fetchLatestRelease(token string) (*checker.GitHubRelease, error) {
 // fetchLatestReleaseFrom fetches a GitHub release from the given URL using the
 // provided token and HTTP client. Extracted for testability.
 func fetchLatestReleaseFrom(url, token string, client *http.Client) (*checker.GitHubRelease, error) {
+	client = useragent.WrapClient(client)
 	if err := validateUpgradeURL(url); err != nil {
 		return nil, err
 	}
@@ -223,6 +225,7 @@ func downloadFileAndHash(dst *os.File, rawURL, token string, limit int64) (strin
 }
 
 func downloadFileAndHashWith(dst *os.File, rawURL, token string, limit int64, client *http.Client) (string, error) {
+	client = useragent.WrapClient(client)
 	if err := validateUpgradeURL(rawURL); err != nil {
 		return "", err
 	}
@@ -354,7 +357,7 @@ func validateUpgradeURL(rawURL string) error {
 }
 
 func secureUpgradeClient() *http.Client {
-	return &http.Client{
+	return useragent.WrapClient(&http.Client{
 		Timeout: 15 * time.Minute,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= 10 {
@@ -362,5 +365,5 @@ func secureUpgradeClient() *http.Client {
 			}
 			return validateUpgradeURL(req.URL.String())
 		},
-	}
+	})
 }

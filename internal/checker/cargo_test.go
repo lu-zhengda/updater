@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/lu-zhengda/updater/internal/app"
+	"github.com/lu-zhengda/updater/internal/useragent"
 )
 
 func TestCargoChecker_Name(t *testing.T) {
@@ -164,8 +165,8 @@ func TestCargoChecker_Check_SendsUserAgent(t *testing.T) {
 	if _, err := c.Check(context.Background(), a); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if gotUA == "" {
-		t.Error("User-Agent header was empty; crates.io rejects requests without one")
+	if useragent.IsGoDefault(gotUA) {
+		t.Errorf("User-Agent %q is empty or Go default; crates.io rejects that", gotUA)
 	}
 }
 

@@ -5,12 +5,25 @@ import (
 	"os"
 	"strings"
 
+	"github.com/lu-zhengda/updater/internal/useragent"
 	"github.com/mattn/go-isatty"
 	"github.com/spf13/cobra"
 )
 
-// Set via -ldflags at build time.
+// Set via -ldflags at build time (-X main.version=...). Also mirrored onto
+// useragent.Version so outbound HTTP requests carry the same build version.
 var version = "dev"
+
+func init() {
+	if useragent.Version == "dev" && version != "dev" {
+		useragent.Version = version
+	} else if version == "dev" && useragent.Version != "dev" {
+		version = useragent.Version
+	} else if version != "dev" {
+		useragent.Version = version
+	}
+	rootCmd.Version = version
+}
 
 var rootCmd = &cobra.Command{
 	Use:               "updater",

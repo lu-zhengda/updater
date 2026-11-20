@@ -16,10 +16,6 @@ import (
 // DefaultCratesIOBaseURL is the public crates.io registry API endpoint.
 const DefaultCratesIOBaseURL = "https://crates.io/api/v1/crates"
 
-// cargoUserAgent identifies this client to crates.io. The registry rejects
-// requests without a descriptive User-Agent (HTTP 403), per its crawler policy.
-const cargoUserAgent = "updater (https://github.com/lu-zhengda/updater)"
-
 // CargoChecker checks for updates to Rust binaries installed via `cargo install`.
 // It resolves latest versions from the crates.io registry API rather than
 // relying on cargo's CLI (which has no built-in "is there a newer version"
@@ -85,7 +81,6 @@ func (c *CargoChecker) fetchLatestVersion(ctx context.Context, crate string) (st
 		return "", fmt.Errorf("failed to create crates.io request for %s: %w", crate, err)
 	}
 	req.Header.Set("Accept", "application/json")
-	req.Header.Set("User-Agent", cargoUserAgent)
 
 	resp, err := c.client.Do(req)
 	if err != nil {

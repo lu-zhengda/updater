@@ -8,22 +8,24 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/lu-zhengda/updater/internal/useragent"
 )
 
 const maxMetadataResponseSize int64 = 8 << 20 // 8 MiB
 
 // hardenedHTTPClient clones a caller-provided client so all metadata checkers
-// retain test/custom transports while still enforcing timeouts and HTTPS on
-// every redirect hop.
+// retain test/custom transports while still enforcing timeouts, an explicit
+// User-Agent, and HTTPS on every redirect hop.
 func hardenedHTTPClient(client *http.Client, defaultTimeout time.Duration) *http.Client {
-	if client == nil {
-		client = &http.Client{}
-	}
-	clone := *client
-	if clone.Timeout <= 0 {
+	client = useragent.WrapClient(client)
+	if client.Timeout <= 0 {
+		clone := *client
 		clone.Timeout = defaultTimeout
+		client = &clone
 	}
-	previousRedirectPolicy := clone.CheckRedirect
+	previousRedirectPolicy := client.CheckRedirect
+	clone := *client
 	clone.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 		if previousRedirectPolicy != nil {
 			if err := previousRedirectPolicy(req, via); err != nil {

@@ -23,6 +23,7 @@ import (
 
 	"github.com/lu-zhengda/updater/internal/checker"
 	"github.com/lu-zhengda/updater/internal/signing"
+	"github.com/lu-zhengda/updater/internal/useragent"
 	"golang.org/x/sys/unix"
 )
 
@@ -394,14 +395,14 @@ func (inst *Installer) installPKG(ctx context.Context, pkgPath, appPath string) 
 }
 
 func secureDownloadClientWith(client *http.Client) *http.Client {
-	if client == nil {
-		client = &http.Client{}
-	}
-	clone := *client
-	if clone.Timeout <= 0 {
+	client = useragent.WrapClient(client)
+	if client.Timeout <= 0 {
+		clone := *client
 		clone.Timeout = 30 * time.Minute
+		client = &clone
 	}
-	previousRedirectPolicy := clone.CheckRedirect
+	previousRedirectPolicy := client.CheckRedirect
+	clone := *client
 	clone.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 		if previousRedirectPolicy != nil {
 			if err := previousRedirectPolicy(req, via); err != nil {

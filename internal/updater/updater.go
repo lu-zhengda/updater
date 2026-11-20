@@ -508,7 +508,8 @@ func FilterIgnored(apps []*app.App, cfg *config.Config) []*app.App {
 // Order matters for fallthrough: most accurate first, broadest fallback last.
 func BuildCheckers(runner checker.CmdRunner, githubToken string) []checker.Checker {
 	// A shared client with a timeout so one hung feed server cannot stall an
-	// entire check run (http.DefaultClient never times out).
+	// entire check run (http.DefaultClient never times out). Checkers wrap this
+	// with hardenedHTTPClient, which also sets the outbound User-Agent.
 	httpClient := &http.Client{Timeout: 30 * time.Second}
 	githubChecker := checker.NewGitHubChecker(httpClient, "", githubToken)
 	githubChecker.ReadBundleVersion = installer.New(runner, nil).ReadBundleVersion
