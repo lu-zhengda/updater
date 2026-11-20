@@ -18,6 +18,7 @@ import (
 	"github.com/lu-zhengda/updater/internal/config"
 	"github.com/lu-zhengda/updater/internal/history"
 	"github.com/lu-zhengda/updater/internal/updater"
+	"github.com/lu-zhengda/updater/internal/useragent"
 	"github.com/spf13/cobra"
 )
 
@@ -330,7 +331,7 @@ func checkGitHubToken(ctx context.Context, cfg *config.Config) doctorCheck {
 		return doctorCheck{Name: "GitHub token", Status: "not_installed", Detail: "not configured"}
 	}
 
-	client := &http.Client{Timeout: 5 * time.Second}
+	client := useragent.WrapClient(&http.Client{Timeout: 5 * time.Second})
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.github.com/rate_limit", nil)
 	if err != nil {
 		return doctorCheck{Name: "GitHub token", Status: "warning", Detail: "failed to create request"}
@@ -362,7 +363,7 @@ func checkGitHubToken(ctx context.Context, cfg *config.Config) doctorCheck {
 }
 
 func checkNetwork() doctorCheck {
-	client := &http.Client{Timeout: 5 * time.Second}
+	client := useragent.WrapClient(&http.Client{Timeout: 5 * time.Second})
 	resp, err := client.Get("https://api.github.com")
 	if err != nil {
 		return doctorCheck{Name: "Network", Status: "warning", Detail: "unreachable"}
@@ -427,7 +428,7 @@ func checkSparkleFeedConnectivity() doctorCheck {
 	if len(feedURLs) == 0 {
 		return doctorCheck{Name: "Sparkle feeds", Status: "ok", Detail: "no feeds to check"}
 	}
-	client := &http.Client{Timeout: 5 * time.Second}
+	client := useragent.WrapClient(&http.Client{Timeout: 5 * time.Second})
 	reachable := 0
 	for _, u := range feedURLs {
 		resp, err := client.Get(u)

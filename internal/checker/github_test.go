@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/lu-zhengda/updater/internal/app"
+	"github.com/lu-zhengda/updater/internal/useragent"
 )
 
 func TestCleanTagVersionPrefixes(t *testing.T) {
@@ -122,6 +123,26 @@ func TestGitHubChecker_Name(t *testing.T) {
 	c := NewGitHubChecker(nil, "", "")
 	if got := c.Name(); got != "github" {
 		t.Errorf("Name() = %q, want %q", got, "github")
+	}
+}
+
+func TestGitHubChecker_SendsExplicitUserAgent(t *testing.T) {
+	var gotUA string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotUA = r.Header.Get("User-Agent")
+		json.NewEncoder(w).Encode(GitHubRelease{TagName: "v2.0.0", Assets: []GitHubAsset{
+			{Name: "app-mac.zip", DownloadURL: "https://example.com/app-mac.zip"},
+		}})
+	}))
+	defer ts.Close()
+
+	c := NewGitHubChecker(ts.Client(), ts.URL, "")
+	a := &app.App{Name: "TestApp", Version: "1.0.0", GitHubRepo: "test/app"}
+	if _, err := c.Check(context.Background(), a); err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+	if useragent.IsGoDefault(gotUA) {
+		t.Fatalf("GitHub User-Agent %q is empty or Go default", gotUA)
 	}
 }
 

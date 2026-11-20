@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/lu-zhengda/updater/internal/app"
+	"github.com/lu-zhengda/updater/internal/useragent"
 )
 
 func TestSparkleChecker_BuildVersions(t *testing.T) {
@@ -92,6 +93,27 @@ func TestSparkleChecker_Name(t *testing.T) {
 	c := NewSparkleChecker(nil)
 	if got := c.Name(); got != "sparkle" {
 		t.Errorf("Name() = %q, want %q", got, "sparkle")
+	}
+}
+
+func TestSparkleChecker_SendsExplicitUserAgent(t *testing.T) {
+	// SourceForge rejects Go's default User-Agent with HTTP 403. Regression for #46.
+	var gotUA string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotUA = r.Header.Get("User-Agent")
+		fmt.Fprint(w, `<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle"><channel><item><enclosure url="https://example.com/app.zip" sparkle:version="2.0.0" sparkle:shortVersionString="2.0.0" /></item></channel></rss>`)
+	}))
+	defer ts.Close()
+
+	a := &app.App{Name: "Burn", BundleID: "com.kiwifruitware.Burn", Version: "1.0.0", FeedURL: ts.URL}
+	if _, err := NewSparkleChecker(ts.Client()).Check(context.Background(), a); err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+	if useragent.IsGoDefault(gotUA) {
+		t.Fatalf("Sparkle appcast User-Agent %q is empty or Go default (SourceForge returns 403)", gotUA)
+	}
+	if gotUA != useragent.String() {
+		t.Fatalf("User-Agent = %q, want %q", gotUA, useragent.String())
 	}
 }
 

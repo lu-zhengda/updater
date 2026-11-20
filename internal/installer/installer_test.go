@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/lu-zhengda/updater/internal/checker"
+	"github.com/lu-zhengda/updater/internal/useragent"
 )
 
 func TestFilenameFromResponse(t *testing.T) {
@@ -164,7 +165,9 @@ func TestFindAppInVolume(t *testing.T) {
 }
 
 func TestDownload(t *testing.T) {
+	var gotUA string
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotUA = r.Header.Get("User-Agent")
 		w.Header().Set("Content-Disposition", `attachment; filename="test.dmg"`)
 		w.Write([]byte("fake dmg content"))
 	}))
@@ -190,6 +193,9 @@ func TestDownload(t *testing.T) {
 	}
 	if string(content) != "fake dmg content" {
 		t.Errorf("content = %q, want %q", string(content), "fake dmg content")
+	}
+	if useragent.IsGoDefault(gotUA) {
+		t.Fatalf("download User-Agent %q is empty or Go default", gotUA)
 	}
 }
 

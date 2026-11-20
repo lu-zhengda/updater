@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/lu-zhengda/updater/internal/checker"
+	"github.com/lu-zhengda/updater/internal/useragent"
 )
 
 func TestIsBrewInstall(t *testing.T) {
@@ -116,7 +117,9 @@ func TestFetchLatestRelease_Success(t *testing.T) {
 		},
 	}
 
+	var gotUA string
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotUA = r.Header.Get("User-Agent")
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(release)
 	}))
@@ -131,6 +134,9 @@ func TestFetchLatestRelease_Success(t *testing.T) {
 	}
 	if len(got.Assets) != 1 {
 		t.Errorf("got %d assets, want 1", len(got.Assets))
+	}
+	if useragent.IsGoDefault(gotUA) {
+		t.Fatalf("release fetch User-Agent %q is empty or Go default", gotUA)
 	}
 }
 
@@ -184,7 +190,9 @@ func TestFetchLatestRelease_WithToken(t *testing.T) {
 
 func TestDownloadFile_Success(t *testing.T) {
 	content := "binary-content-here"
+	var gotUA string
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotUA = r.Header.Get("User-Agent")
 		w.Write([]byte(content))
 	}))
 	defer ts.Close()
@@ -205,6 +213,9 @@ func TestDownloadFile_Success(t *testing.T) {
 	data, err := os.ReadFile(tmpFile.Name())
 	if err != nil {
 		t.Fatal(err)
+	}
+	if useragent.IsGoDefault(gotUA) {
+		t.Fatalf("download User-Agent %q is empty or Go default", gotUA)
 	}
 	if string(data) != content {
 		t.Errorf("content = %q, want %q", string(data), content)

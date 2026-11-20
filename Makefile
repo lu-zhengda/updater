@@ -1,7 +1,7 @@
 APP     := updater
 PKG     := ./cmd/updater
 VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
-LDFLAGS := -s -w -X main.version=$(VERSION)
+LDFLAGS := -s -w -X main.version=$(VERSION) -X github.com/lu-zhengda/updater/internal/useragent.Version=$(VERSION)
 PREFIX  := /usr/local
 
 # Keep cgo's deployment target aligned with packaging/Info.plist.
