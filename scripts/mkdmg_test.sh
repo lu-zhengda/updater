@@ -235,7 +235,83 @@ reset_env() {
 	unset APPSTORE_API_ISSUER_ID || true
 	unset MOCK_NOTARY_STATUS || true
 	unset MOCK_STAPLE_FAILS || true
+	unset MOCK_HDIUTIL_BUSY_FAILS || true
 	unset UPDATER_DMG_STAPLE_SLEEP || true
+	unset UPDATER_DMG_HDIUTIL_SLEEP || true
+	unset UPDATER_DMG_HDIUTIL_ATTEMPTS || true
+}
+
+# Replace the mock hdiutil with one that fails create/attach/detach with
+# Resource busy MOCK_HDIUTIL_BUSY_FAILS times, then succeeds like the
+# normal mock. Counts every create invocation for assertions.
+install_busy_hdiutil() {
+	cat >"$bin/hdiutil" <<'EOF'
+#!/bin/sh
+set -eu
+log=$UPDATER_DMG_STATE/log
+count_file=$UPDATER_DMG_STATE/hdiutil-create-count
+op=${1:-}
+printf 'hdiutil' >>"$log"
+for arg in "$@"; do
+	printf ' %s' "$arg" >>"$log"
+done
+printf '\n' >>"$log"
+
+if [ "$op" = "create" ]; then
+	n=0
+	if [ -f "$count_file" ]; then
+		n=$(cat "$count_file")
+	fi
+	n=$((n + 1))
+	printf '%s\n' "$n" >"$count_file"
+	fails=${MOCK_HDIUTIL_BUSY_FAILS:-0}
+	if [ "$n" -le "$fails" ]; then
+		echo "hdiutil: create failed - Resource busy" >&2
+		exit 1
+	fi
+	src=
+	prev=
+	out=
+	for arg in "$@"; do
+		if [ "$prev" = "-srcfolder" ]; then
+			src=$arg
+		fi
+		prev=$arg
+		out=$arg
+	done
+	if [ -z "$src" ] || [ -z "$out" ]; then
+		echo "hdiutil mock could not see -srcfolder or output" >&2
+		exit 1
+	fi
+	rm -rf "$UPDATER_DMG_STATE/stage"
+	mkdir -p "$UPDATER_DMG_STATE/stage"
+	cp -R "$src/." "$UPDATER_DMG_STATE/stage/"
+	printf 'fake-dmg\n' >"$out"
+	exit 0
+fi
+
+if [ "$op" = "attach" ]; then
+	mnt=
+	prev=
+	for arg in "$@"; do
+		if [ "$prev" = "-mountpoint" ]; then
+			mnt=$arg
+		fi
+		prev=$arg
+	done
+	if [ -z "$mnt" ]; then
+		echo "hdiutil mock could not see -mountpoint" >&2
+		exit 1
+	fi
+	mkdir -p "$mnt"
+	cp -R "$UPDATER_DMG_STATE/stage/." "$mnt/"
+	exit 0
+fi
+
+# detach / verify / anything else: succeed
+exit 0
+EOF
+	chmod 755 "$bin/hdiutil"
 }
 
 write_pem() {
@@ -478,6 +554,56 @@ if [ ! -L "$state/stage/Applications" ]; then
 fi
 assert_eq "$(readlink "$state/stage/Applications")" "/Applications"
 ok "unsigned image layout and filename"
+
+# --- transient hdiutil Resource busy retries (ZHE-61) ---
+
+new_case 1.2.3
+reset_env
+install_busy_hdiutil
+export UPDATER_DMG_TEST=1 UPDATER_DMG_TOOLS="$bin" UPDATER_DMG_STATE="$state"
+export UPDATER_DMG_HDIUTIL_SLEEP=0 UPDATER_DMG_HDIUTIL_ATTEMPTS=5
+export MOCK_HDIUTIL_BUSY_FAILS=2
+if ! sh "$script" "$app" 1.2.3 "$out" >"$state/stdout" 2>"$state/stderr"; then
+	echo "---- stdout ----" >&2
+	cat "$state/stdout" >&2
+	echo "---- stderr ----" >&2
+	cat "$state/stderr" >&2
+	fail "Resource busy retries did not succeed"
+fi
+assert_file "$out/Updater-1.2.3.dmg"
+create_count=$(cat "$state/hdiutil-create-count")
+assert_eq "$create_count" "3"
+if ! grep -F 'Resource busy; retrying' "$state/stderr" >/dev/null; then
+	echo "---- stderr ----" >&2
+	cat "$state/stderr" >&2
+	fail "busy retry did not log the wait"
+fi
+retry_lines=$(grep -c -F 'Resource busy; retrying' "$state/stderr" || true)
+assert_eq "$retry_lines" "2"
+ok "hdiutil create retries Resource busy then succeeds"
+
+new_case 1.2.3
+reset_env
+install_busy_hdiutil
+export UPDATER_DMG_TEST=1 UPDATER_DMG_TOOLS="$bin" UPDATER_DMG_STATE="$state"
+export UPDATER_DMG_HDIUTIL_SLEEP=0 UPDATER_DMG_HDIUTIL_ATTEMPTS=5
+export MOCK_HDIUTIL_BUSY_FAILS=99
+if sh "$script" "$app" 1.2.3 "$out" >"$state/stdout" 2>"$state/stderr"; then
+	echo "---- stdout ----" >&2
+	cat "$state/stdout" >&2
+	fail "persistent Resource busy was accepted"
+fi
+create_count=$(cat "$state/hdiutil-create-count")
+assert_eq "$create_count" "5"
+if ! grep -F 'Resource busy after 5 attempts' "$state/stderr" >/dev/null; then
+	echo "---- stderr ----" >&2
+	cat "$state/stderr" >&2
+	fail "exhausted busy retries did not report a clear failure"
+fi
+if [ -e "$out/Updater-1.2.3.dmg" ]; then
+	fail "exhausted busy retries still left a dmg"
+fi
+ok "hdiutil create fails clearly after max Resource busy attempts"
 
 new_case 4.5.6
 reset_env
