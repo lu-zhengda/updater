@@ -7,6 +7,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -28,8 +29,15 @@ import (
 var extraPathDirs = []string{"/opt/homebrew/bin", "/usr/local/bin"}
 
 // runMenubarApp starts the systray event loop. It blocks until Quit.
+// Only one menu bar instance may run; a second copy activates the first and exits.
 func runMenubarApp() error {
 	ensurePath()
+	if err := ensureSingleMenubarInstance(); err != nil {
+		if errors.Is(err, errMenubarAlreadyRunning) {
+			return nil
+		}
+		return err
+	}
 	systray.Run(menubarOnReady, func() {})
 	return nil
 }
@@ -377,7 +385,7 @@ func (m *menubarApp) rebuild(updatable []*checker.UpdateResult, status string) {
 			}
 		})
 	})
-	login := prefs.AddSubMenuItemCheckbox("Start at Login", "Keep the menu bar app running via launchd", loginItemInstalled())
+	login := prefs.AddSubMenuItemCheckbox("Start at Login", "Start the menu bar app automatically at login", loginItemInstalled())
 	onClick(gen, login, func() { go toggleLoginItem(login) })
 
 	quit := systray.AddMenuItem("Quit Updater", "")
@@ -495,7 +503,9 @@ func loginItemInstalled() bool {
 }
 
 // toggleLoginItem installs or removes the LaunchAgent in-process — the agent
-// lifecycle lives in this same binary (see menubar.go).
+// lifecycle lives in this same binary (see menubar.go). Enabling writes the
+// plist for the next login and does not launchctl load/kickstart, so a second
+// menu bar instance is not started beside the one that owns this menu.
 func toggleLoginItem(item *systray.MenuItem) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
@@ -509,7 +519,7 @@ func toggleLoginItem(item *systray.MenuItem) {
 		item.Uncheck()
 		return
 	}
-	if err := installMenubarAgent(ctx, runner); err != nil {
+	if err := installMenubarAgent(ctx, runner, false); err != nil {
 		fmt.Fprintf(os.Stderr, "failed to install login item: %v\n", err)
 		return
 	}
