@@ -20,8 +20,10 @@ var (
 var menubarCmd = &cobra.Command{
 	Use:   "menubar",
 	Short: "Install or remove the menu bar app LaunchAgent",
-	Long: "Manages a launchd LaunchAgent that keeps the menu bar app running.\n" +
-		"The agent runs `updater menubar run` from this same binary.",
+	Long: "Manages a launchd LaunchAgent that starts the menu bar app at login.\n" +
+		"The agent runs `updater menubar run` from this same binary.\n" +
+		"Installing registers the agent for the next login without starting a\n" +
+		"second copy of an already-running menu bar app.",
 	RunE: runMenubar,
 }
 
@@ -95,7 +97,9 @@ func runMenubar(cmd *cobra.Command, _ []string) error {
 		return nil
 	}
 
-	if err := installMenubarAgent(ctx, runner); err != nil {
+	// Register for the next login only. launchctl load of a RunAtLoad plist
+	// would start a second menu bar instance when one is already running.
+	if err := installMenubarAgent(ctx, runner, false); err != nil {
 		return err
 	}
 
@@ -105,9 +109,10 @@ func runMenubar(cmd *cobra.Command, _ []string) error {
 			"action": "install",
 			"status": "ok",
 			"plist":  plistPath,
+			"load":   false,
 		})
 	}
-	fmt.Fprintln(cmd.OutOrStdout(), "Menu bar agent installed")
+	fmt.Fprintln(cmd.OutOrStdout(), "Menu bar login item registered (starts at next login)")
 	fmt.Fprintf(cmd.OutOrStdout(), "Plist: %s\n", plistPath)
 	return nil
 }
@@ -120,7 +125,17 @@ func menubarPlistPath() (string, error) {
 	return filepath.Join(home, "Library", "LaunchAgents", menubarPlistLabel+".plist"), nil
 }
 
-func installMenubarAgent(ctx context.Context, runner checker.CmdRunner) error {
+// installMenubarAgent writes the LaunchAgent plist that starts the menu bar
+// app at login (RunAtLoad) and keeps it alive across crashes (KeepAlive).
+//
+// When loadNow is false (the Start at Login toggle and `updater menubar`), the
+// plist is written but not loaded into the current session. launchctl load of a
+// RunAtLoad agent starts the program immediately, which would spawn a second
+// menu bar icon beside the already-running app. At the next login, launchd
+// loads agents from ~/Library/LaunchAgents and RunAtLoad starts exactly one
+// copy. loadNow true is reserved for callers that intentionally want the
+// current-session start (none today; kept for tests and future use).
+func installMenubarAgent(ctx context.Context, runner checker.CmdRunner, loadNow bool) error {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return fmt.Errorf("failed to get home directory: %w", err)
@@ -151,13 +166,21 @@ func installMenubarAgent(ctx context.Context, runner checker.CmdRunner) error {
 		return fmt.Errorf("failed to create LaunchAgents dir: %w", err)
 	}
 
-	// Unload existing if present.
-	if _, err := os.Stat(plistPath); err == nil {
-		_, _ = runner.Run(ctx, "launchctl", "unload", plistPath)
+	// Only unload when replacing a live job we are about to load again. Unload
+	// alone would stop a KeepAlive agent; with loadNow false we just rewrite
+	// the on-disk plist so the next login picks up the new definition.
+	if loadNow {
+		if _, err := os.Stat(plistPath); err == nil {
+			_, _ = runner.Run(ctx, "launchctl", "unload", plistPath)
+		}
 	}
 
 	if err := os.WriteFile(plistPath, []byte(content), 0o644); err != nil {
 		return fmt.Errorf("failed to write plist: %w", err)
+	}
+
+	if !loadNow {
+		return nil
 	}
 
 	if _, err := runner.Run(ctx, "launchctl", "load", plistPath); err != nil {

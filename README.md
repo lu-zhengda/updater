@@ -215,10 +215,12 @@ each row can be updated, pinned, or ignored. Everything runs in-process; the
 window never shells out to the terminal.
 
 The dropdown has a "Start at Login" toggle; the same LaunchAgent can be
-managed from the CLI:
+managed from the CLI. Enabling registers
+`~/Library/LaunchAgents/com.updater.menubar.plist` for the next login and does
+not start a second copy of an already-running menu bar app:
 
 ```sh
-updater menubar           # keep it running now and at login
+updater menubar           # register the login item (starts at next login)
 updater menubar --remove  # stop and remove the login item
 updater menubar run       # run the menu bar app in the foreground (debugging)
 ```
