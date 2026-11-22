@@ -29,11 +29,13 @@ import (
 var extraPathDirs = []string{"/opt/homebrew/bin", "/usr/local/bin"}
 
 // runMenubarApp starts the systray event loop. It blocks until Quit.
-// Only one menu bar instance may run; a second copy activates the first and exits.
+// Only one menu bar instance may run; a second copy activates the first and exits
+// unless this copy is preferred (installed under Applications, or newer), in
+// which case it asks stale peers to quit and continues (ZHE-69).
 func runMenubarApp() error {
 	ensurePath()
 	if err := ensureSingleMenubarInstance(); err != nil {
-		if errors.Is(err, errMenubarAlreadyRunning) {
+		if errors.Is(err, errMenubarAlreadyRunning) || errors.Is(err, errMenubarStaleQuit) {
 			return nil
 		}
 		return err
@@ -132,6 +134,17 @@ func (m *menubarApp) refresh() {
 		m.refreshing = false
 		m.mu.Unlock()
 	}()
+
+	// Each check cycle: quit if we are a stale DMG/temp/deleted-path instance
+	// while an installed copy owns the session, or if our executable vanished.
+	// An installed copy also asks leftover stale peers to quit (ZHE-69).
+	if err := reclaimOrYieldMenubar(); err != nil {
+		if errors.Is(err, errMenubarAlreadyRunning) || errors.Is(err, errMenubarStaleQuit) {
+			systray.Quit()
+			return
+		}
+		fmt.Fprintf(os.Stderr, "menubar reclaim: %v\n", err)
+	}
 
 	m.rebuild(nil, "Checking for updates…")
 
