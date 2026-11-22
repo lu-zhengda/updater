@@ -9,7 +9,7 @@ import (
 
 	"github.com/lu-zhengda/updater/internal/app"
 	"github.com/lu-zhengda/updater/internal/config"
-	"github.com/lu-zhengda/updater/internal/version"
+	versionpkg "github.com/lu-zhengda/updater/internal/version"
 )
 
 // errMenubarAlreadyRunning is returned when this process should exit because
@@ -150,10 +150,10 @@ func isMacOSVarFoldersTemp(path string) bool {
 // rank is a tie (newcomer yields so two installed same-version copies keep
 // today's single-instance behavior).
 func compareMenubarPair(self menubarSelf, selfOrigin menubarInstanceOrigin, other otherMenubarInstance, otherOrigin menubarInstanceOrigin) menubarCompareResult {
-	if version.IsNewer(other.Version, self.Version) {
+	if versionpkg.IsNewer(other.Version, self.Version) {
 		return menubarWeWin
 	}
-	if version.IsNewer(self.Version, other.Version) {
+	if versionpkg.IsNewer(self.Version, other.Version) {
 		return menubarTheyWin
 	}
 	if selfOrigin > otherOrigin {
