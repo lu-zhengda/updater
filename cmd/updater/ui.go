@@ -46,7 +46,6 @@ func runUI(cmd *cobra.Command, _ []string) error {
 	}
 
 	runner := newRunner()
-	checkers := buildCheckers(runner, cfg.ResolveGitHubToken())
 	maxConc := cfg.MaxConcurrentOrDefault()
 	rollbackManager := backup.NewManager(backup.DefaultBaseDir(), cfg.MaxBackupsLimit(), runner)
 	updateBackupManager := backupManagerForConfig(cfg, runner)
@@ -70,7 +69,7 @@ func runUI(cmd *cobra.Command, _ []string) error {
 		// Filter out apps that no checker can handle.
 		var checkable []*app.App
 		for _, a := range apps {
-			if a.Source != app.SourceUnknown || a.CaskName != "" {
+			if a.Source != app.SourceUnknown || a.CaskName != "" || len(a.PendingCaskTokens) > 0 {
 				checkable = append(checkable, a)
 			}
 		}
@@ -79,6 +78,7 @@ func runUI(cmd *cobra.Command, _ []string) error {
 	}
 
 	checkFn := func(ctx context.Context, apps []*app.App, onResult func(*checker.UpdateResult)) []*checker.UpdateResult {
+		checkers := buildCheckers(runner, cfg.ResolveGitHubToken())
 		return updater.CheckAllProgress(ctx, apps, checkers, maxConc, onResult)
 	}
 

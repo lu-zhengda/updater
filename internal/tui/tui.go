@@ -1059,6 +1059,11 @@ func (m *Model) rebuildVisible() {
 	m.visible = m.visible[:0]
 	query := strings.ToLower(m.searchQuery)
 	for i, r := range m.rows {
+		// A standalone app with only guessed cask tokens gets a row once a
+		// checker returns a result. An unmatched guess is absent from the list.
+		if r.result == nil && r.app.Source == app.SourceUnknown && len(r.app.PendingCaskTokens) > 0 {
+			continue
+		}
 		// Apply search filter.
 		if query != "" && !strings.Contains(strings.ToLower(r.app.Name), query) {
 			continue

@@ -46,6 +46,10 @@ type App struct {
 	GitHubRepo       string // "owner/repo"
 	FormulaName      string // Homebrew formula name (e.g. "node", "python@3.12")
 	InstalledViaBrew bool   // true only if actually installed via brew
+
+	// Ordered app cask guesses to resolve after the tap refresh.
+	PendingCaskTokens []string
+
 	// Explicit override provenance is populated only from source_overrides.
 	ResolvedSourceOverride *SourceOverride
 	SourceOverrideActive   bool
