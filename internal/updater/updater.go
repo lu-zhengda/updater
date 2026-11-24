@@ -504,17 +504,40 @@ func FilterIgnored(apps []*app.App, cfg *config.Config) []*app.App {
 	return filtered
 }
 
-// brewMetadataChecker waits for the shared Homebrew refresh before reading versions.
-type brewMetadataChecker struct {
-	checker.Checker
-	refresh func(context.Context) error
+// checkSlots bounds active checks. A nil limit is used for individual checks.
+type checkSlots chan struct{}
+
+func (slots checkSlots) acquire() func() {
+	if slots == nil {
+		return func() {}
+	}
+	slots <- struct{}{}
+	return func() { <-slots }
 }
 
-func (c brewMetadataChecker) Check(ctx context.Context, a *app.App) (*checker.UpdateResult, error) {
-	if err := c.refresh(ctx); err != nil {
+type runChecker struct {
+	checker.Checker
+	slots   checkSlots
+	refresh func(context.Context, checkSlots) error
+}
+
+func (c runChecker) Check(ctx context.Context, a *app.App) (*checker.UpdateResult, error) {
+	var refreshErr error
+	if c.refresh != nil {
+		refreshErr = c.refresh(ctx, c.slots)
+	}
+	release := c.slots.acquire()
+	defer release()
+	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	return c.Checker.Check(ctx, a)
+	result, err := c.Checker.Check(ctx, a)
+	// Homebrew can refresh some taps successfully before another tap fails.
+	// Keep known upgrades, but don't claim a package is current on stale data.
+	if refreshErr != nil && (err != nil || !result.HasUpdate) {
+		return nil, errors.Join(refreshErr, err)
+	}
+	return result, err
 }
 
 // BuildCheckers creates a fresh set of checkers for one update check.
@@ -531,13 +554,15 @@ func BuildCheckers(runner checker.CmdRunner, githubToken string) []checker.Check
 	githubChecker.ReadBundleVersion = installer.New(runner, nil).ReadBundleVersion
 	var refreshOnce sync.Once
 	var refreshErr error
-	refresh := func(ctx context.Context) error {
+	refresh := func(ctx context.Context, slots checkSlots) error {
 		refreshOnce.Do(func() {
 			if os.Getenv("HOMEBREW_NO_AUTO_UPDATE") != "" {
 				return
 			}
+			release := slots.acquire()
+			defer release()
 			if _, err := runner.Run(ctx, "brew", "update", "--quiet"); err != nil {
-				refreshErr = fmt.Errorf("could not refresh Homebrew metadata: %w", err)
+				refreshErr = fmt.Errorf("Homebrew metadata may be stale (run brew update for details): %w", err)
 			}
 		})
 		return refreshErr
@@ -545,11 +570,11 @@ func BuildCheckers(runner checker.CmdRunner, githubToken string) []checker.Check
 	return []checker.Checker{
 		checker.NewSparkleChecker(httpClient),
 		checker.NewVendorChecker(httpClient),
-		brewMetadataChecker{checker.NewBrewChecker(runner), refresh},
+		runChecker{Checker: checker.NewBrewChecker(runner), refresh: refresh},
 		checker.NewMASChecker(runner),
 		githubChecker,
 		checker.NewSystemChecker(runner),
-		brewMetadataChecker{checker.NewBrewFormulaChecker(runner), refresh},
+		runChecker{Checker: checker.NewBrewFormulaChecker(runner), refresh: refresh},
 		checker.NewElectronChecker(httpClient),
 		checker.NewNpmChecker(runner),
 		checker.NewPnpmChecker(runner),
@@ -557,7 +582,7 @@ func BuildCheckers(runner checker.CmdRunner, githubToken string) []checker.Check
 		checker.NewUvChecker(nil, ""),
 		checker.NewCargoChecker(nil, ""),
 		checker.NewManagedChecker(),
-		brewMetadataChecker{checker.NewBrewInfoChecker(runner), refresh}, // fallback: any app with a CaskName
+		runChecker{Checker: checker.NewBrewInfoChecker(runner), refresh: refresh}, // fallback: any app with a CaskName
 	}
 }
 
@@ -666,7 +691,7 @@ func noCheckerResult(a *app.App) *checker.UpdateResult {
 }
 
 // CheckAll runs update checks on all apps concurrently.
-// It uses a semaphore to limit concurrency to maxConcurrency goroutines.
+// It limits concurrent source checks and metadata refreshes to maxConcurrency.
 // If a checker returns a stale result or an error, the next compatible checker is tried.
 func CheckAll(ctx context.Context, apps []*app.App, checkers []checker.Checker, maxConcurrency int) []*checker.UpdateResult {
 	return CheckAllProgress(ctx, apps, checkers, maxConcurrency, nil)
@@ -684,11 +709,23 @@ func CheckAllProgress(ctx context.Context, apps []*app.App, checkers []checker.C
 		mu      sync.Mutex
 		results []*checker.UpdateResult
 		wg      sync.WaitGroup
-		sem     = make(chan struct{}, maxConcurrency)
+		slots   = make(checkSlots, maxConcurrency)
 	)
 
+	// Waiters for the same refresh use no slots. Only the refresh itself and
+	// the ensuing version lookups compete with other sources for capacity.
+	limited := make([]checker.Checker, 0, len(checkers))
+	for _, c := range checkers {
+		scoped, ok := c.(runChecker)
+		if !ok {
+			scoped = runChecker{Checker: c}
+		}
+		scoped.slots = slots
+		limited = append(limited, scoped)
+	}
+
 	for _, a := range apps {
-		appCheckers := checkersForApp(a, checkers)
+		appCheckers := checkersForApp(a, limited)
 
 		// Check if any checker can handle this app.
 		hasChecker := false
@@ -712,11 +749,9 @@ func CheckAllProgress(ctx context.Context, apps []*app.App, checkers []checker.C
 		}
 
 		wg.Add(1)
-		sem <- struct{}{} // acquire semaphore slot
 
 		go func(a *app.App) {
 			defer wg.Done()
-			defer func() { <-sem }() // release semaphore slot
 
 			result := CheckWithFallthrough(ctx, a, appCheckers)
 
