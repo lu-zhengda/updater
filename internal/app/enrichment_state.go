@@ -36,6 +36,7 @@ func (a *App) ResetEnrichmentState() {
 	a.Source = a.enrichmentBaseline.Source
 	a.FeedURL = a.enrichmentBaseline.FeedURL
 	a.CaskName = a.enrichmentBaseline.CaskName
+	a.PendingCaskTokens = nil
 	a.GitHubRepo = a.enrichmentBaseline.GitHubRepo
 	a.InstalledViaBrew = a.enrichmentBaseline.InstalledViaBrew
 	a.ResolvedSourceOverride = nil

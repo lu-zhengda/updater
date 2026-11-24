@@ -69,7 +69,7 @@ func runUI(cmd *cobra.Command, _ []string) error {
 		// Filter out apps that no checker can handle.
 		var checkable []*app.App
 		for _, a := range apps {
-			if a.Source != app.SourceUnknown || a.CaskName != "" {
+			if a.Source != app.SourceUnknown || a.CaskName != "" || len(a.PendingCaskTokens) > 0 {
 				checkable = append(checkable, a)
 			}
 		}

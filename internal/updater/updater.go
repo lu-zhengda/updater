@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -280,18 +281,24 @@ func DiscoverCargoCrates(ctx context.Context, runner checker.CmdRunner) ([]*app.
 	return apps, nil
 }
 
-// DiscoverAll runs the full discovery pipeline shared by every entry point
-// (CLI commands, TUI, menu bar app): disk apps plus brew formulae and CLI casks,
-// npm and pnpm globals, pipx applications, uv tools, and cargo crates, followed by
-// enrichment. Missing optional executables are skipped silently. Other failures
-// are non-fatal and reported through warn (which may be nil). The returned apps
-// are enriched but not filtered; apply FilterIgnored as needed.
+// DiscoverAll builds an inventory with locally resolved cask names for scans.
+// Missing optional executables are skipped. Other discovery errors go to warn.
 func DiscoverAll(ctx context.Context, cfg *config.Config, runner checker.CmdRunner, warn func(source string, err error)) ([]*app.App, error) {
 	apps, err := DiscoverInstalled(ctx, runner, warn)
 	if err != nil {
 		return nil, err
 	}
 	return EnrichApps(ctx, apps, cfg, runner)
+}
+
+// DiscoverForCheck leaves heuristic cask matching to the version lookup, after
+// Homebrew refreshes its taps. Inventory scans can still resolve local matches.
+func DiscoverForCheck(ctx context.Context, cfg *config.Config, runner checker.CmdRunner, warn func(string, error)) ([]*app.App, error) {
+	apps, err := DiscoverInstalled(ctx, runner, warn)
+	if err != nil {
+		return nil, err
+	}
+	return enrichApps(ctx, apps, cfg, runner, true)
 }
 
 // DiscoverInstalled lists installed apps and packages without probing update sources.
@@ -336,6 +343,10 @@ func DiscoverInstalled(ctx context.Context, runner checker.CmdRunner, warn func(
 // InstalledViaBrew, and probes brew info for eligible apps to discover
 // available casks.
 func EnrichApps(ctx context.Context, apps []*app.App, cfg *config.Config, runner checker.CmdRunner) ([]*app.App, error) {
+	return enrichApps(ctx, apps, cfg, runner, false)
+}
+
+func enrichApps(ctx context.Context, apps []*app.App, cfg *config.Config, runner checker.CmdRunner, deferCaskProbes bool) ([]*app.App, error) {
 	// Phase 0: Apply explicit source overrides before legacy mappings or brew heuristics.
 	applyExplicitSourceOverrides(apps, cfg)
 	cliTokens := make(map[string]bool)
@@ -438,7 +449,7 @@ func EnrichApps(ctx context.Context, apps []*app.App, cfg *config.Config, runner
 			a.Source == app.SourceSparkle ||
 			(a.Source == app.SourceElectron && (a.ElectronUpdateFormat != "" || (a.ElectronUpdateURL == "" && a.GitHubRepo == "")))
 		if a.CaskName == "" && needsCaskFallback {
-			candidates := app.CaskCandidates(a)
+			candidates := slices.DeleteFunc(app.CaskCandidates(a), func(token string) bool { return cliTokens[token] })
 			if len(candidates) > 0 {
 				appCandidates[a] = candidates
 			}
@@ -464,6 +475,10 @@ func EnrichApps(ctx context.Context, apps []*app.App, cfg *config.Config, runner
 		if cfg.CaskToken(a.BundleID) != "" {
 			continue // preserve user-configured cask mapping, no probe needed
 		}
+		if deferCaskProbes {
+			a.PendingCaskTokens = candidates
+			continue
+		}
 		toProbe = append(toProbe, probeItem{app: a, candidates: candidates})
 	}
 
@@ -476,7 +491,7 @@ func EnrichApps(ctx context.Context, apps []*app.App, cfg *config.Config, runner
 				defer func() { <-sem }()
 				found := ""
 				for _, cand := range item.candidates {
-					if !cliTokens[cand] && checker.AppCaskExists(ctx, runner, cand) {
+					if checker.AppCaskExists(ctx, runner, cand) {
 						found = cand
 						break
 					}
@@ -540,6 +555,38 @@ func (c runChecker) Check(ctx context.Context, a *app.App) (*checker.UpdateResul
 	return result, err
 }
 
+// Homebrew exits immediately if another process holds its update lock. Retry
+// only that diagnostic, leaving other failures available for partial results.
+func refreshBrewMetadata(ctx context.Context, runner checker.CmdRunner) error {
+	const lockMessage = "Another `brew update` process is already running."
+	deadline := time.Now().Add(2 * time.Minute)
+	for {
+		_, err := runner.Run(ctx, "brew", "update", "--quiet")
+		var exitErr *exec.ExitError
+		if !errors.As(err, &exitErr) {
+			return err
+		}
+		diagnostic := string(exitErr.Stderr)
+		if !strings.Contains(diagnostic, lockMessage) {
+			// Homebrew summarizes failed taps separately from raw Git output.
+			for line := range strings.SplitSeq(diagnostic, "\n") {
+				if detail, ok := strings.CutPrefix(line, "Error: "); ok && detail != "" {
+					return fmt.Errorf("%s: %w", detail, err)
+				}
+			}
+			return err
+		}
+		if time.Now().After(deadline) {
+			return errors.New("timed out waiting for the Homebrew update lock")
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(time.Second):
+		}
+	}
+}
+
 // BuildCheckers creates a fresh set of checkers for one update check.
 // Order matters for fallthrough: most accurate first, broadest fallback last.
 func BuildCheckers(runner checker.CmdRunner, githubToken string) []checker.Checker {
@@ -561,7 +608,7 @@ func BuildCheckers(runner checker.CmdRunner, githubToken string) []checker.Check
 			}
 			release := slots.acquire()
 			defer release()
-			if _, err := runner.Run(ctx, "brew", "update", "--quiet"); err != nil {
+			if err := refreshBrewMetadata(ctx, runner); err != nil {
 				refreshErr = fmt.Errorf("Homebrew metadata may be stale (run brew update for details): %w", err)
 			}
 		})
@@ -754,6 +801,9 @@ func CheckAllProgress(ctx context.Context, apps []*app.App, checkers []checker.C
 			defer wg.Done()
 
 			result := CheckWithFallthrough(ctx, a, appCheckers)
+			if result.Error == checker.ErrNoMatchingCask {
+				return
+			}
 
 			mu.Lock()
 			results = append(results, result)
@@ -785,6 +835,9 @@ func CheckWithFallthrough(ctx context.Context, a *app.App, checkers []checker.Ch
 
 		result, err := c.Check(ctx, a)
 		if err != nil {
+			if err == checker.ErrNoMatchingCask && (lastErr != nil || staleCount > 0) {
+				continue
+			}
 			lastErr = err
 			lastSource = c.Name()
 			continue // try next checker

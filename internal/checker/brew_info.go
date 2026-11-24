@@ -3,6 +3,7 @@ package checker
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path"
 	"slices"
@@ -102,35 +103,23 @@ func (b *BrewInfoChecker) Name() string {
 	return "brew-info"
 }
 
-// CanCheck returns true if the app has a cask name.
+// CanCheck accepts known casks and apps with eligible cask candidates.
 func (b *BrewInfoChecker) CanCheck(a *app.App) bool {
-	return a.CaskName != ""
+	return a.CaskName != "" || len(a.PendingCaskTokens) > 0
 }
+
+// ErrNoMatchingCask means Homebrew has no app cask for the candidate tokens.
+var ErrNoMatchingCask = errors.New("no matching Homebrew app cask")
 
 // Check runs `brew info --cask --json=v2 <cask-name>` and compares versions.
 func (b *BrewInfoChecker) Check(ctx context.Context, a *app.App) (*UpdateResult, error) {
-	if a.CaskName == "" {
-		return nil, fmt.Errorf("failed to check brew info: no cask name for %s", a.Name)
-	}
-
-	output, err := b.runner.Run(ctx, "brew", "info", "--cask", "--json=v2", a.CaskName)
+	token, output, err := b.caskInfo(ctx, a)
 	if err != nil {
-		// brew fails transiently when several brew processes contend for its
-		// locks/cache during a concurrent check run; retry once after a pause.
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-time.After(brewInfoRetryDelay):
-		}
-		output, err = b.runner.Run(ctx, "brew", "info", "--cask", "--json=v2", a.CaskName)
-		if err != nil {
-			return nil, fmt.Errorf("failed to run brew info for %s: %w", a.CaskName, err)
-		}
+		return nil, err
 	}
-
 	artifact, err := parseBrewInfo(output)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse brew info for %s: %w", a.CaskName, err)
+		return nil, fmt.Errorf("failed to parse brew info for %s: %w", token, err)
 	}
 
 	currentVersion := caskInstalledVersion(a.Version, a.Build, artifact.Version)
@@ -144,6 +133,45 @@ func (b *BrewInfoChecker) Check(ctx context.Context, a *app.App) (*UpdateResult,
 		DownloadURL:    artifact.DownloadURL,
 		DownloadDigest: artifact.DownloadDigest,
 	}, nil
+}
+
+func (b *BrewInfoChecker) caskInfo(ctx context.Context, a *app.App) (string, []byte, error) {
+	token := a.CaskName
+	if token == "" {
+		if len(a.PendingCaskTokens) == 0 {
+			return "", nil, fmt.Errorf("failed to check brew info: no cask name for %s", a.Name)
+		}
+		for _, candidate := range a.PendingCaskTokens {
+			if err := ctx.Err(); err != nil {
+				return "", nil, err
+			}
+			data, err := b.runner.Run(ctx, "brew", "info", "--cask", "--json=v2", candidate)
+			if err == nil && isAppCask(data) {
+				return candidate, data, nil
+			}
+		}
+		if err := ctx.Err(); err != nil {
+			return "", nil, err
+		}
+		return "", nil, ErrNoMatchingCask
+	}
+
+	output, err := b.runner.Run(ctx, "brew", "info", "--cask", "--json=v2", token)
+	if err != nil {
+		// brew fails transiently when several brew processes contend for its
+		// locks/cache during a concurrent check run; retry once after a pause.
+		select {
+		case <-ctx.Done():
+			return "", nil, ctx.Err()
+		case <-time.After(brewInfoRetryDelay):
+		}
+		output, err = b.runner.Run(ctx, "brew", "info", "--cask", "--json=v2", token)
+		if err != nil {
+			return "", nil, fmt.Errorf("failed to run brew info for %s: %w", token, err)
+		}
+	}
+
+	return token, output, nil
 }
 
 // caskInstalledVersion selects the bundle version corresponding to a cask's
@@ -251,6 +279,10 @@ func AppCaskExists(ctx context.Context, runner CmdRunner, name string) bool {
 	if err != nil {
 		return false
 	}
+	return isAppCask(output)
+}
+
+func isAppCask(output []byte) bool {
 	var info brewInfoResponse
 	return json.Unmarshal(output, &info) == nil && len(info.Casks) > 0 && !info.Casks[0].cliOnly()
 }

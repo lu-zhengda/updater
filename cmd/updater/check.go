@@ -102,7 +102,7 @@ var discoverInstalled = func(ctx context.Context) ([]*app.App, error) {
 // discoverAll runs the full shared discovery pipeline, printing non-fatal
 // source warnings to stderr.
 var discoverAll = func(ctx context.Context, cfg *config.Config, runner checker.CmdRunner) ([]*app.App, error) {
-	return updater.DiscoverAll(ctx, cfg, runner, warnDiscovery)
+	return updater.DiscoverForCheck(ctx, cfg, runner, warnDiscovery)
 }
 
 func warnDiscovery(source string, err error) {

@@ -3,6 +3,8 @@ package updater
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -10,6 +12,7 @@ import (
 
 	"github.com/lu-zhengda/updater/internal/app"
 	"github.com/lu-zhengda/updater/internal/checker"
+	"github.com/lu-zhengda/updater/internal/config"
 )
 
 type staleBrewRunner struct {
@@ -117,5 +120,83 @@ func TestHomebrewRefreshLeavesSlotsForOtherChecks(t *testing.T) {
 	case <-independent:
 	case <-time.After(2 * time.Second):
 		t.Fatal("independent check blocked behind Homebrew refresh")
+	}
+}
+
+func TestNewCaskInStaleTap(t *testing.T) {
+	t.Setenv("HOMEBREW_NO_AUTO_UPDATE", "")
+	r := &newCaskRunner{}
+	a := &app.App{Name: "NewTool", BundleID: "com.example.newtool", Source: app.SourceUnknown, Version: "1.0.0"}
+	apps, err := enrichApps(t.Context(), []*app.App{a}, &config.Config{}, r, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	results := CheckAll(t.Context(), apps, BuildCheckers(r, ""), 2)
+	if len(results) != 1 || results[0].Error != nil || !results[0].HasUpdate || results[0].LatestVersion != "2.0.0" || results[0].DownloadURL != "https://example.org/newtool.dmg" || r.refreshes != 1 {
+		t.Fatalf("new cask missing on first check: %v, refreshes=%d", results, r.refreshes)
+	}
+}
+
+func TestMissingCaskRemainsAbsent(t *testing.T) {
+	t.Setenv("HOMEBREW_NO_AUTO_UPDATE", "")
+	r := &newCaskRunner{}
+	a := &app.App{Name: "NoCask", Source: app.SourceUnknown, Version: "1.0.0"}
+	apps, err := enrichApps(t.Context(), []*app.App{a}, &config.Config{}, r, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if results := CheckAll(t.Context(), apps, BuildCheckers(r, ""), 2); len(results) != 0 || r.refreshes != 1 {
+		t.Fatalf("unmatched cask: %v, refreshes=%d", results, r.refreshes)
+	}
+}
+
+type newCaskRunner struct{ refreshes int }
+
+func (r *newCaskRunner) Run(_ context.Context, name string, args ...string) ([]byte, error) {
+	switch name + " " + strings.Join(args, " ") {
+	case "brew --caskroom":
+		return nil, nil
+	case "brew update --quiet":
+		r.refreshes++
+		return nil, nil
+	case "brew info --cask --json=v2 newtool":
+		if r.refreshes > 0 {
+			return []byte(`{"casks":[{"token":"newtool","version":"2.0.0","url":"https://example.org/newtool.dmg","artifacts":[{"app":["NewTool.app"]}]}]}`), nil
+		}
+	}
+	return nil, errors.New("cask unavailable")
+}
+
+func TestHomebrewRefreshLockContention(t *testing.T) {
+	t.Setenv("HOMEBREW_NO_AUTO_UPDATE", "")
+	dir := t.TempDir()
+	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
+	t.Setenv("BREW_TEST_STATE", dir)
+	const script = `#!/bin/sh
+case "$1" in
+update)
+ if [ ! -f "$BREW_TEST_STATE/busy" ]; then
+   touch "$BREW_TEST_STATE/busy"
+   echo 'Another ` + "`brew update`" + ` process is already running.' >&2
+   exit 1
+ fi
+ touch "$BREW_TEST_STATE/fresh"
+ ;;
+outdated)
+ if [ -f "$BREW_TEST_STATE/fresh" ]; then
+   echo '[{"name":"owner/tap/tool","current_version":"2.1.0"}]'
+ else
+   echo '[]'
+ fi
+ ;;
+esac
+`
+	if err := os.WriteFile(filepath.Join(dir, "brew"), []byte(script), 0755); err != nil {
+		t.Fatal(err)
+	}
+	a := &app.App{Source: app.SourceBrewFormula, FormulaName: "owner/tap/tool", Version: "2.0.1"}
+	got := CheckWithFallthrough(t.Context(), a, BuildCheckers(&checker.RealCmdRunner{}, ""))
+	if got.Error != nil || got.LatestVersion != "2.1.0" || !got.HasUpdate {
+		t.Fatalf("overlapping check: %+v", got)
 	}
 }

@@ -10,6 +10,7 @@ import (
 	"github.com/lu-zhengda/updater/internal/app"
 	"github.com/lu-zhengda/updater/internal/checker"
 	"github.com/lu-zhengda/updater/internal/config"
+	"github.com/lu-zhengda/updater/internal/updater"
 	"github.com/spf13/cobra"
 )
 
@@ -36,7 +37,7 @@ func runScan(cmd *cobra.Command, args []string) error {
 
 	runner := newRunner()
 
-	apps, err := discoverAll(ctx, cfg, runner)
+	apps, err := updater.DiscoverAll(ctx, cfg, runner, warnDiscovery)
 	if err != nil {
 		return err
 	}

@@ -98,7 +98,7 @@ reports the check failure. Apps whose channel is unknown can still use
 configured mappings or available installer metadata. A desktop app's
 `source_overrides` entry explicitly selects a different update source.
 
-The first Homebrew version lookup in each check runs `brew update --quiet` to pick up newly published casks and formulae, including third-party taps. Concurrent lookups share that refresh. If a tap fails to refresh, Updater still shows upgrades Homebrew can identify. Other Homebrew lookups report the refresh error because their metadata may be stale. Set `HOMEBREW_NO_AUTO_UPDATE=1` in Updater’s environment to use local metadata.
+The first Homebrew version lookup in each check runs `brew update --quiet` to pick up newly published casks and formulae, including third-party taps. Concurrent lookups share that refresh. Cask matching for standalone apps uses the refreshed metadata. If another Homebrew update holds the lock, Updater retries for up to two minutes. If a tap fails to refresh, Updater still shows upgrades Homebrew can identify. Other Homebrew lookups report the refresh error because their metadata may be stale. Set `HOMEBREW_NO_AUTO_UPDATE=1` in Updater’s environment to use local metadata.
 
 Direct downloads prefer the Mac’s native architecture, then universal builds. Explicitly incompatible builds are excluded. Before replacing an app from a DMG or ZIP, the updater also checks that its executable supports the native architecture, even when filenames omit it.
 
