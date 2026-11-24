@@ -504,7 +504,20 @@ func FilterIgnored(apps []*app.App, cfg *config.Config) []*app.App {
 	return filtered
 }
 
-// BuildCheckers creates all checkers with their dependencies.
+// brewMetadataChecker waits for the shared Homebrew refresh before reading versions.
+type brewMetadataChecker struct {
+	checker.Checker
+	refresh func(context.Context) error
+}
+
+func (c brewMetadataChecker) Check(ctx context.Context, a *app.App) (*checker.UpdateResult, error) {
+	if err := c.refresh(ctx); err != nil {
+		return nil, err
+	}
+	return c.Checker.Check(ctx, a)
+}
+
+// BuildCheckers creates a fresh set of checkers for one update check.
 // Order matters for fallthrough: most accurate first, broadest fallback last.
 func BuildCheckers(runner checker.CmdRunner, githubToken string) []checker.Checker {
 	// A shared client with a timeout so one hung feed server cannot stall an
@@ -512,15 +525,31 @@ func BuildCheckers(runner checker.CmdRunner, githubToken string) []checker.Check
 	// with hardenedHTTPClient, which also sets the outbound User-Agent.
 	httpClient := &http.Client{Timeout: 30 * time.Second}
 	githubChecker := checker.NewGitHubChecker(httpClient, "", githubToken)
+	if runner == nil {
+		runner = &checker.RealCmdRunner{}
+	}
 	githubChecker.ReadBundleVersion = installer.New(runner, nil).ReadBundleVersion
+	var refreshOnce sync.Once
+	var refreshErr error
+	refresh := func(ctx context.Context) error {
+		refreshOnce.Do(func() {
+			if os.Getenv("HOMEBREW_NO_AUTO_UPDATE") != "" {
+				return
+			}
+			if _, err := runner.Run(ctx, "brew", "update", "--quiet"); err != nil {
+				refreshErr = fmt.Errorf("could not refresh Homebrew metadata: %w", err)
+			}
+		})
+		return refreshErr
+	}
 	return []checker.Checker{
 		checker.NewSparkleChecker(httpClient),
 		checker.NewVendorChecker(httpClient),
-		checker.NewBrewChecker(runner),
+		brewMetadataChecker{checker.NewBrewChecker(runner), refresh},
 		checker.NewMASChecker(runner),
 		githubChecker,
 		checker.NewSystemChecker(runner),
-		checker.NewBrewFormulaChecker(runner),
+		brewMetadataChecker{checker.NewBrewFormulaChecker(runner), refresh},
 		checker.NewElectronChecker(httpClient),
 		checker.NewNpmChecker(runner),
 		checker.NewPnpmChecker(runner),
@@ -528,7 +557,7 @@ func BuildCheckers(runner checker.CmdRunner, githubToken string) []checker.Check
 		checker.NewUvChecker(nil, ""),
 		checker.NewCargoChecker(nil, ""),
 		checker.NewManagedChecker(),
-		checker.NewBrewInfoChecker(runner), // fallback: any app with a CaskName
+		brewMetadataChecker{checker.NewBrewInfoChecker(runner), refresh}, // fallback: any app with a CaskName
 	}
 }
 

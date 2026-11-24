@@ -46,7 +46,6 @@ func runUI(cmd *cobra.Command, _ []string) error {
 	}
 
 	runner := newRunner()
-	checkers := buildCheckers(runner, cfg.ResolveGitHubToken())
 	maxConc := cfg.MaxConcurrentOrDefault()
 	rollbackManager := backup.NewManager(backup.DefaultBaseDir(), cfg.MaxBackupsLimit(), runner)
 	updateBackupManager := backupManagerForConfig(cfg, runner)
@@ -79,6 +78,7 @@ func runUI(cmd *cobra.Command, _ []string) error {
 	}
 
 	checkFn := func(ctx context.Context, apps []*app.App, onResult func(*checker.UpdateResult)) []*checker.UpdateResult {
+		checkers := buildCheckers(runner, cfg.ResolveGitHubToken())
 		return updater.CheckAllProgress(ctx, apps, checkers, maxConc, onResult)
 	}
 
