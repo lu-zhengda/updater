@@ -5,7 +5,8 @@
 # identifier, a line whose text starts with "platform:" (a constraint forced
 # by an outside platform or protocol), a Go toolchain directive, or a line
 # that links a GitHub issue or pull URL or a Linear issue URL.
-# total: 1275
+# Executable lines inside the comment block before import "C" are not comments.
+# total: 1201
 cmd/updater/agent_mode.go 6
 cmd/updater/app_selector.go 9
 cmd/updater/check.go 10
@@ -37,7 +38,7 @@ cmd/updater/schedule_test.go 4
 cmd/updater/self_upgrade.go 71
 cmd/updater/self_upgrade_test.go 7
 cmd/updater/single_instance.go 45
-cmd/updater/single_instance_darwin.go 71
+cmd/updater/single_instance_darwin.go 8
 cmd/updater/single_instance_lock.go 4
 cmd/updater/single_instance_stub.go 1
 cmd/updater/single_instance_test.go 1
@@ -48,7 +49,7 @@ cmd/updater/upgrade.go 16
 cmd/updater/upgrade_test.go 1
 cmd/updater/vendor_install_live_test.go 1
 cmd/updater/window.go 15
-cmd/updater/window_activate.go 17
+cmd/updater/window_activate.go 6
 cmd/updater/window_html.go 2
 cmd/updater/yolo_test.go 1
 internal/app/app.go 5

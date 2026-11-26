@@ -106,14 +106,18 @@ func Also() {}
 	}
 }
 
-func TestCgoDirectiveSkippedAndProseCounted(t *testing.T) {
+func TestCgoFunctionBodyDoesNotCount(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, root, "p/c.go", `package p
 
 /*
 #cgo CFLAGS: -x objective-c
 #include <stdint.h>
-The window server does not activate this process.
+// The window server does not activate this process.
+static void updaterActivate(void) {
+	doWork();
+	doMore();
+}
 */
 import "C"
 `)

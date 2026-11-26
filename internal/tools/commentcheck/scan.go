@@ -22,6 +22,7 @@ const baselineHeader = `# Disallowed Go comment lines per file. Each count must 
 # identifier, a line whose text starts with "platform:" (a constraint forced
 # by an outside platform or protocol), a Go toolchain directive, or a line
 # that links a GitHub issue or pull URL or a Linear issue URL.
+# Executable lines inside the comment block before import "C" are not comments.
 `
 
 var issueURL = regexp.MustCompile(`https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/(issues|pull)/[0-9]+|https://linear\.app/[A-Za-z0-9_.-]+/issue/[A-Za-z]+-[0-9]+`)
@@ -89,16 +90,21 @@ func countFile(path string) (int, error) {
 		return 0, err
 	}
 	allowed := allowedComments(file)
+	preamble := cgoPreamble(file)
 	n := 0
 	for _, group := range file.Comments {
 		for _, comment := range group.List {
 			_, whole := allowed[comment.Pos()]
+			_, inPreamble := preamble[comment.Pos()]
 			for _, line := range strings.Split(comment.Text, "\n") {
 				line = strings.TrimRight(line, "\r")
 				if strings.TrimSpace(line) == "" {
 					continue
 				}
 				body := commentBody(line)
+				if inPreamble && !nestedCommentLine(line) {
+					continue
+				}
 				if body == "" || whole || lineAllowed(body) {
 					continue
 				}
@@ -107,6 +113,51 @@ func countFile(path string) (int, error) {
 		}
 	}
 	return n, nil
+}
+
+func cgoPreamble(file *ast.File) map[token.Pos]struct{} {
+	marked := map[token.Pos]struct{}{}
+	mark := func(group *ast.CommentGroup) {
+		if group == nil {
+			return
+		}
+		for _, comment := range group.List {
+			marked[comment.Pos()] = struct{}{}
+		}
+	}
+	ast.Inspect(file, func(n ast.Node) bool {
+		decl, ok := n.(*ast.GenDecl)
+		if !ok || decl.Tok != token.IMPORT {
+			return true
+		}
+		for _, spec := range decl.Specs {
+			im, ok := spec.(*ast.ImportSpec)
+			if !ok || im.Path == nil || im.Path.Value != `"C"` {
+				continue
+			}
+			if im.Doc != nil {
+				mark(im.Doc)
+				continue
+			}
+			mark(decl.Doc)
+		}
+		return true
+	})
+	return marked
+}
+
+func nestedCommentLine(line string) bool {
+	trimmed := strings.TrimSpace(line)
+	switch {
+	case strings.HasPrefix(trimmed, "//"),
+		strings.HasPrefix(trimmed, "/*"),
+		strings.HasPrefix(trimmed, "* "),
+		trimmed == "*",
+		trimmed == "*/":
+		return true
+	default:
+		return false
+	}
 }
 
 func allowedComments(file *ast.File) map[token.Pos]struct{} {

@@ -25,7 +25,7 @@ not landed yet. Keep this file small so the two can be aligned later.
 3. Adversarial review with the pstack `interrogate` skill. Keep only findings a run proves.
 4. Blast-radius check with the pstack `blast-radius` skill. Prove the one fact the change depends on by running code.
 5. CI must pass. The required check is `.github/workflows/ci.yml`.
-6. Ship in a pull request. Record what was run and the result in the PR body. The title is `type(scope): subject` with type `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`, or `revert`. The body is at most 40 lines and contains `## Why`, `## What changed`, `## Blast Radius`, `## Verification`, and a line `Fixes ZHE-<n>`. `dependabot[bot]` is exempt. `scripts/pr-standard.sh` checks this in CI when a pull request is opened, synchronized, or edited.
+6. Ship in a pull request. Record what was run and the result in the PR body. The title is `type(scope): subject` with type `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`, or `revert`. The body is at most 40 lines and contains `## Why`, `## What changed`, `## Blast Radius`, `## Verification`, and a line `Fixes ZHE-<n>`. `dependabot[bot]` is exempt. `scripts/pr-standard.sh` checks this in CI on every pull request event, including opened, synchronized, reopened, and edited.
 7. Publish only when that PR has exactly one of `semver:patch`, `semver:minor`, or `semver:major`. Zero semver labels publishes nothing. More than one fails the release workflow and does not guess.
 8. After publish, on a real Mac, run `.cursor/skills/verify-updater/` against the version that just published. Paste the PASS/FAIL transcript into a comment on the merged PR.
 

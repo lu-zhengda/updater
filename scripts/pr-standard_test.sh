@@ -84,9 +84,10 @@ grep -q 'branches: \[main\]' "$ci" || fail "CI branches are not main"
 if grep -Eq '^[[:space:]]*(schedule|cron):' "$ci"; then
 	fail "CI must not declare a schedule"
 fi
-grep -q "github.event.action == 'opened'" "$ci" || fail "opened is not gated"
-grep -q "github.event.action == 'synchronize'" "$ci" || fail "synchronize is not gated"
-grep -q "github.event.action == 'edited'" "$ci" || fail "edited is not gated"
+grep -q "github.event_name == 'pull_request'" "$ci" || fail "PR text check is not limited to pull requests"
+if grep -q 'github.event.action ==' "$ci"; then
+	fail "PR text check must run on every pull_request event, including reopened"
+fi
 grep -q 'golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a' "$ci" || fail "golangci-lint action pin drifted"
 grep -q 'scripts/comment-ratchet.sh' "$ci" || fail "comment ratchet is not in CI"
 grep -q 'scripts/pr-standard.sh' "$ci" || fail "PR standard check is not in CI"
