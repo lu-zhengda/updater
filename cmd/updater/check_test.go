@@ -134,6 +134,38 @@ func TestToCheckEntries_Error(t *testing.T) {
 	}
 }
 
+func vendorFailureResult() *checker.UpdateResult {
+	return &checker.UpdateResult{
+		App: &app.App{
+			Name: "Cursor", BundleID: app.CursorBundleID, Version: "3.31.0",
+			Source: app.SourceElectron, ElectronUpdateFormat: "cursor",
+		},
+		Source: "vendor", CurrentVersion: "3.31.0",
+		Error: fmt.Errorf("vendor update service returned status 404"),
+	}
+}
+
+func TestToCheckEntries_VendorFailureIsQuiet(t *testing.T) {
+	cfg := &config.Config{}
+	entries := toCheckEntries([]*checker.UpdateResult{vendorFailureResult()}, cfg)
+	if len(entries) != 1 {
+		t.Fatalf("got %d entries", len(entries))
+	}
+	if entries[0].Status == "error" || entries[0].Error != "" {
+		t.Fatalf("vendor failure shown: %+v", entries[0])
+	}
+	cached := cacheEntriesFromResults([]*checker.UpdateResult{vendorFailureResult()}, cfg.IsPinned)
+	if cached[0].Status == "error" || cached[0].Error != "" {
+		t.Fatalf("cached vendor failure shown: %+v", cached[0])
+	}
+}
+
+func TestWindowDoesNotShowVendorCheckFailed(t *testing.T) {
+	if !strings.Contains(windowHTML, `e.source !== "vendor"`) {
+		t.Fatal("window renders check failed for a vendor app")
+	}
+}
+
 func TestToCheckEntries_Empty(t *testing.T) {
 	cfg := &config.Config{}
 	entries := toCheckEntries(nil, cfg)

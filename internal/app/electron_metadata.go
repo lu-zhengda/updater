@@ -43,15 +43,22 @@ func enrichElectronMetadata(contentsDir string, a *App) {
 		a.Source = SourceSparkle
 		return
 	}
-	if a.ElectronUpdateURL != "" {
-		return
-	}
 	data, _ = readElectronJSON(contentsDir, "product.json")
 	var product struct {
 		URL     string `json:"updateUrl"`
 		Quality string `json:"quality"`
+		Version string `json:"version"`
+		Commit  string `json:"commit"`
 	}
-	if json.Unmarshal(data, &product) == nil && secureFeedURL(product.URL) &&
+	parsed := json.Unmarshal(data, &product) == nil
+	if a.BundleID == CursorBundleID || (parsed && cursorUpdateHost(product.URL)) {
+		applyCursorFeed(a, product.URL, product.Version, product.Commit)
+		return
+	}
+	if a.ElectronUpdateURL != "" {
+		return
+	}
+	if parsed && secureFeedURL(product.URL) &&
 		(product.Quality == "stable" || product.Quality == "insider") {
 		a.ElectronUpdateURL = product.URL
 		a.ElectronUpdateFormat = "vscode"
@@ -65,6 +72,26 @@ func enrichElectronMetadata(contentsDir string, a *App) {
 		a.ElectronUpdateURL = "https://downloads.claude.ai/releases/darwin/universal/RELEASES.json"
 		a.ElectronUpdateFormat = "squirrel"
 	}
+}
+
+const cursorUpdateURL = "https://api2.cursor.sh/updates"
+
+func cursorUpdateHost(raw string) bool {
+	u, err := url.Parse(raw)
+	return err == nil && u.User == nil && strings.EqualFold(u.Hostname(), "api2.cursor.sh")
+}
+
+func applyCursorFeed(a *App, raw, version, commit string) {
+	switch {
+	case secureFeedURL(raw):
+		a.ElectronUpdateURL = raw
+	case !secureFeedURL(a.ElectronUpdateURL):
+		a.ElectronUpdateURL = cursorUpdateURL
+	}
+	a.ElectronUpdateFormat = "cursor"
+	a.ElectronUpdateChannel = ""
+	a.ElectronProductVersion = version
+	a.ElectronCommit = commit
 }
 
 func secureFeedURL(raw string) bool {

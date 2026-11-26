@@ -39,6 +39,7 @@ func checkCachePath() string {
 func cacheEntriesFromResults(results []*checker.UpdateResult, isPinned func(string) bool) []cacheEntry {
 	entries := make([]cacheEntry, 0, len(results))
 	for _, r := range results {
+		r.ReleaseVendorFailure()
 		e := cacheEntry{
 			Name:          r.App.Name,
 			BundleID:      r.App.BundleID,

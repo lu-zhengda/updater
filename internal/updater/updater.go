@@ -616,7 +616,7 @@ func BuildCheckers(runner checker.CmdRunner, githubToken string) []checker.Check
 	}
 	return []checker.Checker{
 		checker.NewSparkleChecker(httpClient),
-		checker.NewVendorChecker(httpClient),
+		checker.NewVendorChecker(httpClient).WithCask(runner),
 		runChecker{Checker: checker.NewBrewChecker(runner), refresh: refresh},
 		checker.NewMASChecker(runner),
 		githubChecker,
@@ -680,7 +680,10 @@ func checkersForApp(a *app.App, all []checker.Checker) []checker.Checker {
 
 	var filtered []checker.Checker
 	for _, c := range all {
-		if name := c.Name(); name == required || (required == string(app.SourceBrew) && name == string(app.SourceBrewInfo)) {
+		name := c.Name()
+		if name == required ||
+			(required == string(app.SourceBrew) && name == string(app.SourceBrewInfo)) ||
+			(required == "vendor" && name == string(app.SourceBrewInfo)) {
 			filtered = append(filtered, c)
 		}
 	}
@@ -881,21 +884,26 @@ func CheckWithFallthrough(ctx context.Context, a *app.App, checkers []checker.Ch
 		return result
 	}
 	if fallback != nil {
+		fallback.ReleaseVendorFailure()
 		return fallback
 	}
 
 	// All checkers failed or were stale — return error result from last attempt.
 	if lastErr != nil {
-		return withOverrideProvenance(&checker.UpdateResult{
+		result := withOverrideProvenance(&checker.UpdateResult{
 			App:            a,
 			Source:         effectiveResultSource(a, lastSource),
 			CurrentVersion: a.Version,
 			Error:          lastErr,
 		}, a)
+		result.ReleaseVendorFailure()
+		return result
 	}
 
 	if len(checkers) == 0 {
-		return noCheckerResult(a)
+		result := noCheckerResult(a)
+		result.ReleaseVendorFailure()
+		return result
 	}
 
 	msg := fmt.Sprintf("no checker could provide a result for %s", a.Name)
@@ -907,5 +915,6 @@ func CheckWithFallthrough(ctx context.Context, a *app.App, checkers []checker.Ch
 		result.Source = effectiveResultSource(a, lastSource)
 	}
 	result.Error = fmt.Errorf("%s", msg)
+	result.ReleaseVendorFailure()
 	return result
 }
