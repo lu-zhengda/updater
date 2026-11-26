@@ -1,0 +1,26 @@
+# CI passes --new-from-rev. The existing tree has a large errcheck backlog,
+# so the gate fails on changed lines. docs/lessons.md records why.
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  default: none
+  enable:
+    - errcheck
+    - staticcheck
+    - unused
+    - nolintlint
+    - gocritic
+  settings:
+    nolintlint:
+      require-explanation: true
+      require-specific: true
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
+formatters:
+  enable: []
