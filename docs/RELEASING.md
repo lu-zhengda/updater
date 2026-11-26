@@ -13,6 +13,10 @@ After that publish job succeeds, `verify-published-release` reads `Casks/updater
 
 A branch push, a closed pull request that was not merged, and a push straight to `main` with no merged pull request do not publish. The decision uses the pull request's labels, which a bare push does not have.
 
+## Pull request text
+
+CI checks the title and body when a pull request is opened, synchronized, or edited (`scripts/pr-standard.sh` in [`.github/workflows/ci.yml`](../.github/workflows/ci.yml)). The title matches `type(scope): subject` with one of `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`, or `revert`. The body is at most 40 lines and includes `## Why`, `## What changed`, `## Blast Radius`, and `## Verification`, plus a line `Fixes ZHE-<n>`. Pull requests from `dependabot[bot]` skip this check. The check does not choose a semver label. A merge with no semver label still publishes nothing.
+
 Merge publishes and manual tag publishes share one concurrency group. A second publish waits. It does not cancel a run that is already signing, and it does not replace a tag.
 
 GoReleaser still builds from [`.goreleaser.yaml`](../.goreleaser.yaml): darwin amd64 and arm64, one universal binary. The universal-binary post hook then:
