@@ -219,6 +219,22 @@ func TestRollback_NoBackup(t *testing.T) {
 	}
 }
 
+func TestExecuteUpdate_VendorWithoutInstallerOpensApp(t *testing.T) {
+	runner := &captureUpdateRunner{}
+	const appPath = "/Applications/Cursor.app"
+	result := &checker.UpdateResult{
+		App:    &app.App{Name: "Cursor", Path: appPath, BundleID: app.CursorBundleID},
+		Source: "vendor",
+	}
+	err, rolledBack := executeUpdate(context.Background(), result, runner, nil, nil)
+	if !errors.Is(err, checker.ErrOpenedExternally) || rolledBack {
+		t.Fatalf("err=%v rolledBack=%v", err, rolledBack)
+	}
+	if runner.name != "open" || len(runner.args) != 2 || runner.args[0] != "-a" || runner.args[1] != appPath {
+		t.Fatalf("open = %s %v", runner.name, runner.args)
+	}
+}
+
 func TestRollback_NilManager(t *testing.T) {
 	rolledBack := rollbackAfterFailedInstall(context.Background(), nil, "TestApp")
 	if rolledBack {

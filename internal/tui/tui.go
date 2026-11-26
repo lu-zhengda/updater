@@ -1045,6 +1045,7 @@ func (m Model) handleRefresh() (tea.Model, tea.Cmd) {
 func (m *Model) applyResult(result *checker.UpdateResult) {
 	for i := range m.rows {
 		if m.rows[i].app == result.App {
+			result.ReleaseVendorFailure()
 			m.rows[i].result = result
 			m.rows[i].checked = true
 			return
@@ -1093,7 +1094,7 @@ func (m *Model) rebuildVisible() {
 			m.visible = append(m.visible, i)
 		} else if !r.checked {
 			m.visible = append(m.visible, i)
-		} else if r.result != nil && (r.result.HasUpdate || r.result.Error != nil) {
+		} else if r.result != nil && (r.result.HasUpdate || (r.result.Error != nil && !r.app.QuietVendorCheck())) {
 			m.visible = append(m.visible, i)
 		}
 	}
@@ -1313,7 +1314,7 @@ func (m Model) renderRow(index int, isCursor bool, isSelected bool) string {
 		status = styleSkipped.Render("pending")
 	} else if r.result == nil {
 		status = styleSkipped.Render("skipped")
-	} else if r.result.Error != nil {
+	} else if r.result.Error != nil && !r.app.QuietVendorCheck() {
 		status = styleError.Render("error")
 		rawSource = r.result.Source
 	} else if m.pinned[index] && r.result.HasUpdate {

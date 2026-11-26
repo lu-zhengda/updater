@@ -131,6 +131,40 @@ func TestDiscoverNativeElectronProtocols(t *testing.T) {
 	}
 }
 
+func TestDiscoverCursorUpdateFeed(t *testing.T) {
+	for _, tc := range []struct {
+		id, product, url string
+	}{
+		{CursorBundleID, `{"updateUrl":"https://example.com/updates","quality":"stable","version":"3.31.0","commit":"abc123"}`, "https://example.com/updates"},
+		{"com.example.renamed", `{"updateUrl":"https://api2.cursor.sh/updates","quality":"stable","version":"3.31.0","commit":"abc123"}`, "https://api2.cursor.sh/updates"},
+		{CursorBundleID, `{"quality":"stable"}`, "https://api2.cursor.sh/updates"},
+	} {
+		t.Run(tc.id+"/"+tc.url, func(t *testing.T) {
+			dir := t.TempDir()
+			p := createFakeApp(t, dir, "Cursor", plistData{BundleID: tc.id, ShortVersionString: "3.31.0"}, false, false)
+			if err := os.MkdirAll(filepath.Join(p, "Contents", "Frameworks", "Electron Framework.framework"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			resources := filepath.Join(p, "Contents", "Resources")
+			if err := os.MkdirAll(resources, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			writeElectronArchive(t, filepath.Join(resources, "app.asar"), "product.json", []byte(tc.product))
+			apps, err := Discover(dir)
+			if err != nil || len(apps) != 1 {
+				t.Fatalf("Discover: %v", err)
+			}
+			a := apps[0]
+			if a.ElectronUpdateFormat != "cursor" || a.ElectronUpdateURL != tc.url || a.ElectronUpdateChannel != "" {
+				t.Fatalf("cursor feed: %+v", a)
+			}
+			if tc.product != `{"quality":"stable"}` && (a.ElectronProductVersion != "3.31.0" || a.ElectronCommit != "abc123") {
+				t.Fatalf("version and commit: %+v", a)
+			}
+		})
+	}
+}
+
 func TestASARRejectsInvalidLengths(t *testing.T) {
 	for _, corrupt := range []func([]byte) []byte{
 		func(b []byte) []byte { return b[:12] },

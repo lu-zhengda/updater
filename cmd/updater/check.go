@@ -158,6 +158,7 @@ func printCheckResults(cmd *cobra.Command, results []*checker.UpdateResult, cfg 
 	errCount := 0
 	pinnedCount := 0
 	for _, r := range results {
+		r.ReleaseVendorFailure()
 		src := checkSourceLabel(r.Source, r.SourceOverrideActive)
 		if r.Error != nil {
 			errCount++
@@ -247,6 +248,7 @@ type checkEntry struct {
 func toCheckEntries(results []*checker.UpdateResult, cfg *config.Config) []checkEntry {
 	var entries []checkEntry
 	for _, r := range results {
+		r.ReleaseVendorFailure()
 		e := checkEntry{
 			sourceOverrideJSON: sourceOverrideFieldsFromResult(r),
 			Name:               r.App.Name,

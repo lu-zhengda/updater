@@ -8,6 +8,9 @@ import (
 const UpdaterBundleID = "com.updater.app"
 const BrewCaskIDPrefix = "homebrew.cask."
 
+// CursorBundleID is the bundle id of the Cursor desktop app.
+const CursorBundleID = "com.todesktop.230313mzl4w4u92"
+
 // Source identifies where an app was installed from.
 type Source string
 
@@ -65,9 +68,17 @@ type App struct {
 	UvPinned               bool   // true when the uv tool requirement pins an exact version (==)
 	CargoCrate             string // Crate name installed via `cargo install`
 	ElectronUpdateURL      string // Generic update server base URL from app-update.yml
-	ElectronUpdateFormat   string // empty: latest-mac.yml; vscode: update API; squirrel: RELEASES.json
+	ElectronUpdateFormat   string // empty: latest-mac.yml; vscode: update API; squirrel: RELEASES.json; cursor: Cursor update API
 	ElectronUpdateChannel  string // product.json quality for VS Code-compatible update APIs
+	ElectronProductVersion string
+	ElectronCommit         string
 	enrichmentBaseline     *enrichmentBaseline
+}
+
+// QuietVendorCheck reports a vendor-feed app whose failed check is logged and
+// retried on the next scan instead of shown as a failed check.
+func (a *App) QuietVendorCheck() bool {
+	return a != nil && a.ElectronUpdateFormat != "" && !a.InstalledViaBrew && !a.SourceOverrideActive
 }
 
 func (a *App) IsBrewCLICask() bool {
