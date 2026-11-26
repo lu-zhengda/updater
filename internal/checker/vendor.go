@@ -17,7 +17,10 @@ import (
 
 // VendorChecker handles Electron apps whose native update services do not use
 // electron-builder's latest-mac.yml or GitHub release assets.
-type VendorChecker struct{ client *http.Client }
+type VendorChecker struct {
+	client *http.Client
+	runner CmdRunner
+}
 
 func NewVendorChecker(client *http.Client) *VendorChecker {
 	return &VendorChecker{client: hardenedHTTPClient(client, 30*time.Second)}

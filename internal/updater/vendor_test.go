@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/lu-zhengda/updater/internal/app"
@@ -48,6 +51,40 @@ func TestInstalledChannelChoosesVendorOrHomebrew(t *testing.T) {
 				t.Fatalf("standalone checkers = %v, want the packaged vendor feed", standalone)
 			}
 		})
+	}
+}
+
+func TestVendorCheckErrorFallsThrough(t *testing.T) {
+	notFound, err := os.ReadFile(filepath.Join("..", "checker", "testdata", "cursor-not-found.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write(notFound)
+	}))
+	t.Cleanup(srv.Close)
+	sum := strings.Repeat("ab", 32)
+	cask := fmt.Sprintf(`{"casks":[{"token":"cursor","version":"3.32.4","url":"https://downloads.cursor.com/Cursor-darwin-arm64.zip","sha256":"%s"}]}`, sum)
+	cursor := func(caskName string) *app.App {
+		return &app.App{
+			Name: "Cursor", BundleID: app.CursorBundleID, Version: "3.31.0", Source: app.SourceElectron,
+			ElectronUpdateURL: srv.URL + "/updates", ElectronUpdateFormat: "cursor",
+			ElectronProductVersion: "3.31.0", ElectronCommit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			CaskName: caskName,
+		}
+	}
+	withCask := CheckWithFallthrough(context.Background(), cursor("cursor"), BuildCheckers(&checker.MockCmdRunner{Output: []byte(cask)}, ""))
+	if withCask.Error != nil {
+		t.Fatalf("vendor failure surfaced: %v", withCask.Error)
+	}
+	if withCask.Source != "brew-info" || !withCask.HasUpdate || withCask.LatestVersion != "3.32.4" {
+		t.Fatalf("expected brew-info update, got %+v", withCask)
+	}
+	quiet := CheckWithFallthrough(context.Background(), cursor(""), BuildCheckers(&checker.MockCmdRunner{}, ""))
+	if quiet.Error != nil || quiet.HasUpdate {
+		t.Fatalf("expected no update without an error, got %+v", quiet)
 	}
 }
 
