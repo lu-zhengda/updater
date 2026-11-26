@@ -43,6 +43,10 @@ static NSString *updaterNotificationString(const char *s) {
 	return out;
 }
 
+#if OS_OBJECT_USE_OBJC
+extern void objc_release(id obj);
+#endif
+
 static void updaterReleaseSemaphore(dispatch_semaphore_t sem) {
 	if (sem == NULL) {
 		return;
@@ -143,10 +147,7 @@ didReceiveNotificationResponse:(UNNotificationResponse *)response
          withCompletionHandler:(void (^)(void))completionHandler {
 	(void)center;
 	if (response != nil && [response.actionIdentifier isEqualToString:UNNotificationDefaultActionIdentifier]) {
-		dispatch_async(dispatch_get_main_queue(), ^{
-			[[NSRunningApplication currentApplication] activateWithOptions:NSApplicationActivateAllWindows];
-			updaterFocusFromNotification();
-		});
+		updaterFocusFromNotification();
 	}
 	completionHandler();
 }
@@ -263,7 +264,7 @@ static int updaterPostNotification(const char *title, const char *subtitle, cons
 		UNNotificationRequest *request = [UNNotificationRequest requestWithIdentifier:ident content:content trigger:nil];
 		updaterNoteWait *addWait = updaterNoteWaitCreate();
 		if (addWait == NULL) {
-			return 0;
+			return 2;
 		}
 		[center addNotificationRequest:request withCompletionHandler:^(NSError *error) {
 			os_unfair_lock_lock(&addWait->lock);
@@ -274,16 +275,19 @@ static int updaterPostNotification(const char *title, const char *subtitle, cons
 			updaterNoteWaitRelease(addWait);
 		}];
 		int posted = 0;
-		if (!updaterNoteWaitFinish(addWait, 3.0, &posted)) {
-			return 0;
+		if (!updaterNoteWaitFinish(addWait, 3.0, &posted) || posted != 1) {
+			return 2;
 		}
-		return posted == 1 ? 1 : 0;
+		return 1;
 	}
 }
 */
 import "C"
 
-import "unsafe"
+import (
+	"errors"
+	"unsafe"
+)
 
 func deliverBundleNotification(title, subtitle, body string) error {
 	cTitle := C.CString(title)
@@ -292,7 +296,9 @@ func deliverBundleNotification(title, subtitle, body string) error {
 	defer C.free(unsafe.Pointer(cSubtitle))
 	cBody := C.CString(body)
 	defer C.free(unsafe.Pointer(cBody))
-	_ = C.updaterPostNotification(cTitle, cSubtitle, cBody)
+	if C.updaterPostNotification(cTitle, cSubtitle, cBody) == 2 {
+		return errors.New("notification was not delivered")
+	}
 	return nil
 }
 

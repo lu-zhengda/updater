@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -128,6 +129,39 @@ func TestBundleNotifierDropsOutsideBundle(t *testing.T) {
 	}
 	if called {
 		t.Fatal("native delivery ran outside an app bundle")
+	}
+}
+
+func TestFocusPIDsSkipsSelfAndJunk(t *testing.T) {
+	got := focusPIDs("10\nnot\n0\n-3\n11\n", 10)
+	if len(got) != 1 || got[0] != 11 {
+		t.Fatalf("pids = %v", got)
+	}
+	if len(focusPIDs("", 1)) != 0 {
+		t.Fatal("empty output focused a process")
+	}
+}
+
+func TestBundleNotifierReturnsDeliveryFailure(t *testing.T) {
+	prevReady, prevDeliver := notificationBundleReady, deliverNotification
+	t.Cleanup(func() {
+		notificationBundleReady, deliverNotification = prevReady, prevDeliver
+	})
+	notificationBundleReady = func() bool { return true }
+	deliverNotification = func(string, string, string) error {
+		return errors.New("notification was not delivered")
+	}
+	err := (bundleNotifier{}).Notify(context.Background(), userNotice{title: "Updater", body: "Updated: Firefox"})
+	if err == nil || !strings.Contains(err.Error(), "notification was not delivered") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestSendNotificationReturnsDeliveryFailure(t *testing.T) {
+	useNotifier(t, &recordingNotifier{err: errors.New("notification was not delivered")})
+	err := sendNotification(context.Background(), 1, "Firefox", "")
+	if err == nil || !strings.Contains(err.Error(), "failed to send notification") {
+		t.Fatalf("err = %v", err)
 	}
 }
 

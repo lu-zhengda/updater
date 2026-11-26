@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -74,6 +75,18 @@ func defaultNotificationBundleReady() bool {
 
 func executableInAppBundle(path string) bool {
 	return strings.Contains(path, ".app/Contents/MacOS/")
+}
+
+func focusPIDs(pgrepOut string, selfPID int) []int {
+	var pids []int
+	for _, field := range strings.Fields(pgrepOut) {
+		pid, err := strconv.Atoi(field)
+		if err != nil || pid <= 0 || pid == selfPID {
+			continue
+		}
+		pids = append(pids, pid)
+	}
+	return pids
 }
 
 func updateResultNotice(updated, failed []string) (userNotice, bool) {

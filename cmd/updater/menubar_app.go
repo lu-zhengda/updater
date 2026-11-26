@@ -439,9 +439,9 @@ func openUpdaterWindow() {
 		return
 	}
 
-	// Already open? The window process runs this same binary with the
+	// Already open? Focus that process. It runs this same binary with the
 	// "window" argument regardless of launch path.
-	if exec.Command("pgrep", "-f", self+" window").Run() == nil {
+	if focusExistingUpdaterWindow(self) {
 		return
 	}
 
@@ -458,6 +458,21 @@ func openUpdaterWindow() {
 		return
 	}
 	go func() { _ = cmd.Wait() }()
+}
+
+func focusExistingUpdaterWindow(self string) bool {
+	out, err := exec.Command("pgrep", "-f", self+" window").Output()
+	if err != nil {
+		return false
+	}
+	pids := focusPIDs(string(out), os.Getpid())
+	if len(pids) == 0 {
+		return false
+	}
+	for _, pid := range pids {
+		activateRunningApplication(pid)
+	}
+	return true
 }
 
 // onClick invokes fn on every click until the menu generation is replaced.
