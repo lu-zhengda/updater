@@ -267,6 +267,15 @@ func TestVendorCursorUsesMatchingCaskDigest(t *testing.T) {
 		t.Fatalf("digest not taken from the matching cask: %+v", got)
 	}
 
+	v.runner = &MockCmdRunner{Output: []byte(`{"casks":[{"token":"cursor","version":"3.32.4","sha256":"` + sum + `","url":"https://downloads.cursor.com/Cursor.dmg"}]}`)}
+	got, err = v.Check(context.Background(), a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.HasUpdate || got.DownloadDigest != "" {
+		t.Fatalf("digest from a different archive applied: %+v", got)
+	}
+
 	v.runner = &MockCmdRunner{Output: []byte(`{"casks":[{"token":"cursor","version":"1.0.0","sha256":"` + sum + `","url":"https://example.com/old.zip"}]}`)}
 	got, err = v.Check(context.Background(), a)
 	if err != nil {

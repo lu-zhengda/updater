@@ -172,14 +172,14 @@ func (v *VendorChecker) checkCursor(ctx context.Context, a *app.App) (*UpdateRes
 	}
 	return &UpdateResult{
 		App: a, Source: "vendor", CurrentVersion: a.Version, LatestVersion: release.Name,
-		DownloadURL: release.URL, DownloadDigest: v.matchingCaskDigest(ctx, a, release.Name),
+		DownloadURL: release.URL, DownloadDigest: v.matchingCaskDigest(ctx, a, release.Name, release.URL),
 		HasUpdate:     version.IsNewer(a.Version, release.Name),
 		IsMajorUpdate: version.IsMajorUpgrade(a.Version, release.Name),
 	}, nil
 }
 
-func (v *VendorChecker) matchingCaskDigest(ctx context.Context, a *app.App, latest string) string {
-	if v.runner == nil || latest == "" {
+func (v *VendorChecker) matchingCaskDigest(ctx context.Context, a *app.App, latest, download string) string {
+	if v.runner == nil || latest == "" || download == "" {
 		return ""
 	}
 	tokens := []string{}
@@ -205,12 +205,24 @@ func (v *VendorChecker) matchingCaskDigest(ctx context.Context, a *app.App, late
 			continue
 		}
 		artifact, err := parseBrewInfo(output)
-		if err != nil || strings.TrimPrefix(artifact.Version, "v") != strings.TrimPrefix(latest, "v") {
+		if err != nil || strings.TrimPrefix(artifact.Version, "v") != strings.TrimPrefix(latest, "v") || !sameDownloadURL(artifact.DownloadURL, download) {
 			continue
 		}
 		return artifact.DownloadDigest
 	}
 	return ""
+}
+
+func sameDownloadURL(left, right string) bool {
+	a, err := url.Parse(left)
+	if err != nil || a.Host == "" {
+		return false
+	}
+	b, err := url.Parse(right)
+	if err != nil || b.Host == "" {
+		return false
+	}
+	return strings.EqualFold(a.Scheme, b.Scheme) && strings.EqualFold(a.Host, b.Host) && a.Path == b.Path && a.RawQuery == b.RawQuery
 }
 
 func (v *VendorChecker) getRelease(ctx context.Context, endpoint string) (int, []byte, error) {
