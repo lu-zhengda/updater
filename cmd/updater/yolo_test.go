@@ -139,7 +139,12 @@ func TestYOLOModeLeavesManualActionsAvailable(t *testing.T) {
 			t.Errorf("%s was incorrectly marked updated", r.App.Name)
 		}
 	}
-	if len(runner.calls) != 3 { // mas attempt, App Store fallback, completion notification
+	if len(runner.calls) != 2 { // mas upgrade, then the App Store page
 		t.Fatalf("unexpected update attempts: %v", runner.calls)
+	}
+	for _, call := range runner.calls {
+		if strings.Contains(call, "osascript") || strings.Contains(call, "display notification") {
+			t.Fatalf("update flow shelled out to osascript: %v", runner.calls)
+		}
 	}
 }

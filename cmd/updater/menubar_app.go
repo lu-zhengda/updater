@@ -94,6 +94,7 @@ type menubarApp struct {
 }
 
 func menubarOnReady() {
+	requestNotificationPermission()
 	systray.SetTemplateIcon(generateIcon(), generateIcon())
 	systray.SetTooltip("Updater")
 
@@ -241,8 +242,7 @@ func (m *menubarApp) notifyNewUpdates(updatable []*checker.UpdateResult) {
 		msg = fmt.Sprintf("%s and %d more", strings.Join(fresh[:3], ", "), len(fresh)-3)
 	}
 	title := fmt.Sprintf("%d update(s) available", len(fresh))
-	script := fmt.Sprintf("display notification %q with title %q", msg, title)
-	_ = exec.Command("osascript", "-e", script).Run()
+	notifyUser(context.Background(), title, "", msg)
 }
 
 // rebuild replaces the entire menu. updatable is the current update list;
