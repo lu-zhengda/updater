@@ -57,8 +57,7 @@ func init() {
 				message = "Self-update failed: " + err.Error()
 			}
 			fmt.Fprintln(os.Stderr, message)
-			script := fmt.Sprintf(`display notification "%s" with title "Updater"`, escapeAppleScript(message))
-			_, _ = runner.Run(context.Background(), "osascript", "-e", script)
+			notifyUser(context.Background(), "Updater", "", message)
 			return err
 		},
 	})

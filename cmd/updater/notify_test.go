@@ -99,43 +99,38 @@ func TestBuildNotificationSubtitle(t *testing.T) {
 }
 
 func TestSendNotification(t *testing.T) {
-	captureRunner := &captureNotifyRunner{}
+	rec := &recordingNotifier{}
+	useNotifier(t, rec)
 
-	err := sendNotification(context.Background(), captureRunner, 3, "Firefox, Chrome, Safari", "")
+	err := sendNotification(context.Background(), 3, "Firefox, Chrome, Safari", "")
 	if err != nil {
 		t.Fatalf("sendNotification failed: %v", err)
 	}
-
-	if captureRunner.name != "osascript" {
-		t.Errorf("expected osascript, got %s", captureRunner.name)
+	if len(rec.notices) != 1 {
+		t.Fatalf("notices = %+v", rec.notices)
 	}
-	if len(captureRunner.args) < 2 {
-		t.Fatal("expected at least 2 args")
+	if rec.notices[0].title != "3 app update(s) available" {
+		t.Errorf("title = %q", rec.notices[0].title)
 	}
-	script := captureRunner.args[1]
-	if !strings.Contains(script, "display notification") {
-		t.Error("expected 'display notification' in script")
-	}
-	if !strings.Contains(script, "3 app update(s) available") {
-		t.Errorf("expected title in script, got: %s", script)
+	if rec.notices[0].body != "Firefox, Chrome, Safari" {
+		t.Errorf("body = %q", rec.notices[0].body)
 	}
 	// No subtitle when empty.
-	if strings.Contains(script, "subtitle") {
-		t.Error("expected no subtitle when empty string passed")
+	if rec.notices[0].subtitle != "" {
+		t.Errorf("subtitle = %q", rec.notices[0].subtitle)
 	}
 }
 
 func TestSendNotification_WithSubtitle(t *testing.T) {
-	captureRunner := &captureNotifyRunner{}
+	rec := &recordingNotifier{}
+	useNotifier(t, rec)
 
-	err := sendNotification(context.Background(), captureRunner, 2, "Firefox, Chrome", "1 major update")
+	err := sendNotification(context.Background(), 2, "Firefox, Chrome", "1 major update")
 	if err != nil {
 		t.Fatalf("sendNotification failed: %v", err)
 	}
-
-	script := captureRunner.args[1]
-	if !strings.Contains(script, `subtitle "1 major update"`) {
-		t.Errorf("expected subtitle in script, got: %s", script)
+	if len(rec.notices) != 1 || rec.notices[0].subtitle != "1 major update" || rec.notices[0].title != "2 app update(s) available" {
+		t.Fatalf("notice = %+v", rec.notices)
 	}
 }
 
@@ -232,18 +227,14 @@ func TestInteractiveNotificationsConfig(t *testing.T) {
 }
 
 func TestSendNotification_PassiveDefault(t *testing.T) {
-	captureRunner := &captureNotifyRunner{}
+	rec := &recordingNotifier{}
+	useNotifier(t, rec)
 
-	err := sendNotification(context.Background(), captureRunner, 1, "Firefox (120→121)", "")
+	err := sendNotification(context.Background(), 1, "Firefox (120→121)", "")
 	if err != nil {
 		t.Fatalf("sendNotification failed: %v", err)
 	}
-
-	script := captureRunner.args[1]
-	if !strings.Contains(script, "display notification") {
-		t.Error("expected 'display notification' (passive) for default mode")
-	}
-	if strings.Contains(script, "display dialog") {
-		t.Error("passive mode should NOT use 'display dialog'")
+	if len(rec.notices) != 1 || rec.notices[0].body != "Firefox (120→121)" {
+		t.Fatalf("notice = %+v", rec.notices)
 	}
 }

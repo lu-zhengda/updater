@@ -136,9 +136,9 @@ Secret names, the signing identity, and the notarization inputs are unchanged.
 Entitlements:
 
 - `com.apple.security.cs.allow-jit` and `com.apple.security.cs.allow-unsigned-executable-memory` — the Go runtime, including the cgo systray and WebKit code, maps executable memory. The hardened runtime kills the process without these. The universal binary needs both: arm64 uses JIT mapping, amd64 uses writable executable pages.
-- `com.apple.security.automation.apple-events` — notifications, moving an app to the Trash, and package-install prompts go through `osascript`. The hardened runtime blocks Apple Events without this entitlement.
+- `com.apple.security.automation.apple-events` — moving an app to the Trash, package-install prompts, and the optional interactive dialog go through `osascript`. The hardened runtime blocks Apple Events without this entitlement. Banners use UserNotifications and do not need it.
 
-Library validation stays on. The binary links Apple system frameworks (Cocoa, WebKit) and does not load a third-party dylib. `com.apple.security.get-task-allow` is not set; notarization rejects it.
+Library validation stays on. The binary links Apple system frameworks (Cocoa, WebKit, UserNotifications) and does not load a third-party dylib. `com.apple.security.get-task-allow` is not set; notarization rejects it.
 
 `scripts/mkdmg.sh` copies that stapled app with `ditto`, adds a symlink to `/Applications`, and creates a UDZO APFS image with volume name `Updater`. It signs the image with `codesign --force --sign <identity> --timestamp`. A disk image is not an executable, so this signature does not use the hardened runtime or the app entitlements. `--keychain` is the same temporary keychain. When `NOTARIZE=1`, the script submits the DMG itself to `notarytool` (it is not zipped), staples the ticket onto the image, and mounts the image to check that the app inside still verifies, is stapled, and passes `spctl --assess --type execute`. The app and the image are separate notarizations, so a download of either one can be checked offline.
 

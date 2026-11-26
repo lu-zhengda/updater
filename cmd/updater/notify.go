@@ -82,7 +82,7 @@ func runNotify(cmd *cobra.Command, _ []string) error {
 	if interactive {
 		notifyErr = sendInteractiveNotification(ctx, runner, len(updatable), body)
 	} else {
-		notifyErr = sendNotification(ctx, runner, len(updatable), body, subtitle)
+		notifyErr = sendNotification(ctx, len(updatable), body, subtitle)
 	}
 
 	updated, failed := []string{}, []string{}
@@ -169,16 +169,8 @@ func autoUpdateAfterNotify(ctx context.Context, cfg *config.Config, updatable []
 		}
 	}
 
-	if len(updated)+len(failed) > 0 {
-		var parts []string
-		if len(updated) > 0 {
-			parts = append(parts, "Updated: "+strings.Join(updated, ", "))
-		}
-		if len(failed) > 0 {
-			parts = append(parts, "Needs attention: "+strings.Join(failed, ", "))
-		}
-		script := fmt.Sprintf(`display notification "%s" with title "Updater"`, escapeAppleScript(strings.Join(parts, ". ")))
-		_, _ = runner.Run(ctx, "osascript", "-e", script)
+	if notice, ok := updateResultNotice(updated, failed); ok {
+		notifyUser(ctx, notice.title, notice.subtitle, notice.body)
 	}
 	return updated, failed
 }
@@ -220,19 +212,14 @@ func buildNotificationSubtitle(results []*checker.UpdateResult) string {
 	}
 }
 
-// sendNotification sends a macOS notification via osascript.
+// sendNotification posts a banner for available updates.
 // subtitle is optional; if non-empty it is included in the notification.
-func sendNotification(ctx context.Context, runner checker.CmdRunner, count int, body, subtitle string) error {
+func sendNotification(ctx context.Context, count int, body, subtitle string) error {
 	title := fmt.Sprintf("%d app update(s) available", count)
-	script := fmt.Sprintf(`display notification "%s" with title "%s"`,
-		escapeAppleScript(body), escapeAppleScript(title))
-	if subtitle != "" {
-		script = fmt.Sprintf(`display notification "%s" with title "%s" subtitle "%s"`,
-			escapeAppleScript(body), escapeAppleScript(title), escapeAppleScript(subtitle))
+	if appNotifier == nil {
+		return nil
 	}
-
-	_, err := runner.Run(ctx, "osascript", "-e", script)
-	if err != nil {
+	if err := appNotifier.Notify(ctx, userNotice{title: title, subtitle: subtitle, body: body}); err != nil {
 		return fmt.Errorf("failed to send notification: %w", err)
 	}
 	return nil
