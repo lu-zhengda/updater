@@ -283,6 +283,56 @@ func (f CmdRunnerFunc) Run(ctx context.Context, name string, args ...string) ([]
 	return f(ctx, name, args...)
 }
 
+func TestVendorFormatsHaveCapturedFixtures(t *testing.T) {
+	setTestArchitecture(t, "arm64")
+	t.Run("vscode", func(t *testing.T) {
+		body := vendorFixture(t, "vscode-update.json")
+		var gotPath string
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			gotPath = r.URL.Path
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write(body)
+		}))
+		t.Cleanup(srv.Close)
+		a := vendorCodeApp(t, "stable")
+		a.ElectronUpdateURL = srv.URL
+		a.Version = "1.0.0"
+		got, err := NewVendorChecker(srv.Client()).Check(context.Background(), a)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if gotPath != "/api/update/darwin-arm64/stable/latest" || got.LatestVersion != "1.148.0" || !strings.Contains(got.DownloadURL, "VSCode-darwin-arm64.zip") || !strings.HasPrefix(got.DownloadDigest, "sha256:") {
+			t.Fatalf("vscode fixture: path %s result %+v", gotPath, got)
+		}
+	})
+	t.Run("squirrel", func(t *testing.T) {
+		body := vendorFixture(t, "squirrel-releases.json")
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/releases/darwin/universal/RELEASES.json" {
+				http.NotFound(w, r)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write(body)
+		}))
+		t.Cleanup(srv.Close)
+		a := &app.App{Name: "Claude", BundleID: "com.anthropic.claudefordesktop", Version: "1.0.0", Source: app.SourceElectron,
+			ElectronUpdateURL: srv.URL + "/releases/darwin/universal/RELEASES.json", ElectronUpdateFormat: "squirrel"}
+		got, err := NewVendorChecker(srv.Client()).Check(context.Background(), a)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !got.HasUpdate || got.LatestVersion != "7.37095.0" || !strings.Contains(got.DownloadURL, "Claude-bc368c812ec26d3a5740519cc4d5cb69bbe43025.zip") {
+			t.Fatalf("squirrel fixture: %+v", got)
+		}
+	})
+	for _, name := range []string{"cursor-update.json", "cursor-current.txt", "cursor-not-found.json"} {
+		if len(vendorFixture(t, name)) == 0 && name != "cursor-current.txt" {
+			t.Fatalf("empty fixture %s", name)
+		}
+	}
+}
+
 func TestVendorDoesNotClaimManagedOrUnrelatedApps(t *testing.T) {
 	v := NewVendorChecker(nil)
 	for _, a := range []*app.App{

@@ -213,6 +213,7 @@ func (m *menubarApp) runCheck(ctx context.Context) ([]*checker.UpdateResult, err
 
 	var updatable []*checker.UpdateResult
 	for _, r := range results {
+		r.ReleaseVendorFailure()
 		if r.HasUpdate && r.Error == nil && !cfg.IsPinned(r.App.BundleID) && !cfg.IsIgnored(r.App.BundleID) {
 			updatable = append(updatable, r)
 		}

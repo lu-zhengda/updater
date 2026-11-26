@@ -75,6 +75,12 @@ type App struct {
 	enrichmentBaseline     *enrichmentBaseline
 }
 
+// QuietVendorCheck reports a vendor-feed app whose failed check is logged and
+// retried on the next scan instead of shown as a failed check.
+func (a *App) QuietVendorCheck() bool {
+	return a != nil && a.ElectronUpdateFormat != "" && !a.InstalledViaBrew && !a.SourceOverrideActive
+}
+
 func (a *App) IsBrewCLICask() bool {
 	return strings.HasPrefix(a.BundleID, BrewCaskIDPrefix)
 }

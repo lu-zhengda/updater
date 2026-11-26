@@ -109,8 +109,10 @@ function render() {
     else if (e.status === "pinned")
       stateHtml = '<span class="dot pin">●</span><span class="msg">pinned</span>' +
         '<button class="mini" onclick="doUnpin(\'' + esc(e.bundle_id) + '\')">Unpin</button>';
-    else if (e.status === "error")
+    else if (e.status === "error" && e.source !== "vendor")
       stateHtml = '<span class="dot err">●</span><span class="msg err" title="' + esc(e.error || "") + '">check failed</span>';
+    else if (e.status === "error")
+      stateHtml = '<span class="dot ok">●</span>';
     else stateHtml = '<span class="dot ok">●</span>';
 
     const ver = e.status === "update_available" || e.status === "pinned"

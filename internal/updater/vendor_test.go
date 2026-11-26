@@ -47,8 +47,8 @@ func TestInstalledChannelChoosesVendorOrHomebrew(t *testing.T) {
 				t.Fatalf("Homebrew-owned checkers = %v, want brew then brew-info", brewOwned)
 			}
 			standalone := names(desktop(false))
-			if len(standalone) != 1 || standalone[0] != "vendor" {
-				t.Fatalf("standalone checkers = %v, want the packaged vendor feed", standalone)
+			if len(standalone) != 2 || standalone[0] != "vendor" || standalone[1] != "brew-info" {
+				t.Fatalf("standalone checkers = %v, want vendor then brew-info", standalone)
 			}
 		})
 	}
