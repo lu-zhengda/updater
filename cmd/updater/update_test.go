@@ -839,3 +839,29 @@ func TestExecuteUpdate_GitHubWithoutAssetOrUpdaterStillFails(t *testing.T) {
 		t.Fatalf("executeUpdate() = %v, ran %q; want no-download error", err, runner.name)
 	}
 }
+
+func TestExecuteUpdate_GitHubHandoffReportsLaunchFailure(t *testing.T) {
+	bundle := filepath.Join(t.TempDir(), "App.app")
+	if err := os.MkdirAll(filepath.Join(bundle, "Contents", "Frameworks", "Squirrel.framework"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	result := &checker.UpdateResult{App: &app.App{Name: "App", Path: bundle}, Source: "github", LatestVersion: "2.0.0", HasUpdate: true}
+	err, _ := executeUpdate(context.Background(), result, &checker.MockCmdRunner{Err: errors.New("launch failed")}, nil, nil)
+	if err == nil || errors.Is(err, checker.ErrOpenedExternally) {
+		t.Fatalf("executeUpdate() = %v, want launch error", err)
+	}
+}
+
+func TestAutoUpdateSkipsGitHubWithoutDownload(t *testing.T) {
+	cfg := &config.Config{}
+	for _, source := range []string{"github", "sparkle"} {
+		r := &checker.UpdateResult{App: &app.App{BundleID: "com.example.app"}, Source: source, LatestVersion: "2.0.0", HasUpdate: true}
+		if got := autoUpdateSkipReason(r, cfg); got != "no installable download" {
+			t.Errorf("%s without download: skip reason = %q", source, got)
+		}
+		r.DownloadURL = "https://example.com/app.dmg"
+		if got := autoUpdateSkipReason(r, cfg); got != "" {
+			t.Errorf("%s with download: skip reason = %q", source, got)
+		}
+	}
+}
