@@ -178,3 +178,17 @@ func readASARJSON(path, name string) ([]byte, error) {
 	_, err = f.ReadAt(data, 8+headerSize+offset)
 	return data, err
 }
+
+// HasBuiltInUpdater reports whether the bundle ships its own updater:
+// Sparkle, Squirrel.Mac, or electron-updater's app-update.yml.
+func HasBuiltInUpdater(bundlePath string) bool {
+	if bundlePath == "" {
+		return false
+	}
+	for _, rel := range []string{"Frameworks/Sparkle.framework", "Frameworks/Squirrel.framework", "Resources/app-update.yml"} {
+		if _, err := os.Stat(filepath.Join(bundlePath, "Contents", rel)); err == nil {
+			return true
+		}
+	}
+	return false
+}

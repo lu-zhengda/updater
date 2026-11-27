@@ -192,14 +192,15 @@ var macExtensions = []string{".dmg", ".pkg", ".zip"}
 var macKeywords = []string{"mac", "darwin", "macos", "osx"}
 
 // findMacAsset searches the release assets for a macOS download.
-// It looks for assets with macOS file extensions (.dmg, .pkg, .zip) that
-// also contain a macOS keyword (mac, darwin, macos, osx) in their name.
+// A .dmg or .pkg is a macOS installer by format. A .zip must also name
+// macOS (mac, darwin, macos, osx), because Windows builds ship zips too.
 func findMacAsset(assets []GitHubAsset) GitHubAsset {
 	var best GitHubAsset
 	bestScore := 0
 	for _, asset := range assets {
 		nameLower := strings.ToLower(asset.Name)
-		if hasMacExtension(nameLower) && hasMacKeyword(nameLower) {
+		macInstaller := strings.HasSuffix(nameLower, ".dmg") || strings.HasSuffix(nameLower, ".pkg")
+		if hasMacExtension(nameLower) && (macInstaller || hasMacKeyword(nameLower)) {
 			if score := architecture.Score(nameLower, architecture.Native()); score > bestScore {
 				best, bestScore = asset, score
 			}

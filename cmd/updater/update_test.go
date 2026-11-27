@@ -802,3 +802,66 @@ func TestPerformUpdate_ExplicitOverridePrintsCanonicalSourceLabel(t *testing.T) 
 		t.Fatalf("expected live update line to show canonical override source, got %q", buf.String())
 	}
 }
+
+func TestExecuteUpdate_GitHubWithoutAssetHandsOffToBuiltInUpdater(t *testing.T) {
+	bundle := filepath.Join(t.TempDir(), "T3 Code (Beta).app")
+	if err := os.MkdirAll(filepath.Join(bundle, "Contents", "Resources"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bundle, "Contents", "Resources", "app-update.yml"), []byte("provider: github\nowner: pingdotgg\nrepo: t3code\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	result := &checker.UpdateResult{
+		App:    &app.App{Name: "T3 Code (Beta)", Path: bundle, GitHubRepo: "pingdotgg/t3code"},
+		Source: "github", CurrentVersion: "0.1.12", LatestVersion: "0.1.13", HasUpdate: true,
+	}
+	if got := describeAction(result); got != "open app for self-update" {
+		t.Fatalf("describeAction() = %q, want open app for self-update", got)
+	}
+	runner := &captureUpdateRunner{}
+	err, rolledBack := executeUpdate(context.Background(), result, runner, nil, nil)
+	if !errors.Is(err, checker.ErrOpenedExternally) || rolledBack {
+		t.Fatalf("executeUpdate() = %v, rolled back %v; want handoff", err, rolledBack)
+	}
+	if runner.name != "open" || strings.Join(runner.args, " ") != "-a "+bundle {
+		t.Fatalf("command = %s %v, want open -a %s", runner.name, runner.args, bundle)
+	}
+}
+
+func TestExecuteUpdate_GitHubWithoutAssetOrUpdaterStillFails(t *testing.T) {
+	result := &checker.UpdateResult{
+		App:    &app.App{Name: "Tool", Path: filepath.Join(t.TempDir(), "Tool.app")},
+		Source: "github", LatestVersion: "2.0.0", HasUpdate: true,
+	}
+	runner := &captureUpdateRunner{}
+	err, _ := executeUpdate(context.Background(), result, runner, nil, nil)
+	if err == nil || errors.Is(err, checker.ErrOpenedExternally) || runner.name != "" {
+		t.Fatalf("executeUpdate() = %v, ran %q; want no-download error", err, runner.name)
+	}
+}
+
+func TestExecuteUpdate_GitHubHandoffReportsLaunchFailure(t *testing.T) {
+	bundle := filepath.Join(t.TempDir(), "App.app")
+	if err := os.MkdirAll(filepath.Join(bundle, "Contents", "Frameworks", "Squirrel.framework"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	result := &checker.UpdateResult{App: &app.App{Name: "App", Path: bundle}, Source: "github", LatestVersion: "2.0.0", HasUpdate: true}
+	err, _ := executeUpdate(context.Background(), result, &checker.MockCmdRunner{Err: errors.New("launch failed")}, nil, nil)
+	if err == nil || errors.Is(err, checker.ErrOpenedExternally) {
+		t.Fatalf("executeUpdate() = %v, want launch error", err)
+	}
+}
+
+func TestAutoUpdateSkipsGitHubWithoutDownload(t *testing.T) {
+	cfg := &config.Config{}
+	for _, source := range []string{"github", "sparkle"} {
+		r := &checker.UpdateResult{App: &app.App{BundleID: "com.example.app"}, Source: source, LatestVersion: "2.0.0", HasUpdate: true}
+		if got := autoUpdateSkipReason(r, cfg); got != "no installable download" {
+			t.Errorf("%s without download: skip reason = %q", source, got)
+		}
+		r.DownloadURL = "https://example.com/app.dmg"
+		if got := autoUpdateSkipReason(r, cfg); got != "" {
+			t.Errorf("%s with download: skip reason = %q", source, got)
+		}
+	}
+}
