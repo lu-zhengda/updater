@@ -5,7 +5,10 @@
 # The cask version in lu-zhengda/homebrew-tap Casks/updater.rb must equal
 # the tag without its leading v. The cask tarball URL and
 # Updater-<version>.dmg must each download anonymously with HTTP 200 and
-# a body larger than 1 MiB (1048576 bytes).
+# a body larger than 1 MiB (1048576 bytes). The cask sha256 must equal the
+# SHA-256 of the downloaded tarball, and checksums.txt must list the SHA-256
+# of the downloaded DMG, so a cask or DMG that does not match what shipped
+# fails the run.
 #
 # GitHub's contents API advertises a 60s shared cache, and release assets
 # redirect through a CDN. This retries at most 7 times, sleeping 10s
@@ -88,6 +91,7 @@ if ! is_component "$major" || ! is_component "$minor" || ! is_component "$patch"
 	exit 2
 fi
 
+checksums_url="https://github.com/lu-zhengda/updater/releases/download/v${version}/checksums.txt"
 tarball_url="https://github.com/lu-zhengda/updater/releases/download/v${version}/updater_${version}_darwin.tar.gz"
 dmg_url="https://github.com/lu-zhengda/updater/releases/download/v${version}/Updater-${version}.dmg"
 
@@ -123,6 +127,14 @@ fetch() {
 		return 1
 	fi
 	return 0
+}
+
+sha256_of() {
+	if command -v sha256sum >/dev/null 2>&1; then
+		sha256sum "$1" | awk '{ print $1 }'
+	else
+		shasum -a 256 "$1" | awk '{ print $1 }'
+	fi
 }
 
 last_size=
@@ -168,10 +180,25 @@ verify_once() {
 		return 1
 	fi
 	tarball_bytes=$last_size
+	want_sha=$(awk -F '"' '$1 ~ /^[[:space:]]*sha256 / { print $2; exit }' "$work/cask.rb" | tr -d '\r')
+	got_sha=$(sha256_of "$work/tarball")
+	if [ "$want_sha" != "$got_sha" ]; then
+		echo "attempt $attempt/$attempts: cask sha256 [${want_sha:-missing}] != tarball sha256 [$got_sha]" >&2
+		return 1
+	fi
 	if ! check_asset dmg "$work/dmg" "$dmg_url"; then
 		return 1
 	fi
 	dmg_bytes=$last_size
+	if ! fetch checksums "$work/checksums.txt" 20 "$checksums_url"; then
+		return 1
+	fi
+	dmg_sha=$(sha256_of "$work/dmg")
+	listed_sha=$(awk -v f="Updater-${version}.dmg" '$2 == f { print $1; exit }' "$work/checksums.txt" | tr -d '\r')
+	if [ "$listed_sha" != "$dmg_sha" ]; then
+		echo "attempt $attempt/$attempts: checksums.txt dmg sha256 [${listed_sha:-missing}] != dmg sha256 [$dmg_sha]" >&2
+		return 1
+	fi
 	echo "PASS verify-published-release version=$version tarball_bytes=$tarball_bytes dmg_bytes=$dmg_bytes"
 	return 0
 }
