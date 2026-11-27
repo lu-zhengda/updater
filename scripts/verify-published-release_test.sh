@@ -1,6 +1,7 @@
 #!/bin/sh
 # Proves verify-published-release.sh fails closed on a stale cask, a bad
-# tarball URL, a non-200 download, and a body that is not larger than 1 MiB.
+# tarball URL, a non-200 download, a body that is not larger than 1 MiB, a cask
+# sha256 that is not the tarball's, and a DMG missing from or wrong in checksums.txt.
 # Curl is a fixture. No network and no credentials.
 # shellcheck shell=sh
 set -eu
@@ -20,9 +21,25 @@ count=$tmp/curl.count
 bin=$tmp/bin
 mkdir -p "$bin"
 
-cat >"$tmp/good.rb" <<'EOF'
+# The fixture curl writes this body for both assets.
+dd if=/dev/zero of="$tmp/big" bs=1048577 count=1 >/dev/null 2>&1
+if command -v sha256sum >/dev/null 2>&1; then
+	big_sha=$(sha256sum "$tmp/big" | awk '{ print $1 }')
+else
+	big_sha=$(shasum -a 256 "$tmp/big" | awk '{ print $1 }')
+fi
+export FIX_BIG_SHA=$big_sha
+cat >"$tmp/good.rb" <<EOF
 cask "updater" do
   version "0.25.0"
+  sha256 "$big_sha"
+  url "https://github.com/lu-zhengda/updater/releases/download/v#{version}/updater_#{version}_darwin.tar.gz"
+end
+EOF
+cat >"$tmp/bad-sha.rb" <<'EOF'
+cask "updater" do
+  version "0.25.0"
+  sha256 "0000000000000000000000000000000000000000000000000000000000000000"
   url "https://github.com/lu-zhengda/updater/releases/download/v#{version}/updater_#{version}_darwin.tar.gz"
 end
 EOF
@@ -93,8 +110,32 @@ case $url in
 		cp "$FIX_BAD_URL" "$out"
 		printf '%s' 200
 		;;
+	bad-sha)
+		cp "$FIX_BAD_SHA" "$out"
+		printf '%s' 200
+		;;
 	*)
 		cp "$FIX_GOOD" "$out"
+		printf '%s' 200
+		;;
+	esac
+	;;
+*checksums.txt)
+	case $FIX_MODE in
+	checksums-404)
+		printf '%s' nope >"$out"
+		printf '%s' 404
+		;;
+	checksums-wrong)
+		printf '%s  %s\n' 1111111111111111111111111111111111111111111111111111111111111111 Updater-0.25.0.dmg >"$out"
+		printf '%s' 200
+		;;
+	checksums-missing)
+		printf '%s  %s\n' "$FIX_BIG_SHA" updater_0.25.0_darwin.tar.gz >"$out"
+		printf '%s' 200
+		;;
+	*)
+		printf '%s  %s\n%s  %s\n' "$FIX_BIG_SHA" Updater-0.25.0.dmg "$FIX_BIG_SHA" updater_0.25.0_darwin.tar.gz >"$out"
 		printf '%s' 200
 		;;
 	esac
@@ -145,6 +186,7 @@ export FIX_COUNT=$count
 export FIX_GOOD=$tmp/good.rb
 export FIX_OLD=$tmp/old.rb
 export FIX_BAD_URL=$tmp/bad-url.rb
+export FIX_BAD_SHA=$tmp/bad-sha.rb
 
 run() {
 	name=$1
@@ -216,11 +258,18 @@ grep -F 'FAIL verify-published-release after 2 attempts' "$tmp/stale-cask.err" >
 run bad-url bad-url v0.25.0 1 "not-the-asset.tar.gz" 1
 grep -F 'Updater-0.25.0.dmg' "$log" >/dev/null && fail "bad cask url still downloaded the dmg"
 
+run bad-sha bad-sha v0.25.0 1 "cask sha256 [0000000000000000000000000000000000000000000000000000000000000000] != tarball sha256" 1
+grep -F 'Updater-0.25.0.dmg' "$log" >/dev/null && fail "bad cask sha256 still downloaded the dmg"
+
 run tarball-404 tarball-404 v0.25.0 1 "tarball HTTP 404" 1
 grep -F 'Updater-0.25.0.dmg' "$log" >/dev/null && fail "failed tarball still downloaded the dmg"
 
 run dmg-small dmg-small v0.25.0 1 "dmg HTTP 200 size 4, want > 1048576" 1
 run dmg-exact dmg-exact v0.25.0 1 "dmg HTTP 200 size 1048576, want > 1048576" 1
+
+run checksums-404 checksums-404 v0.25.0 1 "checksums HTTP 404" 1
+run checksums-wrong checksums-wrong v0.25.0 1 "checksums.txt dmg sha256 [1111111111111111111111111111111111111111111111111111111111111111] != dmg sha256" 1
+run checksums-missing checksums-missing v0.25.0 1 "checksums.txt dmg sha256 [missing] != dmg sha256" 1
 
 run retry retry-version v0.25.0 0 "PASS verify-published-release version=0.25.0" 3
 cask_calls=$(grep -c 'Casks/updater.rb' "$log" || true)
