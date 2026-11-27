@@ -1,0 +1,142 @@
+{
+  "tag_name": "v0.1.13",
+  "name": "T3 Code v0.1.13",
+  "body": "Release notes trimmed for the fixture.",
+  "assets": [
+    {
+      "name": "builder-debug.yml",
+      "browser_download_url": "https://github.com/pingdotgg/t3code/releases/download/v0.1.13/builder-debug.yml",
+      "digest": "sha256:2ccb12b16e2c3197b90df46bfc0e4eabc107c3f335412e8a556b676c6ff12010"
+    },
+    {
+      "name": "latest-linux-arm64.yml",
+      "browser_download_url": "https://github.com/pingdotgg/t3code/releases/download/v0.1.13/latest-linux-arm64.yml",
+      "digest": "sha256:00c82276b15b5827fed522840c6672e539ffc99ed11af2782da146e53a460a55"
+    },
+    {
+      "name": "latest-linux.yml",
+      "browser_download_url": "https://github.com/pingdotgg/t3code/releases/download/v0.1.13/latest-linux.yml",
+      "digest": "sha256:f02ce451eea5276cfed222b9706d8b355be4eda7bba294509b49e38afbd42f4d"
+    },
+    {
+      "name": "latest-mac.yml",
+      "browser_download_url": "https://github.com/pingdotgg/t3code/releases/download/v0.1.13/latest-mac.yml",
+      "digest": "sha256:4ecd17294dabfe39e679214b78e74340e26e63e891be56cfb01ae768aff2e02c"
+    },
+    {
+      "name": "latest.yml",
+      "browser_download_url": "https://github.com/pingdotgg/t3code/releases/download/v0.1.13/latest.yml",
+      "digest": "sha256:ddcd7cd331f2d3083db16a5614417917370aca02b44e383cac937f1273c323ae"
+    },
+    {
+      "name": "SHA256SUMS",
+      "browser_download_url": "https://github.com/pingdotgg/t3code/releases/download/v0.1.13/SHA256SUMS",
+      "digest": "sha256:79b81212bfe6c19e1997220e58f5c6216807e823d43bf49cf8824c0768ea9df6"
+    },
+    {
+      "name": "t3-0.1.13-darwin-arm64.tar.gz",
+      "browser_download_url": "https://github.com/pingdotgg/t3code/releases/download/v0.1.13/t3-0.1.13-darwin-arm64.tar.gz",
+      "digest": "sha256:d83b2e1ef9557e12f340a7299646203cdcdd5ee0af3272e6922c26410cfef396"
+    },
+    {
+      "name": "t3-0.1.13-linux-arm64.tar.gz",
+      "browser_download_url": "https://github.com/pingdotgg/t3code/releases/download/v0.1.13/t3-0.1.13-linux-arm64.tar.gz",
+      "digest": "sha256:c553c17db07030d032808989427db5022bf04027ebcec2218c69fb1a5fa1377f"
+    },
+    {
+      "name": "t3-0.1.13-linux-x64.tar.gz",
+      "browser_download_url": "https://github.com/pingdotgg/t3code/releases/download/v0.1.13/t3-0.1.13-linux-x64.tar.gz",
+      "digest": "sha256:64e0f8446d3f618b157d4e5a0a6808ab3c8bf1a1b3e44eab3100e554be05e5d7"
+    },
+    {
+      "name": "t3-0.1.13-win32-arm64.zip",
+      "browser_download_url": "https://github.com/pingdotgg/t3code/releases/download/v0.1.13/t3-0.1.13-win32-arm64.zip",
+      "digest": "sha256:209fc2194e4dff36f15a6af92bb849e2d5e9ca3a7b5bfd553e0d48b1985dd0ee"
+    },
+    {
+      "name": "t3-0.1.13-win32-x64.zip",
+      "browser_download_url": "https://github.com/pingdotgg/t3code/releases/download/v0.1.13/t3-0.1.13-win32-x64.zip",
+      "digest": "sha256:691457b9fb0fec2de132a0da1e801997a79e9be9c148981d291c37bf6d312a3e"
+    },
+    {
+      "name": "T3-Code-0.1.13-amd64.deb",
+      "browser_download_url": "https://github.com/pingdotgg/t3code/releases/download/v0.1.13/T3-Code-0.1.13-amd64.deb",
+      "digest": "sha256:630dfe9d041b42622d9e5d5b1138b3f1068136eb12af85ec34d491e33aeaa061"
+    },
+    {
+      "name": "T3-Code-0.1.13-arm64.deb",
+      "browser_download_url": "https://github.com/pingdotgg/t3code/releases/download/v0.1.13/T3-Code-0.1.13-arm64.deb",
+      "digest": "sha256:34ce948112c9d52891464fac2d4f61ddaabf94bbf1c706902156b822e32151d7"
+    },
+    {
+      "name": "T3-Code-0.1.13-arm64.dmg",
+      "browser_download_url": "https://github.com/pingdotgg/t3code/releases/download/v0.1.13/T3-Code-0.1.13-arm64.dmg",
+      "digest": "sha256:dfdc4e87a7e56ac11fb5c7ec3cf608db854b3e9c4f755acc75b13f266a9478fa"
+    },
+    {
+      "name": "T3-Code-0.1.13-arm64.dmg.blockmap",
+      "browser_download_url": "https://github.com/pingdotgg/t3code/releases/download/v0.1.13/T3-Code-0.1.13-arm64.dmg.blockmap",
+      "digest": "sha256:f57b5e80f214c10fb7b3bb3f439e82dbdaa5751373fac3bf888b00bb2ab4ec21"
+    },
+    {
+      "name": "T3-Code-0.1.13-arm64.exe",
+      "browser_download_url": "https://github.com/pingdotgg/t3code/releases/download/v0.1.13/T3-Code-0.1.13-arm64.exe",
+      "digest": "sha256:76969a54c2b68e18e9d93badb8ec63b8b958f8dd872d73e947cb49f4a90c4b93"
+    },
+    {
+      "name": "T3-Code-0.1.13-arm64.exe.blockmap",
+      "browser_download_url": "https://github.com/pingdotgg/t3code/releases/download/v0.1.13/T3-Code-0.1.13-arm64.exe.blockmap",
+      "digest": "sha256:72e87f9377f50c5710afe91db2c98ab8b110deb15d4069aab4a1d9376ac13240"
+    },
+    {
+      "name": "T3-Code-0.1.13-arm64.zip",
+      "browser_download_url": "https://github.com/pingdotgg/t3code/releases/download/v0.1.13/T3-Code-0.1.13-arm64.zip",
+      "digest": "sha256:7f46fd2b07c90e6fedb623f4725bc4030ca6e86ce82f69a485ad4928ca89350d"
+    },
+    {
+      "name": "T3-Code-0.1.13-arm64.zip.blockmap",
+      "browser_download_url": "https://github.com/pingdotgg/t3code/releases/download/v0.1.13/T3-Code-0.1.13-arm64.zip.blockmap",
+      "digest": "sha256:d48cdfb2ee39b81ed8b7838e70f7a341be46ca5866655c4b8cc52386751a1176"
+    },
+    {
+      "name": "T3-Code-0.1.13-x64.dmg",
+      "browser_download_url": "https://github.com/pingdotgg/t3code/releases/download/v0.1.13/T3-Code-0.1.13-x64.dmg",
+      "digest": "sha256:cda3b96851cd2eceaab33ba8a96357a2644710d970c145ec6770e4924b3e36a2"
+    },
+    {
+      "name": "T3-Code-0.1.13-x64.dmg.blockmap",
+      "browser_download_url": "https://github.com/pingdotgg/t3code/releases/download/v0.1.13/T3-Code-0.1.13-x64.dmg.blockmap",
+      "digest": "sha256:f059c2afad81bbfb4f27a9499903c939af8ca18bc28b057181c4f46b73f9c0bc"
+    },
+    {
+      "name": "T3-Code-0.1.13-x64.exe",
+      "browser_download_url": "https://github.com/pingdotgg/t3code/releases/download/v0.1.13/T3-Code-0.1.13-x64.exe",
+      "digest": "sha256:244f6992aade889b9fae763d8bc41d194992d8f89f70d9a3fdbbfab15ba68594"
+    },
+    {
+      "name": "T3-Code-0.1.13-x64.exe.blockmap",
+      "browser_download_url": "https://github.com/pingdotgg/t3code/releases/download/v0.1.13/T3-Code-0.1.13-x64.exe.blockmap",
+      "digest": "sha256:3fd257f2b04eb372b93cf71c1aabb5ec09300a58fefe76190b1b2a0b6068b435"
+    },
+    {
+      "name": "T3-Code-0.1.13-x64.zip",
+      "browser_download_url": "https://github.com/pingdotgg/t3code/releases/download/v0.1.13/T3-Code-0.1.13-x64.zip",
+      "digest": "sha256:b535e02351687eb17697003cfc4e55b66f6ee03114f11df86834724e25145e20"
+    },
+    {
+      "name": "T3-Code-0.1.13-x64.zip.blockmap",
+      "browser_download_url": "https://github.com/pingdotgg/t3code/releases/download/v0.1.13/T3-Code-0.1.13-x64.zip.blockmap",
+      "digest": "sha256:1cbe704e954c1829ce3323f54be1c15a9817968315a2e5c5559c9493666d455b"
+    },
+    {
+      "name": "T3-Code-arm64.AppImage",
+      "browser_download_url": "https://github.com/pingdotgg/t3code/releases/download/v0.1.13/T3-Code-arm64.AppImage",
+      "digest": "sha256:47156eade4d3e8c635554f859a590e15614d63b6d9792dd7684bdecae365ec41"
+    },
+    {
+      "name": "T3-Code-x86_64.AppImage",
+      "browser_download_url": "https://github.com/pingdotgg/t3code/releases/download/v0.1.13/T3-Code-x86_64.AppImage",
+      "digest": "sha256:dac1bbe9e93c1a5fb0942332befa998597f6a086232a87766ef5d8235a44f56d"
+    }
+  ]
+}

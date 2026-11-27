@@ -6,6 +6,8 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -423,5 +425,54 @@ func TestGitHubChecker_FindMacAsset(t *testing.T) {
 				t.Errorf("findMacAsset() = %s, want %s", got.DownloadURL, tt.want)
 			}
 		})
+	}
+}
+
+func TestGitHubCheckerT3CodeRelease(t *testing.T) {
+	fixture, err := os.ReadFile(filepath.Join("testdata", "t3code-release.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(fixture)
+	}))
+	defer ts.Close()
+	for arch, want := range map[string]string{"arm64": "T3-Code-0.1.13-arm64.dmg", "amd64": "T3-Code-0.1.13-x64.dmg"} {
+		t.Run(arch, func(t *testing.T) {
+			setTestArchitecture(t, arch)
+			a := &app.App{Name: "T3 Code (Beta)", Version: "0.1.12", GitHubRepo: "pingdotgg/t3code"}
+			r, err := NewGitHubChecker(ts.Client(), ts.URL, "").Check(context.Background(), a)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !r.HasUpdate || r.LatestVersion != "0.1.13" {
+				t.Fatalf("result = %+v, want update to 0.1.13", r)
+			}
+			if !strings.HasSuffix(r.DownloadURL, "/"+want) || !strings.HasPrefix(r.DownloadDigest, "sha256:") {
+				t.Fatalf("download = %q %q, want %s with digest", r.DownloadURL, r.DownloadDigest, want)
+			}
+		})
+	}
+}
+
+func TestFindMacAssetUnlabeledInstallers(t *testing.T) {
+	setTestArchitecture(t, "arm64")
+	for _, tc := range []struct {
+		assets []string
+		want   string
+	}{
+		{[]string{"app-1.0-win32-arm64.zip", "app-1.0-arm64.zip", "app-1.0-arm64.dmg"}, "app-1.0-arm64.dmg"},
+		{[]string{"app-1.0-x64.dmg", "app-1.0-arm64.pkg"}, "app-1.0-arm64.pkg"},
+		{[]string{"app-1.0-arm64.zip", "app-1.0-arm64.exe"}, ""},
+		{[]string{"app-1.0-darwin-arm64.tar.gz", "app-1.0-x64.dmg"}, ""},
+	} {
+		var assets []GitHubAsset
+		for _, name := range tc.assets {
+			assets = append(assets, GitHubAsset{Name: name})
+		}
+		if got := findMacAsset(assets).Name; got != tc.want {
+			t.Errorf("findMacAsset(%v) = %q, want %q", tc.assets, got, tc.want)
+		}
 	}
 }

@@ -249,6 +249,10 @@ func autoUpdateSkipReason(r *checker.UpdateResult, cfg *config.Config) string {
 	switch r.Source {
 	case "system", "setapp", "toolbox", "adobe":
 		return r.Source + " source requires an external updater"
+	case "sparkle", "github":
+		if r.DownloadURL == "" {
+			return "no installable download"
+		}
 	}
 	policy := cfg.Policy(r.App.BundleID)
 	if policy == config.PolicyManual || policy == config.PolicyNotifyOnly {
@@ -425,6 +429,12 @@ func executeUpdate(ctx context.Context, r *checker.UpdateResult, runner checker.
 		return checker.ErrOpenedExternally, false
 
 	case "sparkle", "github":
+		if r.DownloadURL == "" && app.HasBuiltInUpdater(r.App.Path) {
+			if _, err := runner.Run(ctx, "open", "-a", r.App.Path); err != nil {
+				return fmt.Errorf("failed to open %s for self-update: %w", r.App.Name, err), false
+			}
+			return checker.ErrOpenedExternally, false
+		}
 		if r.DownloadURL == "" {
 			return fmt.Errorf("no installable download available for %s from %s", r.App.Name, r.Source), false
 		}
@@ -670,6 +680,9 @@ func describeAction(r *checker.UpdateResult) string {
 	case "sparkle", "github":
 		if r.DownloadURL != "" && r.App.Path != "" {
 			return "direct install"
+		}
+		if r.DownloadURL == "" && app.HasBuiltInUpdater(r.App.Path) {
+			return "open app for self-update"
 		}
 		return "open download URL"
 	case "electron", "vendor":
