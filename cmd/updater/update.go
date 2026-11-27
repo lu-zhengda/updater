@@ -425,6 +425,10 @@ func executeUpdate(ctx context.Context, r *checker.UpdateResult, runner checker.
 		return checker.ErrOpenedExternally, false
 
 	case "sparkle", "github":
+		if r.DownloadURL == "" && app.HasBuiltInUpdater(r.App.Path) {
+			openForSelfUpdate(ctx, r.App, runner)
+			return checker.ErrOpenedExternally, false
+		}
 		if r.DownloadURL == "" {
 			return fmt.Errorf("no installable download available for %s from %s", r.App.Name, r.Source), false
 		}
@@ -670,6 +674,9 @@ func describeAction(r *checker.UpdateResult) string {
 	case "sparkle", "github":
 		if r.DownloadURL != "" && r.App.Path != "" {
 			return "direct install"
+		}
+		if r.DownloadURL == "" && app.HasBuiltInUpdater(r.App.Path) {
+			return "open app for self-update"
 		}
 		return "open download URL"
 	case "electron", "vendor":

@@ -802,3 +802,40 @@ func TestPerformUpdate_ExplicitOverridePrintsCanonicalSourceLabel(t *testing.T) 
 		t.Fatalf("expected live update line to show canonical override source, got %q", buf.String())
 	}
 }
+
+func TestExecuteUpdate_GitHubWithoutAssetHandsOffToBuiltInUpdater(t *testing.T) {
+	bundle := filepath.Join(t.TempDir(), "T3 Code (Beta).app")
+	if err := os.MkdirAll(filepath.Join(bundle, "Contents", "Resources"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bundle, "Contents", "Resources", "app-update.yml"), []byte("provider: github\nowner: pingdotgg\nrepo: t3code\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	result := &checker.UpdateResult{
+		App:    &app.App{Name: "T3 Code (Beta)", Path: bundle, GitHubRepo: "pingdotgg/t3code"},
+		Source: "github", CurrentVersion: "0.1.12", LatestVersion: "0.1.13", HasUpdate: true,
+	}
+	if got := describeAction(result); got != "open app for self-update" {
+		t.Fatalf("describeAction() = %q, want open app for self-update", got)
+	}
+	runner := &captureUpdateRunner{}
+	err, rolledBack := executeUpdate(context.Background(), result, runner, nil, nil)
+	if !errors.Is(err, checker.ErrOpenedExternally) || rolledBack {
+		t.Fatalf("executeUpdate() = %v, rolled back %v; want handoff", err, rolledBack)
+	}
+	if runner.name != "open" || strings.Join(runner.args, " ") != "-a "+bundle {
+		t.Fatalf("command = %s %v, want open -a %s", runner.name, runner.args, bundle)
+	}
+}
+
+func TestExecuteUpdate_GitHubWithoutAssetOrUpdaterStillFails(t *testing.T) {
+	result := &checker.UpdateResult{
+		App:    &app.App{Name: "Tool", Path: filepath.Join(t.TempDir(), "Tool.app")},
+		Source: "github", LatestVersion: "2.0.0", HasUpdate: true,
+	}
+	runner := &captureUpdateRunner{}
+	err, _ := executeUpdate(context.Background(), result, runner, nil, nil)
+	if err == nil || errors.Is(err, checker.ErrOpenedExternally) || runner.name != "" {
+		t.Fatalf("executeUpdate() = %v, ran %q; want no-download error", err, runner.name)
+	}
+}
